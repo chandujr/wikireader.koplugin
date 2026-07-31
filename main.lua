@@ -18,12 +18,20 @@ it's added as a "Read as book" option on the reader's normal external-link
 dialog (replacing the stock "Read online" popup button), and follows the
 link the same way -- fetch, convert, open -- via switchDocument().
 
+Following links keeps a back-history too: each article you navigate away
+from (by tapping a link) is remembered, so "Wikipedia > Back to previous
+article" in the menu (or a gesture bound to the "Wikipedia: back to
+previous article" action in Settings > Gestures) steps back through
+ArticleC -> ArticleB -> ArticleA, refetching each one as you go since
+nothing is kept permanently on disk.
+
 Install: copy this whole wikireader.koplugin folder into your
 koreader/plugins/ directory (on Kindle: .../koreader/plugins/), then
 restart KOReader.
 --]]--
 
 local DataStorage = require("datastorage")
+local Dispatcher = require("dispatcher")
 local InfoMessage = require("ui/widget/infomessage")
 local InputDialog = require("ui/widget/inputdialog")
 local NetworkMgr = require("ui/network/manager")
@@ -40,6 +48,18 @@ local WikiReader = WidgetContainer:extend{
     -- Change this if you want a different edition of Wikipedia.
     lang = "en",
 }
+
+-- Back-navigation history, kept at module level rather than as a `self.`
+-- instance field. KOReader loads this plugin file once (via dofile) and
+-- reuses the same class table for every UI it creates -- a fresh
+-- WidgetContainer instance gets built each time you enter the FileManager
+-- or the Reader. A `self.history` field would reset right when it
+-- mattered most: the moment you go from "opened Wikipedia from the menu"
+-- to "tapped a link inside the article". Module-level locals survive
+-- that jump because they belong to the one-time dofile(), not to any
+-- particular instance.
+local nav_history = {}  -- stack of {title=.., lang=..}, oldest first
+local nav_current = nil -- {title=.., lang=..} of the article now open
 
 -- Two reusable scratch paths, alternated on every read, so nothing
 -- accumulates as a permanent "library" of saved articles. Two paths
@@ -102,7 +122,17 @@ local function parseWikiLink(link_url)
     return link_url:match("^https?://([%w%-]+)%.wikipedia%.org/wiki/([^/?#]+)$")
 end
 
+function WikiReader:onDispatcherRegisterActions()
+    Dispatcher:registerAction("wikireader_go_back", {
+        category = "none",
+        event = "WikiReaderGoBack",
+        title = _("Wikipedia: back to previous article"),
+        general = true,
+    })
+end
+
 function WikiReader:init()
+    self:onDispatcherRegisterActions()
     self.ui.menu:registerToMainMenu(self)
 
     -- Hook the reader's "what do you want to do with this link" dialog so
@@ -138,9 +168,29 @@ function WikiReader:addToMainMenu(menu_items)
     menu_items.wikireader = {
         text = _("Wikipedia"),
         sorting_hint = "search",
-        callback = function()
-            self:showLanding()
-        end,
+        sub_item_table = {
+            {
+                text = _("Search / today's featured article"),
+                keep_menu_open = true,
+                callback = function()
+                    self:showLanding()
+                end,
+            },
+            {
+                text_func = function()
+                    if #nav_history > 0 then
+                        return T(_("Back to previous article (%1)"), #nav_history)
+                    end
+                    return _("Back to previous article")
+                end,
+                enabled_func = function()
+                    return #nav_history > 0
+                end,
+                callback = function()
+                    self:onWikiReaderGoBack()
+                end,
+            },
+        },
     }
 end
 
@@ -260,9 +310,12 @@ end
 -- Open an article as a brand new reader session (from the main menu:
 -- search, or today's featured article). Safe to call whether or not
 -- something else is currently open -- ReaderUI:showReader() signals any
--- existing reader to close itself first.
+-- existing reader to close itself first. This is a fresh starting point,
+-- so it clears any earlier back-history.
 function WikiReader:openArticle(title, lang)
     self:fetchAndOpen(title, lang, function(epub_path)
+        nav_history = {}
+        nav_current = { title = title, lang = lang or self.lang }
         local ReaderUI = require("apps/reader/readerui")
         ReaderUI:showReader(epub_path)
     end)
@@ -272,10 +325,42 @@ end
 -- in-article link). switchDocument() properly closes the current
 -- document (menus, highlights, etc.) before opening the new one --
 -- this is the same call KOReader's own built-in Wikipedia epub handling
--- uses for the equivalent "read this instead" action.
+-- uses for the equivalent "read this instead" action. The article we're
+-- navigating away from is pushed onto the back-history stack.
 function WikiReader:openArticleInPlace(title, lang)
+    local from_article = nav_current
     self:fetchAndOpen(title, lang, function(epub_path)
+        if from_article then
+            table.insert(nav_history, from_article)
+        end
+        nav_current = { title = title, lang = lang or self.lang }
         self.ui:switchDocument(epub_path)
+    end)
+end
+
+-- Step back to the article you were on before the last link you
+-- followed. Re-fetches it (nothing is kept permanently on disk, per the
+-- ephemeral design), so this needs a network connection each time, same
+-- as following a link forward does.
+function WikiReader:onWikiReaderGoBack()
+    if #nav_history == 0 then
+        UIManager:show(InfoMessage:new{ text = _("No previous Wikipedia article to go back to.") })
+        return
+    end
+    local prev = nav_history[#nav_history]
+    self:fetchAndOpen(prev.title, prev.lang, function(epub_path)
+        table.remove(nav_history)
+        nav_current = prev
+        -- This menu entry/gesture is reachable from the File Manager too
+        -- (e.g. you went a few articles deep, then closed the reader) --
+        -- self.ui there has no switchDocument(), so fall back to opening
+        -- a fresh reader session in that case.
+        if self.ui and self.ui.switchDocument then
+            self.ui:switchDocument(epub_path)
+        else
+            local ReaderUI = require("apps/reader/readerui")
+            ReaderUI:showReader(epub_path)
+        end
     end)
 end
 
