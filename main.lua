@@ -8,9 +8,15 @@ conversion code KOReader's built-in Wikipedia lookup already uses), and
 opened straight into the reader -- headings, images, and a table of
 contents all render normally, because it *is* a normal EPUB.
 
-The EPUB is written to a single reusable path under KOReader's data
-directory and overwritten every time, so nothing accumulates in your
-library.
+The EPUB is written to one of two reusable scratch paths under
+KOReader's data directory (alternated so the file currently open in the
+reader is never the one being overwritten) and gets reused/overwritten
+over time, so nothing accumulates in your library.
+
+Tapping a Wikipedia link *inside* an already-open article is also hooked:
+it's added as a "Read as book" option on the reader's normal external-link
+dialog (replacing the stock "Read online" popup button), and follows the
+link the same way -- fetch, convert, open -- via switchDocument().
 
 Install: copy this whole wikireader.koplugin folder into your
 koreader/plugins/ directory (on Kindle: .../koreader/plugins/), then
@@ -24,7 +30,9 @@ local NetworkMgr = require("ui/network/manager")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local logger = require("logger")
+local socket_url = require("socket.url")
 local util = require("util")
+local T = require("ffi/util").template
 local _ = require("gettext")
 
 local WikiReader = WidgetContainer:extend{
@@ -33,14 +41,35 @@ local WikiReader = WidgetContainer:extend{
     lang = "en",
 }
 
--- Single reusable scratch path -- overwritten on every read, so it never
--- grows into a permanent "library" of saved articles.
-local function getScratchEpubPath()
+-- Two reusable scratch paths, alternated on every read, so nothing
+-- accumulates as a permanent "library" of saved articles. Two paths
+-- (not one) matter once you're following links *inside* an already-open
+-- article: the file currently open in the reader can't safely be
+-- overwritten while it's still open, so each new article always gets
+-- built into whichever of the two slots isn't currently in use.
+local function getScratchDir()
     local dir = DataStorage:getFullDataDir() .. "/cache/wikireader"
     if not util.pathExists(dir) then
         util.makePath(dir)
     end
-    return dir .. "/current.epub"
+    return dir
+end
+
+function WikiReader:getNextScratchPath()
+    local dir = getScratchDir()
+    local path_a = dir .. "/article_a.epub"
+    local path_b = dir .. "/article_b.epub"
+    -- Check the actual open document's path, not a remembered value:
+    -- KOReader creates a separate plugin instance per UI (FileManager vs
+    -- ReaderUI), so "the file I opened last time" isn't reliably carried
+    -- in memory across a menu-tap -> in-reader-link-tap sequence. The
+    -- currently open document's path is authoritative regardless of
+    -- which instance is asking.
+    local current_file = self.ui and self.ui.document and self.ui.document.file
+    if current_file == path_a then
+        return path_b
+    end
+    return path_a
 end
 
 -- Minimal GET helper for the small JSON "featured article of the day" call.
@@ -66,8 +95,43 @@ local function httpGetJSON(url)
     return ok, code, sink
 end
 
+-- Matches an in-article link like https://en.wikipedia.org/wiki/Some_Title
+-- and returns lang, url-escaped-title (e.g. "en", "Some_Title").
+local function parseWikiLink(link_url)
+    if not link_url then return nil end
+    return link_url:match("^https?://([%w%-]+)%.wikipedia%.org/wiki/([^/?#]+)$")
+end
+
 function WikiReader:init()
     self.ui.menu:registerToMainMenu(self)
+
+    -- Hook the reader's "what do you want to do with this link" dialog so
+    -- tapping a Wikipedia link inside an article reads the linked article
+    -- the same way, instead of KOReader's small built-in lookup popup.
+    if self.ui and self.ui.link then
+        -- Replace the stock "Read online" button (the clunky popup) --
+        -- comment this line out if you'd rather keep both options.
+        self.ui.link:removeFromExternalLinkDialog("40_wiki_lookup")
+
+        self.ui.link:addToExternalLinkDialog("40_wikireader", function(this, link_url)
+            local lang, escaped_title = parseWikiLink(link_url)
+            return {
+                text = _("Read as book"),
+                callback = function()
+                    UIManager:close(this.external_link_dialog)
+                    local title = socket_url.unescape(escaped_title)
+                    self:openArticleInPlace(title, lang)
+                end,
+                show_in_dialog_func = function()
+                    if lang and escaped_title then
+                        local title = socket_url.unescape(escaped_title):gsub("_", " ")
+                        return true, T(_("Wikipedia (%1) article:\n\n%2"), lang:upper(), title)
+                    end
+                    return false
+                end,
+            }
+        end)
+    end
 end
 
 function WikiReader:addToMainMenu(menu_items)
@@ -172,31 +236,46 @@ function WikiReader:openFeaturedArticle()
     end)
 end
 
--- Fetch an article by title, build it into the scratch EPUB, and open it
--- directly in the reader -- reusing KOReader's own Wikipedia-to-EPUB
--- conversion so headings, images, and TOC come out formatted normally.
-function WikiReader:openArticle(title)
+-- Shared plumbing: fetch `title`, build it into whichever scratch slot
+-- isn't currently open, and hand the resulting path to `open_fn`.
+-- `open_fn` is what differs between "open fresh" (from the main menu)
+-- and "replace the article I'm already reading" (a tapped link).
+function WikiReader:fetchAndOpen(title, lang, open_fn)
     NetworkMgr:runWhenOnline(function()
         local Wikipedia = require("ui/wikipedia")
-        local epub_path = getScratchEpubPath()
+        local epub_path = self:getNextScratchPath()
 
-        Wikipedia:createEpubWithUI(epub_path, title, self.lang, function(success)
+        Wikipedia:createEpubWithUI(epub_path, title, lang or self.lang, function(success)
             if not success then
                 UIManager:show(InfoMessage:new{
                     text = _("Couldn't download that article. Check the title and your connection."),
                 })
                 return
             end
-
-            local ReaderUI = require("apps/reader/readerui")
-            ReaderUI:showReader(epub_path)
-            -- The scratch file at epub_path is simply overwritten the next
-            -- time you search or open the featured article, so nothing
-            -- accumulates. If you'd rather it vanish the instant you close
-            -- the article, os.remove(epub_path) can be called from an
-            -- onCloseDocument handler -- worth wiring up once you've
-            -- confirmed the basic flow works on your device.
+            open_fn(epub_path)
         end)
+    end)
+end
+
+-- Open an article as a brand new reader session (from the main menu:
+-- search, or today's featured article). Safe to call whether or not
+-- something else is currently open -- ReaderUI:showReader() signals any
+-- existing reader to close itself first.
+function WikiReader:openArticle(title, lang)
+    self:fetchAndOpen(title, lang, function(epub_path)
+        local ReaderUI = require("apps/reader/readerui")
+        ReaderUI:showReader(epub_path)
+    end)
+end
+
+-- Open an article in place of the one currently being read (a tapped
+-- in-article link). switchDocument() properly closes the current
+-- document (menus, highlights, etc.) before opening the new one --
+-- this is the same call KOReader's own built-in Wikipedia epub handling
+-- uses for the equivalent "read this instead" action.
+function WikiReader:openArticleInPlace(title, lang)
+    self:fetchAndOpen(title, lang, function(epub_path)
+        self.ui:switchDocument(epub_path)
     end)
 end
 
