@@ -34,6 +34,42 @@ article" in the menu (or a gesture bound to the "Wikipedia: back to
 previous article" action in Settings > Gestures) steps back through
 ArticleC -> ArticleB -> ArticleA.
 
+Infobox tables, campaignbox/navbox chronology boxes, route-map (RMbox)
+tables, sidebar boxes, image-caption boxes, side-boxes (this covers the
+{{listen}} audio-sample box among other supplementary side content --
+pointless in an epub regardless, since crengine has no audio playback
+capability at all), the shortdescription hidden metadata div, and the
+category list at the bottom of the page are stripped from the HTML
+before conversion -- they tend to make a mess of a single-column
+reflowable layout, and the caption/audio boxes in particular are
+pointless once images/audio are disabled (an empty bordered box with
+just a caption or description left in it). The shortdescription is
+hidden metadata that would otherwise produce an empty bordered box when
+misidentified as a hatnote. This handles both of Wikipedia's current
+image markup conventions (it's mid-migration between the two as of
+2025-2026), not just one. Links to a specific section (...#Some_Section)
+are recognized the same as any other article link; the section anchor
+itself is dropped, though, so the article opens from the top rather than
+jumping straight to that heading.
+
+createEpub()'s own front matter is trimmed down to just the article
+title -- the "Wikipedia EN" subtitle and the "Saved on <date> / See
+online version for up-to-date content" paragraph are both dropped
+(meaningless here since nothing is kept around long enough to go stale).
+Any hatnotes (disambiguation/redirect notices) or maintenance banners
+sitting at the very start of the article are pulled into their own
+bordered box, with a divider right after them, so it's visually clear
+they're front matter rather than the article itself. Detecting these
+correctly, confirmed against real API responses from more than one
+article, means accounting for several things MediaWiki interleaves
+between the actual notice elements: the whole article body is wrapped in
+<div class="mw-parser-output">, which has to be looked inside rather than
+treated as "not a notice, stop here"; <style>/<link> tags used for CSS
+deduplication; and empty <p class="mw-empty-elt"> spacing artifacts --
+any of these sitting between two notices, unhandled, makes the scan stop
+after the first one and treat everything past it (remaining notices
+included) as regular article text.
+
 Install: copy this whole wikireader.koplugin folder into your
 koreader/plugins/ directory (on Kindle: .../koreader/plugins/), then
 restart KOReader.
@@ -197,10 +233,14 @@ local function httpGetJSON(url)
 end
 
 -- Matches an in-article link like https://en.wikipedia.org/wiki/Some_Title
--- and returns lang, url-escaped-title (e.g. "en", "Some_Title").
+-- (optionally followed by #Section_Name or a ?query string) and returns
+-- lang, url-escaped-title -- e.g. "en", "Some_Title" for
+-- https://en.wikipedia.org/wiki/Some_Title#Some_Section. The section
+-- fragment itself is intentionally discarded: we open the full article
+-- from the top rather than attempt to land on that specific heading.
 local function parseWikiLink(link_url)
     if not link_url then return nil end
-    return link_url:match("^https?://([%w%-]+)%.wikipedia%.org/wiki/([^/?#]+)$")
+    return link_url:match("^https?://([%w%-]+)%.wikipedia%.org/wiki/([^/?#]+)")
 end
 
 function WikiReader:onDispatcherRegisterActions()
@@ -371,16 +411,335 @@ function WikiReader:openFeaturedArticle()
     end)
 end
 
--- Fetches and converts an article, with images permanently disabled.
--- We call createEpub() directly rather than the createEpubWithUI()
--- wrapper (which always passes with_images=true and would prompt about
--- them) -- Trapper:wrap() here is the same progress-UI plumbing that
--- wrapper uses internally, just with `false` hardcoded for with_images.
+-- Removes <tag ...>...</tag> blocks whose `attr_name` attribute matches
+-- any of `attr_patterns`, correctly handling same-tag elements nested
+-- inside them (an infobox table can contain a nested table; a div can
+-- nest other divs). Lua's plain string patterns can't express "find the
+-- matching close tag" on their own -- %b()-style balanced matching only
+-- works for single-character delimiters -- so this walks the string by
+-- hand instead, tracking nesting depth.
+local function stripElementsByAttr(html, tag, attr_name, attr_patterns)
+    local open_pat = "<" .. tag .. "[^>]*>"
+    local close_pat = "</" .. tag .. "%s*>"
+    local attr_capture_pat = attr_name .. [[%s*=%s*"([^"]*)"]]
+    local out = {}
+    local pos = 1
+    while true do
+        local open_start, open_end = html:find(open_pat, pos)
+        if not open_start then
+            table.insert(out, html:sub(pos))
+            break
+        end
+        local attr_value = html:sub(open_start, open_end):match(attr_capture_pat) or ""
+        local matches = false
+        for _, pat in ipairs(attr_patterns) do
+            if attr_value:lower():find(pat, 1, true) then
+                matches = true
+                break
+            end
+        end
+        if not matches then
+            table.insert(out, html:sub(pos, open_end))
+            pos = open_end + 1
+        else
+            table.insert(out, html:sub(pos, open_start - 1)) -- text before this element
+            local depth = 1
+            local scan_pos = open_end + 1
+            while depth > 0 do
+                local next_open_start, next_open_end = html:find(open_pat, scan_pos)
+                local next_close_start, next_close_end = html:find(close_pat, scan_pos)
+                if not next_close_start then
+                    scan_pos = #html + 1 -- malformed: bail, drop the rest
+                    break
+                elseif next_open_start and next_open_start < next_close_start then
+                    depth = depth + 1
+                    scan_pos = next_open_end + 1
+                else
+                    depth = depth - 1
+                    scan_pos = next_close_end + 1
+                end
+            end
+            pos = scan_pos
+        end
+    end
+    return table.concat(out)
+end
+
+-- Thin wrapper for the common case (matching on `class`).
+local function stripElementsByClass(html, tag, class_patterns)
+    return stripElementsByAttr(html, tag, "class", class_patterns)
+end
+
+-- Fetches and converts an article, with images permanently disabled and
+-- a handful of clutter elements stripped from the HTML before it's ever
+-- handed to createEpub(): infobox tables, image-caption boxes, and the
+-- category list at the bottom of the article. There's no parameter or
+-- hook on createEpub() for filtering its HTML, so we temporarily replace
+-- the lower-level function it calls internally to fetch that HTML
+-- (getFullPageHtml), run the genuine one, clean up what it returns, and
+-- put the original back immediately afterwards either way.
+--
+-- Image captions specifically need handling two different ways: Wikipedia
+-- is mid-migration (through 2025-2026) from its legacy renderer to a
+-- newer one called Parsoid, and the two mark up captioned images
+-- completely differently -- legacy wraps them in <div class="thumb">,
+-- Parsoid wraps them in <figure typeof="mw:File/Thumb"> with a
+-- <figcaption>. Since which one any given request actually gets depends
+-- on that rollout (wiki by wiki, gradually) rather than anything we
+-- control, both are stripped so this doesn't quietly break again when
+-- the rollout reaches wherever it hasn't already.
+-- What counts as a "leading notice" for extractLeadingNotices() below:
+-- hatnotes (disambiguation/redirect notices) and the maintenance/cleanup
+-- banner family (the various "*mbox" classes Wikipedia's templates use).
+-- "mw:transclusion" is kept as a fallback signal for cases where a
+-- template's output is wrapped in a Parsoid transclusion div that
+-- doesn't carry the inner class itself -- real Wikipedia HTML samples
+-- checked while building this didn't actually need it (hatnotes/ambox
+-- carried their class directly), but it's cheap, harmless insurance for
+-- article/template combinations that do wrap that way.
+local LEADING_NOTICE_TAGS = { "div", "table" }
+local LEADING_NOTICE_PATTERNS = {
+    "hatnote", "ambox", "tmbox", "cmbox", "ombox", "dmbox", "fmbox",
+    "mw:transclusion",
+}
+
+local function elementIsLeadingNotice(open_tag)
+    local class_attr = open_tag:match([[class%s*=%s*"([^"]*)"]]) or ""
+    local typeof_attr = open_tag:match([[typeof%s*=%s*"([^"]*)"]]) or ""
+    local combined = (class_attr .. " " .. typeof_attr):lower()
+    for _, pat in ipairs(LEADING_NOTICE_PATTERNS) do
+        if combined:find(pat, 1, true) then
+            return true
+        end
+    end
+    return false
+end
+
+-- Skips whitespace, HTML comments, <style>...</style> blocks,
+-- self-closing <link .../> / <meta .../> tags, and empty <p></p>
+-- elements sitting at `pos`. Real Wikipedia HTML interleaves
+-- <style>/<link> between sibling elements for CSS deduplication (one
+-- per hatnote/banner, in between them), and MediaWiki emits empty
+-- <p class="mw-empty-elt"> tags as spacing artifacts around templates --
+-- without skipping these, a scan that only knows how to recognize
+-- notice elements themselves stops dead at the first one, missing
+-- everything after it (confirmed against two different real articles:
+-- one needed the style/link handling, the other needed the empty-<p>
+-- handling to get past the same shape of problem in a different spot).
+local function skipLeadingCruft(html, pos)
+    while true do
+        local start_pos = pos
+        local _, ws_end = html:find("^%s*", pos)
+        pos = (ws_end or pos - 1) + 1
+        local c_start, c_end = html:find("^<!%-%-.-%-%->", pos)
+        if c_start then pos = c_end + 1 end
+        local s_start, s_end = html:find("^<style[^>]*>.-</style%s*>", pos)
+        if s_start then pos = s_end + 1 end
+        local l_start, l_end = html:find("^<link[^>]*/?>", pos)
+        if l_start then pos = l_end + 1 end
+        local m_start, m_end = html:find("^<meta[^>]*/?>", pos)
+        if m_start then pos = m_end + 1 end
+        local p_start, p_end = html:find("^<p[^>]*>%s*</p%s*>", pos)
+        if p_start then pos = p_end + 1 end
+        if pos == start_pos then
+            return pos
+        end
+    end
+end
+
+-- Finds the close tag matching an already-found opening tag of `tag`
+-- (given the position right after that opening tag), tracking nesting
+-- depth so same-named descendants don't confuse the search. Returns the
+-- close tag's start and end positions, or nil if unclosed/malformed.
+local function findMatchingClose(html, tag, open_end)
+    local open_pat = "<" .. tag .. "[^>]*>"
+    local close_pat = "</" .. tag .. "%s*>"
+    local depth = 1
+    local scan_pos = open_end + 1
+    while depth > 0 do
+        local next_open_start, next_open_end = html:find(open_pat, scan_pos)
+        local next_close_start, next_close_end = html:find(close_pat, scan_pos)
+        if not next_close_start then
+            return nil
+        elseif next_open_start and next_open_start < next_close_start then
+            depth = depth + 1
+            scan_pos = next_open_end + 1
+        else
+            depth = depth - 1
+            if depth == 0 then
+                return next_close_start, next_close_end
+            end
+            scan_pos = next_close_end + 1
+        end
+    end
+end
+
+local function extractLeadingNoticesInner(html)
+    local pos = skipLeadingCruft(html, 1)
+    local notices = {}
+    while true do
+        local matched_tag, open_start, open_end
+        for _, tag in ipairs(LEADING_NOTICE_TAGS) do
+            local o_start, o_end = html:find("^<" .. tag .. "[^>]*>", pos)
+            if o_start and elementIsLeadingNotice(html:sub(o_start, o_end)) then
+                matched_tag, open_start, open_end = tag, o_start, o_end
+                break
+            end
+        end
+        if not matched_tag then
+            break -- next element isn't a notice -- this is where the real article starts
+        end
+        local close_start, close_end = findMatchingClose(html, matched_tag, open_end)
+        if not close_end then
+            return table.concat(notices), html:sub(pos) -- malformed: bail, keep the rest as-is
+        end
+        table.insert(notices, html:sub(pos, close_end))
+        pos = skipLeadingCruft(html, close_end + 1)
+    end
+    return table.concat(notices), html:sub(pos)
+end
+
+-- Pulls any hatnotes/maintenance-template elements sitting right at the
+-- very start of the article HTML out into their own string, leaving
+-- everything from the genuine first paragraph/heading onward in a
+-- second string. Only looks at the front of the document -- a
+-- maintenance banner turning up mid-article (rare, but possible) is left
+-- exactly where it is.
+--
+-- MediaWiki -- both the legacy parser and Parsoid, confirmed against a
+-- real API response -- wraps the entire rendered article body in
+-- <div class="mw-parser-output">...</div>. That wrapper is the actual
+-- first element in the HTML, and its own class matches none of our
+-- notice patterns, so without accounting for it the scan above finds
+-- nothing at all and gives up immediately -- looking inside it instead
+-- (while leaving its own opening/closing tags exactly where they are in
+-- the final output) is what makes detection work in practice rather than
+-- only in a hand-built test case.
+local function extractLeadingNotices(html)
+    local wrap_open_start, wrap_open_end = html:find('^<div[^>]-class="[^"]*mw%-parser%-output[^"]*"[^>]*>')
+    if not wrap_open_start then
+        return extractLeadingNoticesInner(html)
+    end
+    local wrap_close_start = findMatchingClose(html, "div", wrap_open_end)
+    if not wrap_close_start then
+        return extractLeadingNoticesInner(html)
+    end
+    local prefix = html:sub(1, wrap_open_end)
+    local inner = html:sub(wrap_open_end + 1, wrap_close_start - 1)
+    local suffix = html:sub(wrap_close_start)
+    local notices, rest = extractLeadingNoticesInner(inner)
+    return notices, prefix .. rest .. suffix
+end
+
 function WikiReader:buildEpub(epub_path, title, lang, callback)
     local Wikipedia = require("ui/wikipedia")
     local Trapper = require("ui/trapper")
+    local Archiver = require("ffi/archiver")
+
+    local original_getFullPageHtml = Wikipedia.getFullPageHtml
+    Wikipedia.getFullPageHtml = function(self, wiki_title, wiki_lang)
+        local result = original_getFullPageHtml(self, wiki_title, wiki_lang)
+        if result and result.text and result.text["*"] then
+            local html = result.text["*"]
+            -- "navbox" also covers campaignbox (the "V·T·E ..." collapsible
+            -- box for military-conflict chronologies, etc.) -- Campaignbox
+            -- is itself built on top of the generic Navbox template, and
+            -- despite being passed as a parameter *into* Infobox military
+            -- conflict, it renders as a separate sibling table right after
+            -- the infobox's own table rather than nested inside it, so it
+            -- needs its own entry here to be caught. "rmbox" covers the
+            -- route-map ({{Routemap}}) collapsible tables that Wikipedia's
+            -- route-map templates render as huge full-width diagram boxes
+            -- (e.g. river/railway course maps) -- a mess in a single-column
+            -- reflowable epub layout, so strip them like the other box
+            -- tables.
+            html = stripElementsByClass(html, "table", { "infobox", "navbox", "sidebar", "vertical-navbox", "rmbox" })
+            -- "side-box" covers the {{listen}}/audio-sample box (icon,
+            -- play button, description, "Problems playing this file?"
+            -- footer) among other supplementary side-content templates.
+            -- Unlike hatnotes/maintenance banners, these can turn up
+            -- anywhere in the article body, not just at the very start,
+            -- so this needs the general strip here rather than the
+            -- leading-notices handling below -- and they're doubly
+            -- pointless in an epub anyway, since crengine has no audio
+            -- playback capability at all. "shortdescription" is the hidden
+            -- metadata div MediaWiki emits at the very top of (almost)
+            -- every article; it has style="display:none" so it's never
+            -- visible itself, but it *used* to be caught by the
+            -- leading-notices scan as a "notice" and pulled into the
+            -- front-matter box -- rendering as an empty bordered box on
+            -- articles with no real hatnotes. It's metadata, not a notice,
+            -- so strip it outright rather than treat it as one.
+            html = stripElementsByClass(html, "div", { "thumb", "catlinks", "navbox", "vertical-navbox", "side-box", "shortdescription" })
+            html = stripElementsByClass(html, "ul", { "gallery" })
+            -- Parsoid's captioned-image markup.
+            html = stripElementsByAttr(html, "figure", "typeof", { "mw:file", "mw:image", "mw:video", "mw:audio" })
+            -- Belt and braces: strip any stray <audio> elements directly,
+            -- in case some other template ever embeds one outside a
+            -- side-box wrapper.
+            html = html:gsub("<audio.-</audio%s*>", "")
+
+            -- Pull any hatnotes/maintenance banners off the very front of
+            -- the article into their own bordered box (so it's visually
+            -- obvious they're not part of the article text itself), and
+            -- put a divider right after them -- or, if there weren't any,
+            -- right at the very start -- to separate that front section
+            -- from the real lead paragraph.
+            local notices, rest = extractLeadingNotices(html)
+            if notices ~= "" then
+                html = string.format(
+                    [[<div class="wikireader-notices" style="border:1px solid #888; padding:0.6em 0.8em; margin:0 0 1em 0; font-style:italic;">%s</div><hr class="koreaderwikifrontpage"/>%s]],
+                    notices, rest
+                )
+            else
+                html = [[<hr class="koreaderwikifrontpage"/>]] .. rest
+            end
+
+            result.text["*"] = html
+        end
+        return result
+    end
+
+    -- createEpub() also writes its own front-matter directly into
+    -- content.html at the very end -- a title, a "Wikipedia EN" subtitle,
+    -- a "Saved on <date> / See online version for up-to-date content"
+    -- paragraph, and a divider (all tagged class="koreaderwikifrontpage").
+    -- That's not part of the article HTML at all, so the getFullPageHtml
+    -- hook above can't reach it; it only exists once the epub's zip entry
+    -- itself is written. We want the subtitle and paragraph gone (title
+    -- stays), and the divider removed from here since the hook above
+    -- already inserted its own -- positioned after any hatnote/maintenance
+    -- box -- at the start of the article content instead.
+    --
+    -- The same hook also appends a real stylesheet rule for the notices
+    -- box (in addition to its inline style) when content.html actually
+    -- contains one -- belt and braces, in case inline style= ever proves
+    -- less reliable here than a genuine stylesheet class.
+    local original_addFileFromMemory = Archiver.Writer.addFileFromMemory
+    Archiver.Writer.addFileFromMemory = function(self, entry_path, content, mtime)
+        if entry_path == "OEBPS/content.html" then
+            content = stripElementsByClass(content, "p", { "koreaderwikifrontpage" })
+            content = stripElementsByClass(content, "h5", { "koreaderwikifrontpage" })
+            content = content:gsub('<hr class="koreaderwikifrontpage"%s*/?>', "", 1)
+        elseif entry_path == "OEBPS/stylesheet.css" then
+            content = content .. [[
+
+.wikireader-notices {
+  border: 1px solid #888;
+  padding: 0.6em 0.8em;
+  margin: 0 0 1em 0;
+  font-style: italic;
+}
+]]
+        end
+        return original_addFileFromMemory(self, entry_path, content, mtime)
+    end
+
     Trapper:wrap(function()
         local ok, success = pcall(Wikipedia.createEpub, Wikipedia, epub_path, title, lang, false)
+        -- Always restore both, success or not.
+        Wikipedia.getFullPageHtml = original_getFullPageHtml
+        Archiver.Writer.addFileFromMemory = original_addFileFromMemory
         if ok and success then
             callback(true)
         else
