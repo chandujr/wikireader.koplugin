@@ -678,8 +678,15 @@ function WikiReader:buildEpub(epub_path, title, lang, callback)
         local result = original_getFullPageHtml(self, wiki_title, wiki_lang)
         if result and result.text and result.text["*"] then
             local html = result.text["*"]
-            
-            -- Extract short description from the HTML before stripping it
+
+            -- Extract short description from the HTML before stripping it.
+            --
+            -- NOTE: this div is NOT always present in the HTML returned by
+            -- the `parse` action. As Wikipedia's Parsoid rollout proceeds, the
+            -- server can return a response that omits <div class="shortdescription">
+            -- entirely (observed on some devices/CDN edges even for articles that
+            -- do have a short description). So this is only the first attempt;
+            -- if it fails we fall back to the query API's pageprops below.
             local short_desc_pat = '<div[^>]*class="[^"]*shortdescription[^"]*"[^>]*>(.-)</div>'
             local short_desc_match = html:match(short_desc_pat)
             if short_desc_match then
@@ -687,6 +694,31 @@ function WikiReader:buildEpub(epub_path, title, lang, callback)
                 short_description = short_desc_match:gsub('&[^;]+;', ' '):gsub('%s+', ' '):match('^%s*(.-)%s*$')
                 if short_description == '' then
                     short_description = nil
+                end
+            end
+
+            -- Fallback: the short description lives authoritatively in the
+            -- query API's pageprops as "wikibase-shortdesc", independent of
+            -- whatever HTML rendering the `parse` action happened to return.
+            -- Reaching for it here keeps the epub working even when the HTML
+            -- omits the shortdescription div.
+            if not short_description then
+                local JSON = require("json")
+                local props_url = string.format(
+                    "https://%s.wikipedia.org/w/api.php?action=query&prop=pageprops&titles=%s&format=json",
+                    wiki_lang or "en", socket_url.escape(wiki_title)
+                )
+                local props_ok, props_code, props_sink = httpGetJSON(props_url)
+                if props_ok and props_code == 200 then
+                    local props_parse_ok, props_data = pcall(JSON.decode, table.concat(props_sink))
+                    if props_parse_ok and props_data and props_data.query and props_data.query.pages then
+                        for _, props_page in pairs(props_data.query.pages) do
+                            if props_page.pageprops and props_page.pageprops["wikibase-shortdesc"] then
+                                short_description = props_page.pageprops["wikibase-shortdesc"]
+                                break
+                            end
+                        end
+                    end
                 end
             end
             
