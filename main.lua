@@ -1,7 +1,7 @@
 --[[--
-Wikipedia Reader plugin for KOReader.
+WikiReader plugin for KOReader.
 
-Adds a "Wikipedia" entry to the main menu. Tapping it shows a small
+Adds a "WikiReader" entry to the main menu. Tapping it shows a small
 landing dialog with a search box and a "Today's Featured Article" button.
 Whatever you pick is fetched, converted to an EPUB (reusing the same
 conversion code KOReader's built-in Wikipedia lookup already uses), and
@@ -293,7 +293,7 @@ end
 
 function WikiReader:addToMainMenu(menu_items)
     menu_items.wikireader = {
-        text = _("Wikipedia"),
+        text = _("WikiReader"),
         sorting_hint = "search",
         sub_item_table = {
             {
@@ -325,7 +325,7 @@ end
 function WikiReader:showLanding()
     local dialog
     dialog = InputDialog:new{
-        title = _("Wikipedia"),
+        title = _("WikiReader"),
         input_hint = _("Search Wikipedia…"),
         description = _("Type a topic, or open today's featured article."),
         buttons = {
