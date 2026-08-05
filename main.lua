@@ -232,6 +232,8 @@ local function httpGetJSON(url)
     return ok, code, sink
 end
 
+
+
 -- Matches an in-article link like https://en.wikipedia.org/wiki/Some_Title
 -- (optionally followed by #Section_Name or a ?query string) and returns
 -- lang, url-escaped-title -- e.g. "en", "Some_Title" for
@@ -636,11 +638,26 @@ function WikiReader:buildEpub(epub_path, title, lang, callback)
     local Trapper = require("ui/trapper")
     local Archiver = require("ffi/archiver")
 
+    -- Will hold the short description extracted from HTML
+    local short_description = nil
+
     local original_getFullPageHtml = Wikipedia.getFullPageHtml
     Wikipedia.getFullPageHtml = function(self, wiki_title, wiki_lang)
         local result = original_getFullPageHtml(self, wiki_title, wiki_lang)
         if result and result.text and result.text["*"] then
             local html = result.text["*"]
+            
+            -- Extract short description from the HTML before stripping it
+            local short_desc_pat = '<div[^>]*class="[^"]*shortdescription[^"]*"[^>]*>(.-)</div>'
+            local short_desc_match = html:match(short_desc_pat)
+            if short_desc_match then
+                -- Decode HTML entities and clean up whitespace
+                short_description = short_desc_match:gsub('&[^;]+;', ' '):gsub('%s+', ' '):match('^%s*(.-)%s*$')
+                if short_description == '' then
+                    short_description = nil
+                end
+            end
+            
             -- "navbox" also covers campaignbox (the "V·T·E ..." collapsible
             -- box for military-conflict chronologies, etc.) -- Campaignbox
             -- is itself built on top of the generic Navbox template, and
@@ -715,12 +732,23 @@ function WikiReader:buildEpub(epub_path, title, lang, callback)
     -- box (in addition to its inline style) when content.html actually
     -- contains one -- belt and braces, in case inline style= ever proves
     -- less reliable here than a genuine stylesheet class.
+    --
+    -- We also add the short description as a subtitle paragraph after the
+    -- main title if one was successfully fetched.
     local original_addFileFromMemory = Archiver.Writer.addFileFromMemory
     Archiver.Writer.addFileFromMemory = function(self, entry_path, content, mtime)
         if entry_path == "OEBPS/content.html" then
             content = stripElementsByClass(content, "p", { "koreaderwikifrontpage" })
             content = stripElementsByClass(content, "h5", { "koreaderwikifrontpage" })
             content = content:gsub('<hr class="koreaderwikifrontpage"%s*/?>', "", 1)
+            -- Add short description as subtitle after the title
+            if short_description and short_description ~= "" then
+                -- Find the title heading and add description after it with center alignment
+                content = content:gsub(
+                    '(<h1[^>]*>.-</h1>)',
+                    '%1\n<p style="font-style:italic; color:#666; margin-top:0.2em; margin-bottom:1em; text-align:center;">' .. short_description .. '</p>'
+                )
+            end
         elseif entry_path == "OEBPS/stylesheet.css" then
             content = content .. [[
 
