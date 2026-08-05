@@ -659,6 +659,10 @@ function WikiReader:buildEpub(epub_path, title, lang, callback)
 
     -- Will hold the short description extracted from HTML
     local short_description = nil
+    -- Will hold the resolved article title from the API response (used to
+    -- fix the epub metadata and cache filename when the search term doesn't
+    -- match the canonical title, e.g. "french revolution" -> "French Revolution").
+    local resolved_title = nil
 
     -- KOReader's wiki_phtml_params (the query for getFullPageHtml, which
     -- createEpub() calls) is the one place that's missing a `redirects`
@@ -720,6 +724,13 @@ function WikiReader:buildEpub(epub_path, title, lang, callback)
                         end
                     end
                 end
+            end
+
+            -- Capture the resolved title from the API response so we can fix
+            -- the epub metadata and cache filename later (the title passed into
+            -- createEpub is the raw search term, which may differ in case etc.).
+            if result.title then
+                resolved_title = result.title
             end
             
             -- "navbox" also covers campaignbox (the "V·T·E ..." collapsible
@@ -813,6 +824,23 @@ function WikiReader:buildEpub(epub_path, title, lang, callback)
                     '%1\n<p style="font-style:italic; color:#666; margin-top:0.2em; margin-bottom:1em; text-align:center;">' .. short_description .. '</p>'
                 )
             end
+            -- Fix the HTML <title> element in the head if the API returned a
+            -- canonical title that differs from the search term.
+            if resolved_title then
+                content = content:gsub('(<title>).-(</title>)', '%1' .. resolved_title .. '%2')
+            end
+        elseif entry_path == "OEBPS/content.opf" then
+            -- Fix the <dc:title> metadata if the API returned a canonical title
+            -- that differs from the search term.
+            if resolved_title then
+                content = content:gsub('(<dc:title>).-(</dc:title>)', '%1' .. resolved_title .. '%2')
+            end
+        elseif entry_path == "OEBPS/toc.ncx" then
+            -- Fix the title in the NCX docTitle and the root navPoint label.
+            if resolved_title then
+                content = content:gsub('(<docTitle>%s*<text>).-(</text>%s*</docTitle>)', '%1' .. resolved_title .. '%2')
+                content = content:gsub('(<navPoint[^>]*>%s*<navLabel>%s*<text>).-(</text>%s*</navLabel>%s*<content src="content%.html"/>)', '%1' .. resolved_title .. '%2')
+            end
         elseif entry_path == "OEBPS/stylesheet.css" then
             content = content .. [[
 
@@ -834,7 +862,19 @@ function WikiReader:buildEpub(epub_path, title, lang, callback)
         Wikipedia.getFullPageHtml = original_getFullPageHtml
         Archiver.Writer.addFileFromMemory = original_addFileFromMemory
         if ok and success then
-            callback(true)
+            -- If the API resolved the title to a canonical form (e.g.
+            -- "french revolution" -> "French Revolution"), rename the cache
+            -- file to match so subsequent lookups hit the right cache entry.
+            local used_path = epub_path
+            if resolved_title and resolved_title ~= title then
+                local new_path = getCachePath(resolved_title, lang)
+                if new_path ~= epub_path then
+                    os.rename(epub_path, new_path)
+                    DocSettings.updateLocation(epub_path, new_path)
+                    used_path = new_path
+                end
+            end
+            callback(true, used_path)
         else
             Trapper:reset()
             callback(false)
@@ -858,7 +898,7 @@ function WikiReader:fetchAndOpen(title, lang, open_fn)
 
     NetworkMgr:runWhenOnline(function()
         local epub_path = getCachePath(title, lang)
-        self:buildEpub(epub_path, title, lang, function(success)
+        self:buildEpub(epub_path, title, lang, function(success, used_path)
             if not success then
                 UIManager:show(InfoMessage:new{
                     text = _("Couldn't download that article. Check the title and your connection."),
@@ -866,7 +906,7 @@ function WikiReader:fetchAndOpen(title, lang, open_fn)
                 return
             end
             pruneCache()
-            open_fn(epub_path)
+            open_fn(used_path or epub_path)
         end)
     end)
 end
