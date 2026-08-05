@@ -294,7 +294,6 @@ end
 function WikiReader:addToMainMenu(menu_items)
     menu_items.wikireader = {
         text = _("WikiReader"),
-        sorting_hint = "search",
         sub_item_table = {
             {
                 text = _("Search / today's featured article"),
@@ -319,6 +318,26 @@ function WikiReader:addToMainMenu(menu_items)
             },
         },
     }
+
+    -- Insert ourselves into the Search menu right after the built-in
+    -- Wikipedia history entry, rather than relying on sorting_hint (which
+    -- appends at the very end, pushing us onto the second page). The menu
+    -- order tables are require()-cached singletons, so modifying them here
+    -- is visible to the MenuSorter just like insert_menu.lua does.
+    local function insertAfterWikipHistory(order_tbl)
+        local search_menu = order_tbl.search
+        if not search_menu then return end
+        for i, entry in ipairs(search_menu) do
+            if entry == "wikipedia_history" then
+                table.insert(search_menu, i + 1, "wikireader")
+                return
+            end
+        end
+        -- Fallback: if no wikipedia_history found, just append
+        table.insert(search_menu, "wikireader")
+    end
+    insertAfterWikipHistory(require("ui/elements/filemanager_menu_order"))
+    insertAfterWikipHistory(require("ui/elements/reader_menu_order"))
 end
 
 -- The "landing page": a search box plus a button for today's featured article.
