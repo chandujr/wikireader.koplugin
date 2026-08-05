@@ -641,6 +641,19 @@ function WikiReader:buildEpub(epub_path, title, lang, callback)
     -- Will hold the short description extracted from HTML
     local short_description = nil
 
+    -- KOReader's wiki_phtml_params (the query for getFullPageHtml, which
+    -- createEpub() calls) is the one place that's missing a `redirects`
+    -- marker -- wiki_full_params and wiki_images_params both set it. Without
+    -- it, a link that points at a redirect (e.g. "Upper_New_York_Bay", which
+    -- Wikipedia redirects to "New_York_Harbor") fetches the redirect stub's
+    -- HTML instead of following through to the real article, so the epub
+    -- becomes a "middleman" page full of links rather than the article
+    -- itself. The `parse` API action does support `redirects`; we just have
+    -- to ask for it. Patch it in for the duration of the build and put it
+    -- back afterwards, exactly like the getFullPageHtml/Archiver patches.
+    local original_phtml_redirects = Wikipedia.wiki_phtml_params.redirects
+    Wikipedia.wiki_phtml_params.redirects = ""
+
     local original_getFullPageHtml = Wikipedia.getFullPageHtml
     Wikipedia.getFullPageHtml = function(self, wiki_title, wiki_lang)
         local result = original_getFullPageHtml(self, wiki_title, wiki_lang)
@@ -765,7 +778,8 @@ function WikiReader:buildEpub(epub_path, title, lang, callback)
 
     Trapper:wrap(function()
         local ok, success = pcall(Wikipedia.createEpub, Wikipedia, epub_path, title, lang, false)
-        -- Always restore both, success or not.
+        -- Always restore all patches, success or not.
+        Wikipedia.wiki_phtml_params.redirects = original_phtml_redirects
         Wikipedia.getFullPageHtml = original_getFullPageHtml
         Archiver.Writer.addFileFromMemory = original_addFileFromMemory
         if ok and success then
