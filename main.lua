@@ -1,12 +1,13 @@
 --[[--
 WikiReader plugin for KOReader.
 
-Adds a "WikiReader" entry to the main menu. Tapping it shows a small
-landing dialog with a search box and a "Today's Featured Article" button.
-Whatever you pick is fetched, converted to an EPUB (reusing the same
-conversion code KOReader's built-in Wikipedia lookup already uses), and
-opened straight into the reader -- headings, images, and a table of
-contents all render normally, because it *is* a normal EPUB.
+Adds a "WikiReader" entry to the main menu. From it you can search
+Wikipedia, open a featured article (today's, a date you pick, or a random
+one), set the Wikipedia language edition, and step back through articles
+you've read. Whatever you pick is fetched, converted to an EPUB (reusing
+the same conversion code KOReader's built-in Wikipedia lookup already
+uses), and opened straight into the reader -- headings, images, and a
+table of contents all render normally, because it *is* a normal EPUB.
 
 Images are permanently disabled -- articles download and open without
 ever asking, since dozens of images can otherwise take a long time to
@@ -255,6 +256,8 @@ function WikiReader:onDispatcherRegisterActions()
 end
 
 function WikiReader:init()
+    -- Restore the persisted Wikipedia language, if any (defaults to English).
+    self.lang = G_reader_settings:readSetting("wikireader_lang") or "en"
     self:onDispatcherRegisterActions()
     self.ui.menu:registerToMainMenu(self)
     -- Self-heal the cache directory on every plugin load (File Manager
@@ -296,10 +299,46 @@ function WikiReader:addToMainMenu(menu_items)
         text = _("WikiReader"),
         sub_item_table = {
             {
-                text = _("Search / today's featured article"),
+                -- Independent search entry (decoupled from the featured article).
+                text = _("Search Wikipedia"),
                 keep_menu_open = true,
                 callback = function()
                     self:showLanding()
+                end,
+            },
+            {
+                -- Featured article entry, now with its own submenu offering
+                -- today's article, a pickable date, or a random date.
+                text = _("Featured Article"),
+                keep_menu_open = true,
+                sub_item_table = {
+                    {
+                        text = _("Today's Featured Article"),
+                        callback = function()
+                            self:openFeaturedArticle()
+                        end,
+                    },
+                    {
+                        text = _("Pick a Date"),
+                        callback = function()
+                            self:showDatePicker()
+                        end,
+                    },
+                    {
+                        text = _("Random Date"),
+                        callback = function()
+                            self:openRandomFeaturedArticle()
+                        end,
+                    },
+                },
+            },
+            {
+                -- Set the Wikipedia language code (persisted across restarts).
+                text_func = function()
+                    return T(_("Wikipedia language: %1"), self.lang:upper())
+                end,
+                callback = function()
+                    self:showLanguageDialog()
                 end,
             },
             {
@@ -340,23 +379,15 @@ function WikiReader:addToMainMenu(menu_items)
     insertAfterWikipHistory(require("ui/elements/reader_menu_order"))
 end
 
--- The "landing page": a search box plus a button for today's featured article.
+-- The "landing page": a search box for a topic. (Featured articles have
+-- their own dedicated menu entry and are not duplicated here.)
 function WikiReader:showLanding()
     local dialog
     dialog = InputDialog:new{
         title = _("WikiReader"),
         input_hint = _("Search Wikipedia…"),
-        description = _("Type a topic, or open today's featured article."),
+        description = _("Type a topic to search for."),
         buttons = {
-            {
-                {
-                    text = _("Today's Featured Article"),
-                    callback = function()
-                        UIManager:close(dialog)
-                        self:openFeaturedArticle()
-                    end,
-                },
-            },
             {
                 {
                     text = _("Cancel"),
@@ -383,19 +414,98 @@ function WikiReader:showLanding()
     dialog:onShowKeyboard()
 end
 
--- Look up today's featured article title, then hand off to openArticle().
-function WikiReader:openFeaturedArticle()
+-- Normalize an arbitrary date table from the date picker into the
+-- "YYYY/MM/DD" string the REST API expects.
+local function formatApiDate(year, month, day)
+    return string.format("%04d/%02d/%02d", year, month, day)
+end
+
+-- Prompt for a specific date via KOReader's built-in date picker, then
+-- fetch that day's featured article.
+function WikiReader:showDatePicker()
+    local DateTimeWidget = require("ui/widget/datetimewidget")
+    local today = os.date("*t")
+    local date_widget = DateTimeWidget:new{
+        title_text = _("Pick a date"),
+        info_text = _("Fetch the featured article for a specific date."),
+        year = today.year,
+        month = today.month,
+        day = today.day,
+        year_min = 2001, -- Wikipedia's featured-article feed effectively starts here
+        year_max = today.year,
+        ok_text = _("Fetch"),
+        callback = function(widget)
+            self:openFeaturedArticle(formatApiDate(widget.year, widget.month, widget.day))
+        end,
+    }
+    UIManager:show(date_widget)
+end
+
+-- Pick a uniformly random date between 2001-01-01 and today and fetch the
+-- featured article that ran on it.
+function WikiReader:openRandomFeaturedArticle()
+    local start_t = os.time{ year = 2001, month = 1, day = 1 }
+    local today = os.date("*t")
+    local end_t = os.time{ year = today.year, month = today.month, day = today.day }
+    if end_t <= start_t then end_t = os.time() end
+    local random_t = start_t + math.random(0, end_t - start_t)
+    local t = os.date("*t", random_t)
+    self:openFeaturedArticle(formatApiDate(t.year, t.month, t.day))
+end
+
+-- Set the Wikipedia language edition used for all lookups. The chosen code
+-- is persisted in KOReader's global settings so it survives a restart.
+function WikiReader:showLanguageDialog()
+    local dialog
+    dialog = InputDialog:new{
+        title = _("Set Wikipedia language"),
+        input = self.lang,
+        input_hint = _("Language code"),
+        description = _("Enter the code of the Wikipedia edition to read from (e.g. en, de, fr, es, hi, zh…)."),
+        buttons = {
+            {
+                {
+                    text = _("Cancel"),
+                    id = "close",
+                    callback = function()
+                        UIManager:close(dialog)
+                    end,
+                },
+                {
+                    text = _("Set"),
+                    is_enter_default = true,
+                    callback = function()
+                        local lang = dialog:getInputText()
+                        if lang and lang ~= "" then
+                            lang = lang:lower():gsub("%s+", "")
+                            self.lang = lang
+                            G_reader_settings:saveSetting("wikireader_lang", lang)
+                        end
+                        UIManager:close(dialog)
+                    end,
+                },
+            },
+        },
+    }
+    UIManager:show(dialog)
+    dialog:onShowKeyboard()
+end
+
+-- Look up the featured article title for a given date (defaults to today),
+-- then hand off to openArticle(). Pass a "YYYY/MM/DD" string to fetch a
+-- specific day's article instead of today's.
+function WikiReader:openFeaturedArticle(date)
     NetworkMgr:runWhenOnline(function()
-        local info = InfoMessage:new{ text = _("Fetching today's featured article…") }
+        local info = InfoMessage:new{ text = _("Fetching featured article…") }
         UIManager:show(info)
 
         UIManager:scheduleIn(0, function()
-            local today = os.date("%Y/%m/%d")
+            local date_str = date or os.date("%Y/%m/%d")
             -- Same host pattern ("<lang>.wikipedia.org") KOReader's built-in
             -- Wikipedia lookup already talks to -- no separate API key needed.
             local url = string.format(
                 "https://%s.wikipedia.org/api/rest_v1/feed/featured/%s",
-                self.lang, today
+                self.lang, date_str
             )
             local ok, code, sink = httpGetJSON(url)
             UIManager:close(info)
@@ -412,7 +522,7 @@ function WikiReader:openFeaturedArticle()
             local parse_ok, data = pcall(JSON.decode, body)
             if not parse_ok or not data or not data.tfa then
                 logger.warn("WikiReader: unexpected featured-content response", body)
-                UIManager:show(InfoMessage:new{ text = _("Couldn't read today's featured article.") })
+                UIManager:show(InfoMessage:new{ text = _("Couldn't read the featured article for that date.") })
                 return
             end
 
@@ -423,7 +533,7 @@ function WikiReader:openFeaturedArticle()
                 or tfa.normalizedtitle
                 or tfa.title
             if not title then
-                UIManager:show(InfoMessage:new{ text = _("Couldn't identify today's featured article.") })
+                UIManager:show(InfoMessage:new{ text = _("Couldn't identify the featured article for that date.") })
                 return
             end
 
