@@ -444,6 +444,13 @@ end
 -- Pick a uniformly random date between 2001-01-01 and today and fetch the
 -- featured article that ran on it.
 function WikiReader:openRandomFeaturedArticle()
+    -- Reseed the PRNG right before drawing, so successive sessions (and
+    -- successive picks within a session) don't repeat the same sequence:
+    -- math.random starts from a fixed seed unless randomseed is called, and
+    -- KOReader's startup seed (os.time()) only has 1s granularity.
+    local time = require("ffi/util").gettime
+    math.randomseed(math.floor(time() * 1000) % 2147483647)
+
     local start_t = os.time{ year = 2001, month = 1, day = 1 }
     local today = os.date("*t")
     local end_t = os.time{ year = today.year, month = today.month, day = today.day }
