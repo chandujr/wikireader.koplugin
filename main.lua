@@ -881,6 +881,9 @@ function WikiReader:buildEpub(epub_path, title, lang, callback)
             -- so strip it outright rather than treat it as one.
             html = stripElementsByClass(html, "div", { "thumb", "catlinks", "navbox", "vertical-navbox", "side-box", "shortdescription" })
             html = stripElementsByClass(html, "ul", { "gallery" })
+            -- Coordinates rendered by {{coord}} templates (e.g. "54°44′28″N 2°06′36″W")
+            -- are useless in an epub and just clutter the lead paragraph.
+            html = stripElementsByClass(html, "span", { "geo-inline-hidden" })
             -- Parsoid's captioned-image markup.
             html = stripElementsByAttr(html, "figure", "typeof", { "mw:file", "mw:image", "mw:video", "mw:audio" })
             -- Belt and braces: strip any stray <audio> elements directly,
