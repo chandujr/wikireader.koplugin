@@ -250,7 +250,7 @@ function WikiReader:onDispatcherRegisterActions()
     Dispatcher:registerAction("wikireader_go_back", {
         category = "none",
         event = "WikiReaderGoBack",
-        title = _("Wikipedia: back to previous article"),
+        title = _("WikiReader: back to previous article"),
         general = true,
     })
 end
@@ -309,7 +309,7 @@ function WikiReader:addToMainMenu(menu_items)
             {
                 -- Featured article entry, now with its own submenu offering
                 -- today's article, a pickable date, or a random date.
-                text = _("Featured Article"),
+                text = _("Featured Articles"),
                 keep_menu_open = true,
                 sub_item_table = {
                     {
@@ -926,12 +926,14 @@ function WikiReader:buildEpub(epub_path, title, lang, callback)
             content = stripElementsByClass(content, "p", { "koreaderwikifrontpage" })
             content = stripElementsByClass(content, "h5", { "koreaderwikifrontpage" })
             content = content:gsub('<hr class="koreaderwikifrontpage"%s*/?>', "", 1)
-            -- Add short description as subtitle after the title
+            -- Add short description as subtitle after the title.
+            -- Use a <div> instead of a <p> to avoid the default paragraph margins
+            -- and padding that crengine applies, which can throw off centering.
             if short_description and short_description ~= "" then
                 -- Find the title heading and add description after it with center alignment
                 content = content:gsub(
                     '(<h1[^>]*>.-</h1>)',
-                    '%1\n<p style="font-style:italic; color:#666; margin-top:0.2em; margin-bottom:1em; text-align:center;">' .. short_description .. '</p>'
+                    '%1\n<div style="font-style:italic; color:#666; margin-top:0.2em; margin-bottom:1em; text-align:center;">' .. short_description .. '</div>'
                 )
             end
             -- Fix the HTML <title> element in the head if the API returned a
@@ -959,6 +961,7 @@ function WikiReader:buildEpub(epub_path, title, lang, callback)
   padding: 0.6em 0.8em;
   margin: 0 0 1em 0;
   font-style: italic;
+  font-size: 80%;
 }
 ]]
         end
