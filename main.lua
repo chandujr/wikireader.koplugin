@@ -973,6 +973,14 @@ function WikiReader:buildEpub(epub_path, title, lang, callback)
   font-style: italic;
   font-size: 80%;
 }
+
+blockquote {
+  background: #f4f4f4;
+  border-left: 3px solid #ccc;
+  padding: 0.5em 0.8em;
+  margin: 0.5em 0;
+  font-style: italic;
+}
 ]]
         end
         return original_addFileFromMemory(self, entry_path, content, mtime)
