@@ -403,7 +403,7 @@ function WikiReader:showLanding()
                         local title = dialog:getInputText()
                         if title and title ~= "" then
                             UIManager:close(dialog)
-                            self:openArticle(title)
+                            self:searchArticle(title)
                         end
                     end,
                 },
@@ -1066,6 +1066,271 @@ function WikiReader:openArticle(title, lang)
         local ReaderUI = require("apps/reader/readerui")
         ReaderUI:showReader(epub_path)
     end)
+end
+
+-- Search for an article by title, with fallback to a search results page
+-- if the exact title doesn't exist. First checks via the lightweight query
+-- API whether the page exists; if it does, opens it normally via
+-- openArticle(). If not, searches Wikipedia for matching pages and builds
+-- an EPUB of the results (with links that the plugin's link handler can
+-- intercept), then opens that.
+function WikiReader:searchArticle(title, lang)
+    lang = lang or self.lang
+
+    NetworkMgr:runWhenOnline(function()
+        local info = InfoMessage:new{ text = _("Searching Wikipedia…") }
+        UIManager:show(info)
+
+        UIManager:scheduleIn(0, function()
+            -- Check if the exact article exists via the query API.
+            -- The response has a "pages" table keyed by pageid; a missing
+            -- page gets key -1 with a "missing" field, while a real page
+            -- gets a positive pageid and no "missing" field.
+            local check_url = string.format(
+                "https://%s.wikipedia.org/w/api.php?action=query&titles=%s&format=json&redirects=",
+                lang, socket_url.escape(title)
+            )
+            local ok, code, sink = httpGetJSON(check_url)
+            UIManager:close(info)
+
+            if ok and code == 200 then
+                local JSON = require("json")
+                local body = table.concat(sink)
+                local parse_ok, data = pcall(JSON.decode, body)
+                if parse_ok and data and data.query and data.query.pages then
+                    for _, page in pairs(data.query.pages) do
+                        if not page.missing then
+                            -- Exact article exists (or was resolved via redirects)
+                            self:openArticle(title, lang)
+                            return
+                        end
+                    end
+                end
+            else
+                -- API check failed (network issue, etc.): fall back to the
+                -- original behaviour so the user still gets the familiar
+                -- "Couldn't download that article" message rather than
+                -- being silently dropped.
+                self:openArticle(title, lang)
+                return
+            end
+
+            -- No exact match: search Wikipedia for matching pages
+            local search_url = string.format(
+                "https://%s.wikipedia.org/w/api.php?action=query&list=search&srsearch=%s&format=json&srlimit=20&srprop=snippet",
+                lang, socket_url.escape(title)
+            )
+            local search_ok, search_code, search_sink = httpGetJSON(search_url)
+            if not search_ok or search_code ~= 200 then
+                UIManager:show(InfoMessage:new{
+                    text = _("Couldn't search Wikipedia. Check your connection and try again."),
+                })
+                return
+            end
+
+            local JSON = require("json")
+            local search_body = table.concat(search_sink)
+            local search_parse_ok, search_data = pcall(JSON.decode, search_body)
+            if not search_parse_ok or not search_data or not search_data.query or not search_data.query.search then
+                UIManager:show(InfoMessage:new{
+                    text = T(_("No results found for \"%1\"."), title),
+                })
+                return
+            end
+
+            local results = search_data.query.search
+            if #results == 0 then
+                UIManager:show(InfoMessage:new{
+                    text = T(_("No results found for \"%1\"."), title),
+                })
+                return
+            end
+
+            -- Build a search results EPUB and open it
+            local epub_path = getCachePath("__search__" .. title, lang)
+            self:buildSearchEpub(epub_path, title, lang, results, function(success, used_path)
+                if not success then
+                    UIManager:show(InfoMessage:new{
+                        text = _("Couldn't build search results page."),
+                    })
+                    return
+                end
+                pruneCache()
+                nav_history = {}
+                nav_current = { title = title, lang = lang }
+                local ReaderUI = require("apps/reader/readerui")
+                ReaderUI:showReader(used_path)
+            end)
+        end)
+    end)
+end
+
+-- Build a minimal EPUB from a list of Wikipedia search results. Each
+-- result is a clickable link the plugin's link handler can intercept
+-- (same format as any other Wikipedia article link). The EPUB is written
+-- directly via the Archiver, bypassing the heavier createEpub() path
+-- (which expects a real Wikipedia article page).
+function WikiReader:buildSearchEpub(epub_path, query, lang, results, callback)
+    local Archiver = require("ffi/archiver")
+    local mtime = os.time()
+
+    -- Build the HTML content: title, description, then each result as a
+    -- heading link followed by a plain-text snippet.
+    local html_parts = {}
+    table.insert(html_parts, '<?xml version="1.0" encoding="utf-8"?>\n')
+    table.insert(html_parts, '<!DOCTYPE html>\n')
+    table.insert(html_parts, '<html xmlns="http://www.w3.org/1999/xhtml">\n')
+    table.insert(html_parts, '<head>\n')
+    table.insert(html_parts, '<meta charset="utf-8"/>\n')
+    table.insert(html_parts, '<link rel="stylesheet" type="text/css" href="stylesheet.css"/>\n')
+    table.insert(html_parts, '<title>')
+    table.insert(html_parts, string.format('Search results for "%s"', query))
+    table.insert(html_parts, '</title>\n')
+    table.insert(html_parts, '</head>\n')
+    table.insert(html_parts, '<body>\n')
+    table.insert(html_parts, '<h1 class="koreaderwikifrontpage">Search results</h1>\n')
+    table.insert(html_parts, '<p class="koreaderwikifrontpage">')
+    table.insert(html_parts, string.format('for "%s"', query))
+    table.insert(html_parts, '</p>\n')
+    table.insert(html_parts, '<hr class="koreaderwikifrontpage"/>\n')
+
+    for _, result in ipairs(results) do
+        local result_title = result.title
+        -- Strip HTML tags from the snippet (e.g. <span class="searchmatch">)
+        local snippet = (result.snippet or ""):gsub("<[^>]*>", "")
+        -- Decode HTML entities in the snippet (&#039; → ', &amp; → &, …)
+        -- so they render as readable characters rather than raw entity codes.
+        snippet = util.htmlEntitiesToUtf8(snippet)
+        -- Append "…" if the snippet looks truncated (doesn't end with
+        -- sentence-ending punctuation)
+        if not snippet:match("[.!?…]$") then
+            snippet = snippet .. "…"
+        end
+        -- Escape HTML entities in title and snippet for safe inclusion in HTML
+        result_title = result_title:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"):gsub('"', "&quot;")
+        snippet = snippet:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"):gsub('"', "&quot;")
+        local link = string.format('https://%s.wikipedia.org/wiki/%s', lang, socket_url.escape(result.title))
+
+        table.insert(html_parts, string.format(
+            '<div class="search-result">\n<h2><a href="%s">%s</a></h2>\n<p>%s</p>\n</div>\n',
+            link, result_title, snippet))
+    end
+
+    table.insert(html_parts, '</body>\n')
+    table.insert(html_parts, '</html>\n')
+    local html_content = table.concat(html_parts)
+
+    -- Minimal CSS for the search results page
+    local css = [[
+body {
+  text-align: justify;
+}
+h1.koreaderwikifrontpage {
+  text-align: center;
+  margin-top: 0;
+}
+p.koreaderwikifrontpage {
+  font-style: italic;
+  text-align: center;
+  margin-bottom: 1em;
+  text-indent: 0;
+}
+hr.koreaderwikifrontpage {
+  margin-left: 20%;
+  margin-right: 20%;
+  margin-bottom: 1.2em;
+}
+.search-result {
+  margin-bottom: 1em;
+}
+.search-result h2 {
+  font-size: 120%;
+  margin-bottom: 0.2em;
+}
+.search-result p {
+  margin: 0.3em 0 0.8em 0;
+}
+a {
+  text-decoration: underline;
+  color: inherit;
+}
+]]
+
+    -- Build the EPUB via the Archiver (same pattern as createEpub() in
+    -- KOReader's frontend/ui/wikipedia.lua, but with our own content).
+    local epub = Archiver.Writer:new{}
+    local epub_path_tmp = epub_path .. ".tmp"
+    if not epub:open(epub_path_tmp, "epub") then
+        callback(false)
+        return
+    end
+
+    epub:setZipCompression("store")
+    epub:addFileFromMemory("mimetype", "application/epub+zip", mtime)
+    epub:setZipCompression("deflate")
+
+    epub:addFileFromMemory("META-INF/container.xml", [[
+<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>]], mtime)
+
+    local bookid = string.format("search_%s_%s_%d", lang, query:gsub("[^%w]", "_"), mtime)
+    local opf = string.format([[
+<?xml version='1.0' encoding='utf-8'?>
+<package xmlns="http://www.idpf.org/2007/opf"
+        xmlns:dc="http://purl.org/dc/elements/1.1/"
+        unique-identifier="bookid" version="2.0">
+  <metadata>
+    <dc:title>Search results for "%s"</dc:title>
+    <dc:identifier id="bookid">%s</dc:identifier>
+    <dc:language>%s</dc:language>
+  </metadata>
+  <manifest>
+    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+    <item id="content" href="content.html" media-type="application/xhtml+xml"/>
+    <item id="css" href="stylesheet.css" media-type="text/css"/>
+  </manifest>
+  <spine toc="ncx">
+    <itemref idref="content"/>
+  </spine>
+</package>
+]], query, bookid, lang)
+    epub:addFileFromMemory("OEBPS/content.opf", opf, mtime)
+
+    epub:addFileFromMemory("OEBPS/content.html", html_content, mtime)
+    epub:addFileFromMemory("OEBPS/stylesheet.css", css, mtime)
+
+    local ncx = string.format([[
+<?xml version="1.0" encoding="UTF-8"?>
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+  <head>
+    <meta name="dtb:uid" content="%s"/>
+    <meta name="dtb:depth" content="1"/>
+    <meta name="dtb:totalPageCount" content="0"/>
+    <meta name="dtb:maxPageNumber" content="0"/>
+  </head>
+  <docTitle>
+    <text>Search results for "%s"</text>
+  </docTitle>
+  <navMap>
+    <navPoint id="navpoint-1" playOrder="1">
+      <navLabel>
+        <text>Search results</text>
+      </navLabel>
+      <content src="content.html"/>
+    </navPoint>
+  </navMap>
+</ncx>
+]], bookid, query)
+    epub:addFileFromMemory("OEBPS/toc.ncx", ncx, mtime)
+
+    epub:close()
+
+    os.rename(epub_path_tmp, epub_path)
+    callback(true, epub_path)
 end
 
 -- Open an article in place of the one currently being read (a tapped
