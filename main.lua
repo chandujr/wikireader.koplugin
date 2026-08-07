@@ -1256,9 +1256,14 @@ end
 -- (same format as any other Wikipedia article link). The EPUB is written
 -- directly via the Archiver, bypassing the heavier createEpub() path
 -- (which expects a real Wikipedia article page).
-function WikiReader:buildSearchEpub(epub_path, query, lang, results, callback)
+-- If custom_title is provided, it's used as the page heading instead of
+-- "Search results for...".
+function WikiReader:buildSearchEpub(epub_path, query, lang, results, callback, custom_title)
     local Archiver = require("ffi/archiver")
     local mtime = os.time()
+
+    local display_title = custom_title or query
+    local is_search = not custom_title
 
     -- Build the HTML content: title, description, then each result as a
     -- heading link followed by a plain-text snippet.
@@ -1270,15 +1275,26 @@ function WikiReader:buildSearchEpub(epub_path, query, lang, results, callback)
     table.insert(html_parts, '<meta charset="utf-8"/>\n')
     table.insert(html_parts, '<link rel="stylesheet" type="text/css" href="stylesheet.css"/>\n')
     table.insert(html_parts, '<title>')
-    table.insert(html_parts, string.format('Search results for "%s"', query))
+    if is_search then
+        table.insert(html_parts, string.format('Search results for "%s"', query))
+    else
+        table.insert(html_parts, display_title)
+    end
     table.insert(html_parts, '</title>\n')
     table.insert(html_parts, '</head>\n')
     table.insert(html_parts, '<body>\n')
-    table.insert(html_parts, '<h1 class="koreaderwikifrontpage">Search results</h1>\n')
-    table.insert(html_parts, '<p class="koreaderwikifrontpage">')
-    table.insert(html_parts, string.format('for "%s"', query))
-    table.insert(html_parts, '</p>\n')
-    table.insert(html_parts, '<hr class="koreaderwikifrontpage"/>\n')
+    if is_search then
+        table.insert(html_parts, '<h1 class="koreaderwikifrontpage">Search results</h1>\n')
+        table.insert(html_parts, '<p class="koreaderwikifrontpage">')
+        table.insert(html_parts, string.format('for "%s"', query))
+        table.insert(html_parts, '</p>\n')
+        table.insert(html_parts, '<hr class="koreaderwikifrontpage"/>\n')
+    else
+        table.insert(html_parts, '<h1 class="koreaderwikifrontpage">')
+        table.insert(html_parts, display_title)
+        table.insert(html_parts, '</h1>\n')
+        table.insert(html_parts, '<hr class="koreaderwikifrontpage"/>\n')
+    end
 
     for _, result in ipairs(results) do
         local result_title = result.title
@@ -1301,11 +1317,11 @@ function WikiReader:buildSearchEpub(epub_path, query, lang, results, callback)
         -- rendered when there is one.
         if snippet == "" then
             table.insert(html_parts, string.format(
-                '<p class="article-link"><a href="%s">%s</a></p>\n',
+                '<p class="article-link"><a href="%s">· %s</a></p>\n',
                 link, result_title))
         else
             table.insert(html_parts, string.format(
-                '<p class="article-link"><a href="%s">%s</a></p>\n<p class="snippet">%s</p>\n',
+                '<p class="article-link"><a href="%s">· %s</a></p>\n<p class="snippet">%s</p>\n',
                 link, result_title, snippet))
         end
     end
@@ -1890,7 +1906,7 @@ function WikiReader:fetchFeaturedCategoryArticles(section_index, section_title)
                         local ReaderUI = require("apps/reader/readerui")
                         ReaderUI:showReader(used_path)
                     end
-                end)
+                end, section_title)
             end
         end)
     end)
