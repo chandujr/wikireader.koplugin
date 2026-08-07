@@ -1284,9 +1284,9 @@ function WikiReader:buildSearchEpub(epub_path, query, lang, results, callback)
         -- Decode HTML entities in the snippet (&#039; → ', &amp; → &, …)
         -- so they render as readable characters rather than raw entity codes.
         snippet = util.htmlEntitiesToUtf8(snippet)
-        -- Append "…" if the snippet looks truncated (doesn't end with
-        -- sentence-ending punctuation)
-        if not snippet:match("[.!?…]$") then
+        -- Append "…" only if there is actual text that looks truncated
+        -- (empty snippets, e.g. category article lists, get no ellipsis)
+        if snippet ~= "" and not snippet:match("[.!?…]$") then
             snippet = snippet .. "…"
         end
         -- Escape HTML entities in title and snippet for safe inclusion in HTML
@@ -1294,9 +1294,17 @@ function WikiReader:buildSearchEpub(epub_path, query, lang, results, callback)
         snippet = snippet:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"):gsub('"', "&quot;")
         local link = string.format('https://%s.wikipedia.org/wiki/%s', lang, socket_url.escape(result.title))
 
-        table.insert(html_parts, string.format(
-            '<div class="search-result">\n<h2><a href="%s">%s</a></h2>\n<p>%s</p>\n</div>\n',
-            link, result_title, snippet))
+        -- Title as a plain <p> (same size as category links); snippet only
+        -- rendered when there is one.
+        if snippet == "" then
+            table.insert(html_parts, string.format(
+                '<p class="article-link"><a href="%s">%s</a></p>\n',
+                link, result_title))
+        else
+            table.insert(html_parts, string.format(
+                '<p class="article-link"><a href="%s">%s</a></p>\n<p class="snippet">%s</p>\n',
+                link, result_title, snippet))
+        end
     end
 
     table.insert(html_parts, '</body>\n')
@@ -1326,12 +1334,12 @@ hr.koreaderwikifrontpage {
 .search-result {
   margin-bottom: 1em;
 }
-.search-result h2 {
-  font-size: 120%;
-  margin-bottom: 0.2em;
+p.article-link {
+  margin: 0.4em 0;
 }
-.search-result p {
-  margin: 0.3em 0 0.8em 0;
+p.snippet {
+  margin: 0 0 0.8em 0;
+  font-size: 80%;
 }
 a {
   text-decoration: underline;
