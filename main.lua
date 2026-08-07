@@ -1553,13 +1553,13 @@ function WikiReader:buildCategoryEpub(nodes, title, direct_articles)
     table.insert(html_parts, '</h1>\n')
     table.insert(html_parts, '<hr/>\n')
 
-    -- Subcategories
+    -- Subcategories (prefixed with a symbol to distinguish from articles)
     for _, node in ipairs(nodes) do
         local escaped_title = node.title:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"):gsub('"', "&quot;")
         local link = string.format('https://%s.wikipedia.org/wiki/Wikipedia:Featured_articles#section_%s',
             lang, node.section_index)
         table.insert(html_parts, string.format(
-            '<p class="category-link"><a href="%s">%s</a></p>\n',
+            '<p class="category-link"><a href="%s">▸ %s</a></p>\n',
             link, escaped_title))
     end
 
@@ -1572,7 +1572,7 @@ function WikiReader:buildCategoryEpub(nodes, title, direct_articles)
             local escaped_title = article.title:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"):gsub('"', "&quot;")
             local link = string.format('https://%s.wikipedia.org/wiki/%s', lang, socket_url.escape(article.title))
             table.insert(html_parts, string.format(
-                '<p class="article-link"><a href="%s">%s</a></p>\n',
+                '<p class="article-link"><a href="%s">· %s</a></p>\n',
                 link, escaped_title))
         end
     end
