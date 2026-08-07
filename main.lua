@@ -796,7 +796,19 @@ function WikiReader:buildEpub(epub_path, title, lang, callback)
 
     local original_getFullPageHtml = Wikipedia.getFullPageHtml
     Wikipedia.getFullPageHtml = function(self, wiki_title, wiki_lang)
-        local result = original_getFullPageHtml(self, wiki_title, wiki_lang)
+        -- getFullPageHtml() throws when the page doesn't exist (it does
+        -- error(result.error.info), e.g. "The page you specified doesn't
+        -- exist."). If we let that propagate, createEpub() catches it and
+        -- pops up its own InfoMessage with the raw error (file:line prefix
+        -- and all) before our caller gets a chance to show the friendlier
+        -- "Couldn't download that article." message. Catch it here and
+        -- return nil instead: createEpub() then fails fast and silently
+        -- (it can't index nil), we skip its internal error popup entirely,
+        -- and buildEpub()'s own pcall handles the rest the usual way.
+        local ok, result = pcall(original_getFullPageHtml, self, wiki_title, wiki_lang)
+        if not ok or not result then
+            return nil
+        end
         if result and result.text and result.text["*"] then
             local html = result.text["*"]
 
