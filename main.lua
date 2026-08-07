@@ -269,6 +269,9 @@ local category_section_titles = {}
 -- a section has children (and build a subcategory EPUB instead of fetching
 -- articles directly).
 local category_tree = {}
+-- Session cache for section links: section_index -> { titles = { "Article1", ... } }
+-- so revisiting the same category during a session avoids re-fetching.
+local section_links_cache = {}
 
 function WikiReader:onDispatcherRegisterActions()
     Dispatcher:registerAction("wikireader_go_back", {
@@ -1531,7 +1534,7 @@ end
 -- Build an EPUB for a level of the category tree (subcategories plus any
 -- leaf articles), then open it. Subcategories use a special URL format
 -- that the link handler intercepts; articles use standard Wikipedia URLs.
-function WikiReader:buildCategoryEpub(nodes, title, is_top_level)
+function WikiReader:buildCategoryEpub(nodes, title, direct_articles)
     local lang = self.lang
     local html_parts = {}
     table.insert(html_parts, '<?xml version="1.0" encoding="utf-8"?>\n')
@@ -1550,17 +1553,28 @@ function WikiReader:buildCategoryEpub(nodes, title, is_top_level)
     table.insert(html_parts, '</h1>\n')
     table.insert(html_parts, '<hr/>\n')
 
-    local has_categories = false
+    -- Subcategories
     for _, node in ipairs(nodes) do
-        if not has_categories then
-            has_categories = true
-        end
         local escaped_title = node.title:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"):gsub('"', "&quot;")
         local link = string.format('https://%s.wikipedia.org/wiki/Wikipedia:Featured_articles#section_%s',
             lang, node.section_index)
         table.insert(html_parts, string.format(
             '<p class="category-link"><a href="%s">%s</a></p>\n',
             link, escaped_title))
+    end
+
+    -- Direct articles (articles that belong to this category, not to any subcategory)
+    if direct_articles and #direct_articles > 0 then
+        if #nodes > 0 then
+            table.insert(html_parts, '<hr/>\n')
+        end
+        for _, article in ipairs(direct_articles) do
+            local escaped_title = article.title:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"):gsub('"', "&quot;")
+            local link = string.format('https://%s.wikipedia.org/wiki/%s', lang, socket_url.escape(article.title))
+            table.insert(html_parts, string.format(
+                '<p class="article-link"><a href="%s">%s</a></p>\n',
+                link, escaped_title))
+        end
     end
 
     table.insert(html_parts, '</body>\n')
@@ -1725,7 +1739,7 @@ function WikiReader:showFeaturedCategories()
             category_tree = tree
 
             -- Build the first-level EPUB and open it
-            local ok_build, epub_path = self:buildCategoryEpub(tree, _("Featured article categories"), true)
+            local ok_build, epub_path = self:buildCategoryEpub(tree, _("Featured article categories"))
             if not ok_build then
                 UIManager:show(InfoMessage:new{
                     text = _("Couldn't build category page."),
@@ -1758,83 +1772,71 @@ function WikiReader:fetchFeaturedCategoryArticles(section_index, section_title)
     end
     local node = findNode(category_tree, section_index)
 
-    if node and #node.children > 0 then
-        -- Has subcategories: build a category EPUB with them, no API call needed
-        local ok_build, cat_epub_path = self:buildCategoryEpub(node.children, section_title, false)
-        if not ok_build then
-            UIManager:show(InfoMessage:new{
-                text = _("Couldn't build category page."),
-            })
-            return
-        end
-        pruneCache()
-        -- Push current article onto history so the back button works
-        local from_article = nav_current
-        if from_article then
-            table.insert(nav_history, from_article)
-        end
-        nav_current = { title = section_title, lang = self.lang, path = cat_epub_path }
-        if self.ui and self.ui.switchDocument then
-            self.ui:switchDocument(cat_epub_path)
-        else
-            local ReaderUI = require("apps/reader/readerui")
-            ReaderUI:showReader(cat_epub_path)
-        end
-        return
-    end
-
-    -- Leaf node: fetch articles from the API
     NetworkMgr:runWhenOnline(function()
         local info = InfoMessage:new{ text = T(_("Loading %1…"), section_title) }
         UIManager:show(info)
-        -- Force an immediate repaint so the loading popup is visible before
-        -- the blocking HTTP request runs (tap events are processed
-        -- synchronously, so a scheduleIn(0) alone may run before the paint).
         UIManager:forceRePaint()
 
         UIManager:scheduleIn(0, function()
-            local links_url = string.format(
-                "https://%s.wikipedia.org/w/api.php?action=parse&page=Wikipedia:Featured_articles&section=%s&prop=links&format=json",
-                self.lang, section_index
-            )
-            local ok, code, sink = httpGetJSON(links_url)
-            UIManager:close(info)
+            -- Fetch links for a section, from cache if already fetched this session
+            local function getCachedLinks(sindex)
+                if section_links_cache[sindex] then
+                    return section_links_cache[sindex].titles
+                end
+                local url = string.format(
+                    "https://%s.wikipedia.org/w/api.php?action=parse&page=Wikipedia:Featured_articles&section=%s&prop=links&format=json",
+                    self.lang, sindex
+                )
+                local ok, code, sink = httpGetJSON(url)
+                if not ok or code ~= 200 then return nil end
+                local JSON = require("json")
+                local body = table.concat(sink)
+                local parse_ok, data = pcall(JSON.decode, body)
+                if not parse_ok or not data or not data.parse or not data.parse.links then return nil end
+                local titles = {}
+                for _, link in ipairs(data.parse.links) do
+                    if link.ns == 0 then
+                        table.insert(titles, link["*"])
+                    end
+                end
+                section_links_cache[sindex] = { titles = titles }
+                return titles
+            end
 
-            if not ok or code ~= 200 then
+            local all_links = getCachedLinks(section_index)
+            if not all_links then
+                UIManager:close(info)
                 UIManager:show(InfoMessage:new{
                     text = _("Couldn't load articles for that category."),
                 })
                 return
             end
 
-            local JSON = require("json")
-            local body = table.concat(sink)
-            local parse_ok, data = pcall(JSON.decode, body)
-            if not parse_ok or not data or not data.parse or not data.parse.links then
-                UIManager:show(InfoMessage:new{
-                    text = _("Couldn't parse articles for that category."),
-                })
-                return
-            end
-
-            -- Collect article links (ns=0 means main/article namespace)
-            local articles = {}
-            for _, link in ipairs(data.parse.links) do
-                if link.ns == 0 then
-                    table.insert(articles, { title = link["*"] })
+            if node and #node.children > 0 then
+                -- Has subcategories: fetch each child's links and compute
+                -- direct articles by subtraction.
+                local child_links_set = {}
+                for _, child in ipairs(node.children) do
+                    local child_links = getCachedLinks(child.section_index)
+                    if child_links then
+                        for _, title in ipairs(child_links) do
+                            child_links_set[title] = true
+                        end
+                    end
                 end
-            end
 
-            if #articles == 0 then
-                UIManager:show(InfoMessage:new{
-                    text = _("No articles found in that category."),
-                })
-                return
-            end
+                -- Direct articles = all_links minus any that belong to a child
+                local direct_articles = {}
+                for _, title in ipairs(all_links) do
+                    if not child_links_set[title] then
+                        table.insert(direct_articles, { title = title })
+                    end
+                end
 
-            local epub_path = getCachePath("__featured__" .. section_title, self.lang)
-            self:buildSearchEpub(epub_path, section_title, self.lang, articles, function(success, used_path)
-                if not success then
+                UIManager:close(info)
+
+                local ok_build, cat_epub_path = self:buildCategoryEpub(node.children, section_title, direct_articles)
+                if not ok_build then
                     UIManager:show(InfoMessage:new{
                         text = _("Couldn't build category page."),
                     })
@@ -1845,14 +1847,51 @@ function WikiReader:fetchFeaturedCategoryArticles(section_index, section_title)
                 if from_article then
                     table.insert(nav_history, from_article)
                 end
-                nav_current = { title = section_title, lang = self.lang, path = used_path }
+                nav_current = { title = section_title, lang = self.lang, path = cat_epub_path }
                 if self.ui and self.ui.switchDocument then
-                    self.ui:switchDocument(used_path)
+                    self.ui:switchDocument(cat_epub_path)
                 else
                     local ReaderUI = require("apps/reader/readerui")
-                    ReaderUI:showReader(used_path)
+                    ReaderUI:showReader(cat_epub_path)
                 end
-            end)
+            else
+                -- Leaf node: all links are articles
+                UIManager:close(info)
+
+                local articles = {}
+                for _, title in ipairs(all_links) do
+                    table.insert(articles, { title = title })
+                end
+
+                if #articles == 0 then
+                    UIManager:show(InfoMessage:new{
+                        text = _("No articles found in that category."),
+                    })
+                    return
+                end
+
+                local epub_path = getCachePath("__featured__" .. section_title, self.lang)
+                self:buildSearchEpub(epub_path, section_title, self.lang, articles, function(success, used_path)
+                    if not success then
+                        UIManager:show(InfoMessage:new{
+                            text = _("Couldn't build category page."),
+                        })
+                        return
+                    end
+                    pruneCache()
+                    local from_article = nav_current
+                    if from_article then
+                        table.insert(nav_history, from_article)
+                    end
+                    nav_current = { title = section_title, lang = self.lang, path = used_path }
+                    if self.ui and self.ui.switchDocument then
+                        self.ui:switchDocument(used_path)
+                    else
+                        local ReaderUI = require("apps/reader/readerui")
+                        ReaderUI:showReader(used_path)
+                    end
+                end)
+            end
         end)
     end)
 end
