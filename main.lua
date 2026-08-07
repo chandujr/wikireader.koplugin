@@ -474,7 +474,7 @@ function WikiReader:showDatePicker()
         year = today.year,
         month = today.month,
         day = today.day,
-        year_min = 2001, -- Wikipedia's featured-article feed effectively starts here
+        year_min = 2016, -- Wikipedia's featured-article REST API feed starts here
         year_max = today.year,
         ok_text = _("Fetch"),
         callback = function(widget)
@@ -494,7 +494,7 @@ function WikiReader:openRandomFeaturedArticle()
     local time = require("ffi/util").gettime
     math.randomseed(math.floor(time() * 1000) % 2147483647)
 
-    local start_t = os.time{ year = 2001, month = 1, day = 1 }
+    local start_t = os.time{ year = 2016, month = 1, day = 1 }
     local today = os.date("*t")
     local end_t = os.time{ year = today.year, month = today.month, day = today.day }
     if end_t <= start_t then end_t = os.time() end
