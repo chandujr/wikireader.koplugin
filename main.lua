@@ -76,6 +76,7 @@ koreader/plugins/ directory (on Kindle: .../koreader/plugins/), then
 restart KOReader.
 --]]--
 
+local ConfirmBox = require("ui/widget/confirmbox")
 local DataStorage = require("datastorage")
 local Dispatcher = require("dispatcher")
 local DocSettings = require("docsettings")
@@ -368,6 +369,20 @@ function WikiReader:addToMainMenu(menu_items)
                     G_reader_settings:flipNilOrTrue("wikireader_skip_link_dialog")
                 end,
                 help_text = _("When enabled, tapping a Wikipedia link inside an article opens the linked article directly without showing the external-link dialog box first."),
+            },
+            {
+                text = _("Clear cache"),
+                keep_menu_open = true,
+                callback = function()
+                    UIManager:show(ConfirmBox:new{
+                        text = _("Delete all cached WikiReader articles?"),
+                        ok_text = _("Delete"),
+                        ok_callback = function()
+                            self:clearCache()
+                        end,
+                    })
+                end,
+                help_text = _("Remove all cached Wikipedia EPUB files and their reading progress."),
             },
             {
                 text_func = function()
@@ -1402,6 +1417,21 @@ function WikiReader:onWikiReaderGoBack()
             ReaderUI:showReader(epub_path)
         end
     end)
+end
+
+-- Delete every cached article (epub + sidecar) from the cache directory.
+function WikiReader:clearCache()
+    local dir = getCacheDir()
+    local count = 0
+    for name in lfs.dir(dir) do
+        if name:match("%.epub$") then
+            removeCachedFile(dir .. "/" .. name)
+            count = count + 1
+        end
+    end
+    UIManager:show(InfoMessage:new{
+        text = T(_("Cache cleared (%1 file(s) deleted)."), count),
+    })
 end
 
 return WikiReader
