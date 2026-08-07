@@ -291,6 +291,23 @@ function WikiReader:init()
                 end,
             }
         end)
+
+        -- Also patch onGoToExternalLink so that, when the "skip link dialog"
+        -- setting is enabled, Wikipedia links open directly without showing
+        -- the external-link dialog.
+        local wiki_reader_self = self
+        local original_onGoToExternalLink = self.ui.link.onGoToExternalLink
+        self.ui.link.onGoToExternalLink = function(link_self, link_url)
+            local lang, escaped_title = parseWikiLink(link_url)
+            -- Use nilOrTrue so the default (nil = ON) works the same as
+            -- explicitly true, matching the menu toggle's semantics.
+            if lang and escaped_title and G_reader_settings:nilOrTrue("wikireader_skip_link_dialog") then
+                local title = socket_url.unescape(escaped_title)
+                wiki_reader_self:openArticleInPlace(title, lang)
+                return true
+            end
+            return original_onGoToExternalLink(link_self, link_url)
+        end
     end
 end
 
@@ -340,6 +357,17 @@ function WikiReader:addToMainMenu(menu_items)
                 callback = function()
                     self:showLanguageDialog()
                 end,
+            },
+            {
+                text = _("Skip Wikipedia links dialog box"),
+                keep_menu_open = true,
+                checked_func = function()
+                    return G_reader_settings:nilOrTrue("wikireader_skip_link_dialog")
+                end,
+                callback = function()
+                    G_reader_settings:flipNilOrTrue("wikireader_skip_link_dialog")
+                end,
+                help_text = _("When enabled, tapping a Wikipedia link inside an article opens the linked article directly without showing the external-link dialog box first."),
             },
             {
                 text_func = function()
