@@ -694,6 +694,87 @@ local function stripElementsByClass(html, tag, class_patterns)
     return stripElementsByAttr(html, tag, "class", class_patterns)
 end
 
+-- Removes specific classes and optionally transforms the style attribute on
+-- elements whose class matches any of `class_patterns`, while keeping the
+-- element and its content intact. This is useful for things like quote boxes
+-- that have float classes (floatleft/floatright) and inline width styles that
+-- break the reflowable layout.
+--
+-- `remove_style` can be:
+--   - true: remove the entire style attribute
+--   - a function: called with the current style value, returns the replacement
+--   - false/nil: leave the style attribute untouched
+local function cleanElementClasses(html, tag, class_patterns, classes_to_remove, remove_style)
+    local open_pat = "<" .. tag .. "[^>]*>"
+    local out = {}
+    local pos = 1
+    while true do
+        local open_start, open_end = html:find(open_pat, pos)
+        if not open_start then
+            table.insert(out, html:sub(pos))
+            break
+        end
+
+        local open_tag = html:sub(open_start, open_end)
+        local class_attr = open_tag:match([[class%s*=%s*"([^"]*)"]]) or ""
+        local matches = false
+        for _, pat in ipairs(class_patterns) do
+            if class_attr:lower():find(pat, 1, true) then
+                matches = true
+                break
+            end
+        end
+
+        if not matches then
+            table.insert(out, html:sub(pos, open_end))
+            pos = open_end + 1
+        else
+            local modified_tag = open_tag
+
+            -- Remove each specified class from the class attribute
+            for _, cls in ipairs(classes_to_remove) do
+                -- class="... cls ..." (middle of class list)
+                modified_tag = modified_tag:gsub('(class%s*=%s*"[^"]*)%s' .. cls .. '(%s[^"]*")', '%1%2')
+                -- class="cls ..." (start of class list)
+                modified_tag = modified_tag:gsub('(class%s*=%s*")' .. cls .. '(%s[^"]*")', '%1%2')
+                -- class="... cls" (end of class list)
+                modified_tag = modified_tag:gsub('(class%s*=%s*"[^"]*)%s' .. cls .. '(")', '%1%2')
+                -- class="cls" (only class)
+                modified_tag = modified_tag:gsub('(class%s*=%s*")' .. cls .. '(")', '%1%2')
+            end
+
+            -- Handle the style attribute: remove, transform, or leave as-is
+            if remove_style == true then
+                modified_tag = modified_tag:gsub('%s*style%s*=%s*"[^"]*"', '')
+            elseif type(remove_style) == "function" then
+                -- Transform an existing style attribute, or synthesize a new
+                -- one if the tag has none (e.g. force width:100%% on tables
+                -- that don't set any width themselves). The transform receives
+                -- the current style value ("" if absent) and returns the
+                -- replacement; an empty/nil return means "leave it as-is".
+                local style_val = modified_tag:match('style%s*=%s*"([^"]*)"') or ""
+                local new_style = remove_style(style_val)
+                if new_style and new_style ~= "" then
+                    if style_val ~= "" then
+                        modified_tag = modified_tag:gsub('style%s*=%s*"[^"]*"', 'style="' .. new_style .. '"')
+                    else
+                        modified_tag = modified_tag:gsub('^(<[^>]+)', '%1 style="' .. new_style .. '"')
+                    end
+                end
+            end
+
+            -- Tidy up any leftover double spaces
+            modified_tag = modified_tag:gsub('%s+', ' ')
+            modified_tag = modified_tag:gsub(' %s*>', '>')
+
+            table.insert(out, html:sub(pos, open_start - 1))
+            table.insert(out, modified_tag)
+            pos = open_end + 1
+        end
+    end
+    return table.concat(out)
+end
+
 -- Fetches and converts an article, with images permanently disabled and
 -- a handful of clutter elements stripped from the HTML before it's ever
 -- handed to createEpub(): infobox tables, image-caption boxes, and the
@@ -961,6 +1042,19 @@ function WikiReader:buildEpub(epub_path, title, lang, callback)
             -- reflowable epub layout, so strip them like the other box
             -- tables.
             html = stripElementsByClass(html, "table", { "infobox", "navbox", "sidebar", "vertical-navbox", "rmbox" })
+            -- wikitable (standard Wikipedia data tables) should be kept, but
+            -- floatleft/floatright and an explicit width make them break out
+            -- of the reflowable column. Remove the float classes and set the
+            -- width to 100%% so the table fills the screen width.
+            html = cleanElementClasses(html, "table", { "wikitable" }, { "floatleft", "floatright" }, function(style)
+                if style == "" then
+                    return "width:100%%"
+                elseif style:find('width%s*:') then
+                    return style:gsub('width%s*:%s*[^;]+', 'width:100%%')
+                else
+                    return style .. ';width:100%%'
+                end
+            end)
             -- "side-box" covers the {{listen}}/audio-sample box (icon,
             -- play button, description, "Problems playing this file?"
             -- footer) among other supplementary side-content templates.
@@ -979,6 +1073,10 @@ function WikiReader:buildEpub(epub_path, title, lang, callback)
             -- so strip it outright rather than treat it as one.
             html = stripElementsByClass(html, "div", { "thumb", "catlinks", "navbox", "vertical-navbox", "side-box", "shortdescription" })
             html = stripElementsByClass(html, "ul", { "gallery" })
+            -- Quote boxes with pullquote/quotebox classes are floats that break
+            -- layout; remove the float classes and width style from them so they
+            -- render as normal in-flow block elements.
+            html = cleanElementClasses(html, "div", { "quotebox", "pullquote" }, { "floatleft", "floatright" }, true)
             -- Coordinates rendered by {{coord}} templates (e.g. "54°44′28″N 2°06′36″W")
             -- are useless in an epub and just clutter the lead paragraph.
             html = stripElementsByClass(html, "span", { "geo-inline-hidden" })
