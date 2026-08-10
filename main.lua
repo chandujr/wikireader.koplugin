@@ -936,6 +936,54 @@ local function extractLeadingNotices(html)
     return notices, prefix .. rest .. suffix
 end
 
+-- Scans the full HTML for any notice elements (hatnotes, maintenance banners
+-- such as ambox/tmbox/cmbox/ombox/dmbox/fmbox) that were NOT caught by
+-- extractLeadingNotices() -- i.e. section-level notices like "This section
+-- has multiple issues...", "This section needs more citations...", etc. --
+-- and wraps each one in a <div class="wikireader-notices"> box so they get
+-- the same visual treatment as top-of-article notices.
+--
+-- This is deliberately a second pass applied to the "rest" HTML after
+-- extractLeadingNotices() has already handled the front-of-article notices,
+-- to avoid double-wrapping them.
+local function wrapSectionNotices(html)
+    local pos = 1
+    local out = {}
+    while true do
+        local matched_tag, open_start, open_end
+        for _, tag in ipairs(LEADING_NOTICE_TAGS) do
+            local o_start, o_end = html:find("<" .. tag .. "[^>]*>", pos)
+            if o_start and (not open_start or o_start < open_start) then
+                open_start, open_end = o_start, o_end
+                matched_tag = tag
+            end
+        end
+        if not open_start then
+            table.insert(out, html:sub(pos))
+            break
+        end
+        local open_tag = html:sub(open_start, open_end)
+        if elementIsLeadingNotice(open_tag) then
+            table.insert(out, html:sub(pos, open_start - 1))
+            local close_start, close_end = findMatchingClose(html, matched_tag, open_end)
+            if not close_end then
+                table.insert(out, html:sub(open_start))
+                break
+            end
+            local notice_content = html:sub(open_start, close_end)
+            table.insert(out, string.format(
+                [[<div class="wikireader-notices">%s</div>]],
+                notice_content
+            ))
+            pos = close_end + 1
+        else
+            table.insert(out, html:sub(pos, open_end))
+            pos = open_end + 1
+        end
+    end
+    return table.concat(out)
+end
+
 function WikiReader:buildEpub(epub_path, title, lang, callback)
     local Wikipedia = require("ui/wikipedia")
     local Trapper = require("ui/trapper")
@@ -1094,9 +1142,13 @@ function WikiReader:buildEpub(epub_path, title, lang, callback)
             -- right at the very start -- to separate that front section
             -- from the real lead paragraph.
             local notices, rest = extractLeadingNotices(html)
+            -- Also wrap any section-level notices (e.g. "This section has
+            -- multiple issues...", "This section needs more citations...")
+            -- in the same wikireader-notices box for consistent styling.
+            rest = wrapSectionNotices(rest)
             if notices ~= "" then
                 html = string.format(
-                    [[<div class="wikireader-notices" style="border:1px solid #888; padding:0.6em 0.8em; margin:0 0 1em 0; font-style:italic;">%s</div><hr class="koreaderwikifrontpage"/>%s]],
+                    [[<div class="wikireader-notices">%s</div><hr class="koreaderwikifrontpage"/>%s]],
                     notices, rest
                 )
             else
@@ -1120,9 +1172,7 @@ function WikiReader:buildEpub(epub_path, title, lang, callback)
     -- box -- at the start of the article content instead.
     --
     -- The same hook also appends a real stylesheet rule for the notices
-    -- box (in addition to its inline style) when content.html actually
-    -- contains one -- belt and braces, in case inline style= ever proves
-    -- less reliable here than a genuine stylesheet class.
+    -- box so the class alone provides all the styling.
     --
     -- We also add the short description as a subtitle paragraph after the
     -- main title if one was successfully fetched.
