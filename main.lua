@@ -89,6 +89,7 @@ local logger = require("logger")
 local socket_url = require("socket.url")
 local util = require("util")
 local T = require("ffi/util").template
+local BD = require("ui/bidi")
 local _ = require("gettext")
 
 local WikiReader = WidgetContainer:extend{
@@ -426,6 +427,17 @@ function WikiReader:addToMainMenu(menu_items)
                     })
                 end,
                 help_text = _("Remove all cached Wikipedia EPUB files and their reading progress."),
+            },
+            {
+                text = _("Save current article"),
+                keep_menu_open = true,
+                enabled_func = function()
+                    return nav_current ~= nil and nav_current.path ~= nil
+                end,
+                callback = function()
+                    self:saveCurrentArticle()
+                end,
+                help_text = _("Save the currently reading article to the built-in Wikipedia save folder."),
             },
             {
                 text_func = function()
@@ -1648,6 +1660,95 @@ function WikiReader:onWikiReaderGoBack()
             ReaderUI:showReader(epub_path)
         end
     end)
+end
+
+-- Returns the directory where the built-in Wikipedia feature saves its EPUBs.
+-- Respects the user's "wikipedia_save_dir" setting, falling back to the
+-- default "Wikipedia" folder inside the reader's home directory.
+function WikiReader:getWikipediaSaveDir()
+    local filemanagerutil = require("apps/filemanager/filemanagerutil")
+    local DictQuickLookup = require("ui/widget/dictquicklookup")
+    local dir = G_reader_settings:readSetting("wikipedia_save_dir")
+        or DictQuickLookup.getWikiSaveEpubDefaultDir()
+    if not util.pathExists(dir) then
+        util.makePath(dir)
+    end
+    return dir
+end
+
+-- Save the currently reading article (epub + sidecar folder) to the
+-- built-in Wikipedia save location under a "wikireader" subdirectory.
+-- Uses DocSettings.updateLocation to properly copy the sidecar data,
+-- the same way KOReader's own file manager does when copying a book.
+function WikiReader:saveCurrentArticle()
+    if not nav_current or not nav_current.path then
+        UIManager:show(InfoMessage:new{
+            text = _("No article is currently open."),
+        })
+        return
+    end
+
+    local src_path = nav_current.path
+    if not lfs.attributes(src_path) then
+        UIManager:show(InfoMessage:new{
+            text = _("The article file no longer exists (may have been evicted from cache)."),
+        })
+        return
+    end
+
+    -- Determine the save directory: <wikipedia_save_dir>/wikireader/
+    local wiki_dir = self:getWikipediaSaveDir()
+    local save_dir = wiki_dir .. "/wikireader"
+    if not util.pathExists(save_dir) then
+        util.makePath(save_dir)
+    end
+
+    -- Build a filename from the article title, same naming style as the
+    -- built-in Wikipedia save feature ("<Title>.<LANG>.epub").
+    local lang = (nav_current.lang or self.lang or "en"):upper()
+    local filename = nav_current.title .. "." .. lang .. ".epub"
+    filename = util.getSafeFilename(filename, save_dir):gsub("_", " ")
+    local dest_path = save_dir .. "/" .. filename
+
+    -- If a file with that name already exists, prompt for confirmation
+    -- to overwrite.
+    if lfs.attributes(dest_path) then
+        UIManager:show(ConfirmBox:new{
+            text = T(_("%1 already exists. Overwrite?"), BD.filename(filename)),
+            ok_text = _("Overwrite"),
+            ok_callback = function()
+                self:doSaveArticle(src_path, dest_path, filename)
+            end,
+        })
+        return
+    end
+
+    self:doSaveArticle(src_path, dest_path, filename)
+end
+
+-- Actually performs the file copy and sidecar relocation.
+function WikiReader:doSaveArticle(src_path, dest_path, display_filename)
+    -- Copy the epub file using ffi/util.copyFile (the frontend util module
+    -- does not expose copyFile, but ffi/util does).
+    -- Note: copyFile returns nil on success, or an error string on failure.
+    local ffiutil = require("ffi/util")
+    local err = ffiutil.copyFile(src_path, dest_path)
+    if err then
+        UIManager:show(InfoMessage:new{
+            text = T(_("Failed to save article: %1"), err),
+        })
+        return
+    end
+
+    -- Copy the sidecar folder (reading progress, bookmarks, etc.) using
+    -- KOReader's own sidecar update mechanism, which handles all metadata
+    -- locations (doc, dir, hash). The third argument (true) means "copy"
+    -- rather than "move".
+    DocSettings.updateLocation(src_path, dest_path, true)
+
+    UIManager:show(InfoMessage:new{
+        text = T(_("Article saved as %1"), BD.filename(display_filename)),
+    })
 end
 
 -- Delete every cached article (epub + sidecar) from the cache directory.
