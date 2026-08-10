@@ -1119,7 +1119,7 @@ function WikiReader:buildEpub(epub_path, title, lang, callback)
             -- front-matter box -- rendering as an empty bordered box on
             -- articles with no real hatnotes. It's metadata, not a notice,
             -- so strip it outright rather than treat it as one.
-            html = stripElementsByClass(html, "div", { "thumb", "catlinks", "navbox", "vertical-navbox", "side-box", "shortdescription" })
+            html = stripElementsByClass(html, "div", { "thumb", "catlinks", "navbox", "vertical-navbox", "side-box", "spoken-wikipedia", "shortdescription" })
             html = stripElementsByClass(html, "ul", { "gallery" })
             -- Quote boxes with pullquote/quotebox classes are floats that break
             -- layout; remove the float classes and width style from them so they
