@@ -78,6 +78,7 @@ restart KOReader.
 
 local ConfirmBox = require("ui/widget/confirmbox")
 local DataStorage = require("datastorage")
+local Device = require("device")
 local Dispatcher = require("dispatcher")
 local DocSettings = require("docsettings")
 local InfoMessage = require("ui/widget/infomessage")
@@ -273,6 +274,17 @@ function WikiReader:addToMainMenu(menu_items)
                     self:saveCurrentArticle()
                 end,
                 help_text = _("Save the currently reading article to the built-in Wikipedia save folder."),
+            },
+            {
+                text = _("Share current article link"),
+                keep_menu_open = true,
+                enabled_func = function()
+                    return nav_current ~= nil and nav_current.title ~= nil
+                end,
+                callback = function()
+                    self:shareCurrentArticleLink()
+                end,
+                help_text = _("Copy the current article's Wikipedia link to the clipboard and show a QR code of it that you can scan from another device."),
             },
             {
                 text_func = function()
@@ -696,6 +708,125 @@ function WikiReader:doSaveArticle(src_path, dest_path, display_filename)
     UIManager:show(InfoMessage:new{
         text = T(_("Article saved as %1"), BD.filename(display_filename)),
     })
+end
+
+-- Share the currently open article: copy its Wikipedia URL to the clipboard
+-- and display a QR code of that URL for scanning from another device.
+function WikiReader:shareCurrentArticleLink()
+    if not nav_current or not nav_current.title then
+        UIManager:show(InfoMessage:new{
+            text = _("No article is currently open."),
+        })
+        return
+    end
+
+    local lang = nav_current.lang or self.lang or "en"
+    -- Build the canonical Wikipedia URL for this article: spaces become
+    -- underscores, other special characters are percent-encoded (Wikipedia
+    -- accepts %-encoding in the path).
+    local article = socket_url.escape(nav_current.title):gsub("%%20", "_")
+    local url = string.format("https://%s.wikipedia.org/wiki/%s", lang, article)
+
+    if Device and Device.input then
+        Device.input.setClipboardText(url)
+    end
+
+    self:showShareQR(url)
+end
+
+-- Show a dismissable fullscreen QR code for `url`, with a caption noting the
+-- link was copied to the clipboard. Dismisses on tap or any key press.
+function WikiReader:showShareQR(url)
+    local Blitbuffer = require("ffi/blitbuffer")
+    local CenterContainer = require("ui/widget/container/centercontainer")
+    local Font = require("ui/font")
+    local FrameContainer = require("ui/widget/container/framecontainer")
+    local Geom = require("ui/geometry")
+    local GestureRange = require("ui/gesturerange")
+    local InputContainer = require("ui/widget/container/inputcontainer")
+    local QRWidget = require("ui/widget/qrwidget")
+    local Size = require("ui/size")
+    local TextWidget = require("ui/widget/textwidget")
+    local VerticalGroup = require("ui/widget/verticalgroup")
+    local VerticalSpan = require("ui/widget/verticalspan")
+    local Screen = Device.screen
+    local Input = Device.input
+
+    local ShareBox = InputContainer:extend{
+        modal = true,
+    }
+
+    function ShareBox:init()
+        if Device:hasKeys() then
+            self.key_events.AnyKeyPressed = { { Input.group.Any } }
+        end
+        if Device:isTouchDevice() then
+            self.ges_events.TapClose = {
+                GestureRange:new{
+                    ges = "tap",
+                    range = Geom:new{
+                        x = 0, y = 0,
+                        w = Screen:getWidth(),
+                        h = Screen:getHeight(),
+                    },
+                },
+            }
+        end
+
+        local padding = Size.padding.fullscreen
+        local caption_face = Font:getFace("x_smallinfofont")
+        local caption1 = TextWidget:new{
+            text = _("Link copied to clipboard."),
+            face = caption_face,
+        }
+        local caption2 = TextWidget:new{
+            text = _("Scan the QR code to open it on another device."),
+            face = caption_face,
+        }
+        local qr_size = math.floor(math.min(Screen:getWidth(), Screen:getHeight()) * 0.75)
+        local qr_image = QRWidget:new{
+            text = url,
+            width = qr_size,
+            height = qr_size,
+            alpha = true,
+            scale_factor = 1,
+        }
+        local vgroup = VerticalGroup:new{
+            align = "center",
+            caption1,
+            caption2,
+            VerticalSpan:new{ width = Size.span.vertical_default },
+            qr_image,
+        }
+        local frame = FrameContainer:new{
+            background = Blitbuffer.COLOR_WHITE,
+            padding = padding,
+            vgroup,
+        }
+
+        self[1] = CenterContainer:new{
+            dimen = Screen:getSize(),
+            frame,
+        }
+    end
+
+    function ShareBox:onShow()
+        UIManager:setDirty(self, function() return "ui", self[1][1].dimen end)
+        return true
+    end
+
+    function ShareBox:onCloseWidget()
+        UIManager:setDirty(nil, function() return "ui", self[1][1].dimen end)
+    end
+
+    function ShareBox:onTapClose()
+        UIManager:close(self)
+        return true
+    end
+
+    ShareBox.onAnyKeyPressed = ShareBox.onTapClose
+
+    UIManager:show(ShareBox:new{})
 end
 
 -- Delete every cached article from the cache directory.
