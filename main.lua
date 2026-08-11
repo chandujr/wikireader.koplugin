@@ -92,6 +92,12 @@ local T = require("ffi/util").template
 local BD = require("ui/bidi")
 local _ = require("gettext")
 
+-- WikiReader modules
+local cache = require("wikireader-cache")
+local categories = require("categories")
+local epub = require("epub")
+local wutil = require("wikiutil")
+
 local WikiReader = WidgetContainer:extend{
     name = "wikireader",
     -- Change this if you want a different edition of Wikipedia.
@@ -112,168 +118,6 @@ local nav_current = nil -- {title=.., lang=..} of the article now open
 
 local lfs = require("libs/libkoreader-lfs")
 
--- Article cache: up to CACHE_MAX_ENTRIES distinct articles, each valid
--- for CACHE_MAX_AGE_SECONDS. This is deliberately just files on disk,
--- named deterministically from (title, lang) and read via filesystem
--- timestamps rather than an in-memory index -- so there's nothing that
--- can be "forgotten" across a KOReader restart, or across the jump
--- between plugin instances (File Manager vs Reader): the answer is
--- always sitting right there in the directory listing.
-local CACHE_MAX_ENTRIES = 10
-local CACHE_MAX_AGE_SECONDS = 24 * 60 * 60 -- 1 day
-
-local function getCacheDir()
-    local dir = DataStorage:getFullDataDir() .. "/cache/wikireader"
-    if not util.pathExists(dir) then
-        util.makePath(dir)
-    end
-    return dir
-end
-
--- Deletes a cached epub and its associated .sdr sidecar (reading
--- progress, bookmarks, highlights, etc.). KOReader creates one of these
--- alongside every document it opens; plain os.remove() on the epub
--- leaves it behind as an orphaned folder. DocSettings.updateLocation()
--- with no destination path is exactly what KOReader's own file manager
--- calls when you delete a book -- reusing it here means eviction and
--- expiry clean up after themselves the same way a manual delete would.
-local function removeCachedFile(path)
-    os.remove(path)
-    DocSettings.updateLocation(path)
-end
-
--- Deterministic, filesystem-safe path for a given (title, lang) pair.
--- Underscore/space are equivalent in Wikipedia titles (link hrefs use
--- underscores, search boxes and API responses tend to use spaces), so
--- normalize first to make sure both forms hit the same cached file.
-local function getCachePath(title, lang)
-    local dir = getCacheDir()
-    local normalized = title:gsub("_", " ")
-    local filename = util.getSafeFilename(string.format("%s - %s.epub", lang or "en", normalized), dir)
-    return dir .. "/" .. filename
-end
-
--- Returns the path if a still-fresh (< 1 day old) cached copy exists;
--- otherwise nil, deleting the file first if it exists but has expired.
-local function getFreshCachePath(title, lang)
-    local path = getCachePath(title, lang)
-    local attr = lfs.attributes(path)
-    if not attr then
-        return nil
-    end
-    if os.time() - attr.modification > CACHE_MAX_AGE_SECONDS then
-        removeCachedFile(path) -- stale: clean it up (epub + sidecar), report a cache miss
-        return nil
-    end
-    return path
-end
-
--- Keep at most CACHE_MAX_ENTRIES cached articles: delete anything
--- stale, then evict the oldest (by download time) until back under the
--- cap. A simple capped FIFO -- matching "dive more than 10 links deep
--- and the first article gets dropped" -- revisiting a cached article
--- doesn't reset its place in line.
---
--- Listing and deleting are kept as two fully separate passes on
--- purpose: mutating a directory while still iterating it (the previous
--- version called os.remove() on stale files inside the lfs.dir() loop)
--- isn't guaranteed to visit every remaining entry on every filesystem,
--- which could silently undercount files and let more than
--- CACHE_MAX_ENTRIES pile up over time -- which is exactly the clutter
--- this function exists to prevent.
-local function pruneCache()
-    local dir = getCacheDir()
-
-    local names = {}
-    for name in lfs.dir(dir) do
-        if name:match("%.epub$") then
-            table.insert(names, name)
-        end
-    end
-
-    local now = os.time()
-    local entries = {}
-    for _, name in ipairs(names) do
-        local path = dir .. "/" .. name
-        local attr = lfs.attributes(path)
-        if attr then
-            if now - attr.modification > CACHE_MAX_AGE_SECONDS then
-                removeCachedFile(path)
-            else
-                table.insert(entries, { path = path, mtime = attr.modification })
-            end
-        end
-    end
-
-    table.sort(entries, function(a, b) return a.mtime < b.mtime end)
-    while #entries > CACHE_MAX_ENTRIES do
-        local oldest = table.remove(entries, 1)
-        removeCachedFile(oldest.path)
-    end
-end
-
--- Minimal GET helper for the small JSON "featured article of the day" call.
--- Mirrors the request pattern KOReader's own frontend/ui/wikipedia.lua uses
--- internally for its Wikipedia API calls.
-local function httpGetJSON(url)
-    local http = require("socket.http")
-    local ltn12 = require("ltn12")
-
-    local sink = {}
-    local ok, _, code = pcall(function()
-        local _, response_code = http.request{
-            url = url,
-            method = "GET",
-            sink = ltn12.sink.table(sink),
-            headers = {
-                -- Wikimedia asks API consumers to identify themselves.
-                ["User-Agent"] = "KOReader-WikiReader-plugin/0.1 (personal use)",
-            },
-        }
-        return true, response_code
-    end)
-    return ok, code, sink
-end
-
-
-
--- Matches an in-article link like https://en.wikipedia.org/wiki/Some_Title
--- (optionally followed by #Section_Name or a ?query string) and returns
--- lang, url-escaped-title -- e.g. "en", "Some_Title" for
--- https://en.wikipedia.org/wiki/Some_Title#Some_Section. The section
--- fragment itself is intentionally discarded: we open the full article
--- from the top rather than attempt to land on that specific heading.
-local function parseWikiLink(link_url)
-    if not link_url then return nil end
-    return link_url:match("^https?://([%w%-]+)%.wikipedia%.org/wiki/([^/?#]+)")
-end
-
--- Matches a category-navigation link in a featured-articles EPUB:
--- https://en.wikipedia.org/wiki/Wikipedia:Featured_articles#section_<N>
--- and returns the section index (e.g. "51").
-local function parseCategoryLink(link_url)
-    if not link_url then return nil end
-    local lang, title, fragment = link_url:match("^https?://([%w%-]+)%.wikipedia%.org/wiki/([^/?#]+)#(.+)$")
-    if lang and title == "Wikipedia:Featured_articles" and fragment then
-        local section_index = fragment:match("^section_(%d+)$")
-        if section_index then
-            return section_index
-        end
-    end
-    return nil
-end
-
--- Module-level lookup: section_index -> section_title, populated when the
--- category tree is built and used by the link handler to navigate the tree.
-local category_section_titles = {}
--- The full tree, stored so fetchFeaturedCategoryArticles can check whether
--- a section has children (and build a subcategory EPUB instead of fetching
--- articles directly).
-local category_tree = {}
--- Session cache for section links: section_index -> { titles = { "Article1", ... } }
--- so revisiting the same category during a session avoids re-fetching.
-local section_links_cache = {}
-
 function WikiReader:onDispatcherRegisterActions()
     Dispatcher:registerAction("wikireader_go_back", {
         category = "none",
@@ -288,21 +132,18 @@ function WikiReader:init()
     self.lang = G_reader_settings:readSetting("wikireader_lang") or "en"
     self:onDispatcherRegisterActions()
     self.ui.menu:registerToMainMenu(self)
-    -- Self-heal the cache directory on every plugin load (File Manager
-    -- entry, Reader entry, app restart -- whichever happens first) so
-    -- it never sits above the cap between downloads either.
-    pruneCache()
+    -- Self-heal the cache directory on every plugin load
+    cache.pruneCache()
 
     -- Hook the reader's "what do you want to do with this link" dialog so
     -- tapping a Wikipedia link inside an article reads the linked article
     -- the same way, instead of KOReader's small built-in lookup popup.
     if self.ui and self.ui.link then
-        -- Replace the stock "Read online" button (the clunky popup) --
-        -- comment this line out if you'd rather keep both options.
+        -- Replace the stock "Read online" button (the clunky popup)
         self.ui.link:removeFromExternalLinkDialog("40_wiki_lookup")
 
         self.ui.link:addToExternalLinkDialog("40_wikireader", function(this, link_url)
-            local lang, escaped_title = parseWikiLink(link_url)
+            local lang, escaped_title = wutil.parseWikiLink(link_url)
             return {
                 text = _("Read as book"),
                 callback = function()
@@ -327,9 +168,9 @@ function WikiReader:init()
         local original_onGoToExternalLink = self.ui.link.onGoToExternalLink
         self.ui.link.onGoToExternalLink = function(link_self, link_url)
             -- Check for category navigation links first
-            local cat_section_index = parseCategoryLink(link_url)
+            local cat_section_index = wutil.parseCategoryLink(link_url)
             if cat_section_index then
-                local cat_title = category_section_titles[cat_section_index]
+                local cat_title = categories.category_section_titles[cat_section_index]
                 if cat_title then
                     wiki_reader_self:fetchFeaturedCategoryArticles(cat_section_index, cat_title)
                 end
@@ -337,9 +178,7 @@ function WikiReader:init()
             end
 
             -- Then check for regular Wikipedia article links
-            local lang, escaped_title = parseWikiLink(link_url)
-            -- Use nilOrTrue so the default (nil = ON) works the same as
-            -- explicitly true, matching the menu toggle's semantics.
+            local lang, escaped_title = wutil.parseWikiLink(link_url)
             if lang and escaped_title and G_reader_settings:nilOrTrue("wikireader_skip_link_dialog") then
                 local title = socket_url.unescape(escaped_title)
                 wiki_reader_self:openArticleInPlace(title, lang)
@@ -355,7 +194,6 @@ function WikiReader:addToMainMenu(menu_items)
         text = _("WikiReader"),
         sub_item_table = {
             {
-                -- Independent search entry (decoupled from the featured article).
                 text = _("Search Wikipedia"),
                 keep_menu_open = true,
                 callback = function()
@@ -363,8 +201,6 @@ function WikiReader:addToMainMenu(menu_items)
                 end,
             },
             {
-                -- Featured article entry, now with its own submenu offering
-                -- today's article, a pickable date, or a random date.
                 text = _("Featured Articles"),
                 keep_menu_open = true,
                 sub_item_table = {
@@ -395,7 +231,6 @@ function WikiReader:addToMainMenu(menu_items)
                 },
             },
             {
-                -- Set the Wikipedia language code (persisted across restarts).
                 text_func = function()
                     return T(_("Wikipedia language: %1"), self.lang:upper())
                 end,
@@ -457,10 +292,7 @@ function WikiReader:addToMainMenu(menu_items)
     }
 
     -- Insert ourselves into the Search menu right after the built-in
-    -- Wikipedia history entry, rather than relying on sorting_hint (which
-    -- appends at the very end, pushing us onto the second page). The menu
-    -- order tables are require()-cached singletons, so modifying them here
-    -- is visible to the MenuSorter just like insert_menu.lua does.
+    -- Wikipedia history entry.
     local function insertAfterWikipHistory(order_tbl)
         local search_menu = order_tbl.search
         if not search_menu then return end
@@ -470,15 +302,13 @@ function WikiReader:addToMainMenu(menu_items)
                 return
             end
         end
-        -- Fallback: if no wikipedia_history found, just append
         table.insert(search_menu, "wikireader")
     end
     insertAfterWikipHistory(require("ui/elements/filemanager_menu_order"))
     insertAfterWikipHistory(require("ui/elements/reader_menu_order"))
 end
 
--- The "landing page": a search box for a topic. (Featured articles have
--- their own dedicated menu entry and are not duplicated here.)
+-- Search box (landing page).
 function WikiReader:showLanding()
     local dialog
     dialog = InputDialog:new{
@@ -512,14 +342,7 @@ function WikiReader:showLanding()
     dialog:onShowKeyboard()
 end
 
--- Normalize an arbitrary date table from the date picker into the
--- "YYYY/MM/DD" string the REST API expects.
-local function formatApiDate(year, month, day)
-    return string.format("%04d/%02d/%02d", year, month, day)
-end
-
--- Prompt for a specific date via KOReader's built-in date picker, then
--- fetch that day's featured article.
+-- Date picker for a specific day's featured article.
 function WikiReader:showDatePicker()
     local DateTimeWidget = require("ui/widget/datetimewidget")
     local today = os.date("*t")
@@ -529,23 +352,18 @@ function WikiReader:showDatePicker()
         year = today.year,
         month = today.month,
         day = today.day,
-        year_min = 2016, -- Wikipedia's featured-article REST API feed starts here
+        year_min = 2016,
         year_max = today.year,
         ok_text = _("Fetch"),
         callback = function(widget)
-            self:openFeaturedArticle(formatApiDate(widget.year, widget.month, widget.day))
+            self:openFeaturedArticle(wutil.formatApiDate(widget.year, widget.month, widget.day))
         end,
     }
     UIManager:show(date_widget)
 end
 
--- Pick a uniformly random date between 2001-01-01 and today and fetch the
--- featured article that ran on it.
+-- Random featured article.
 function WikiReader:openRandomFeaturedArticle()
-    -- Reseed the PRNG right before drawing, so successive sessions (and
-    -- successive picks within a session) don't repeat the same sequence:
-    -- math.random starts from a fixed seed unless randomseed is called, and
-    -- KOReader's startup seed (os.time()) only has 1s granularity.
     local time = require("ffi/util").gettime
     math.randomseed(math.floor(time() * 1000) % 2147483647)
 
@@ -555,11 +373,10 @@ function WikiReader:openRandomFeaturedArticle()
     if end_t <= start_t then end_t = os.time() end
     local random_t = start_t + math.random(0, end_t - start_t)
     local t = os.date("*t", random_t)
-    self:openFeaturedArticle(formatApiDate(t.year, t.month, t.day))
+    self:openFeaturedArticle(wutil.formatApiDate(t.year, t.month, t.day))
 end
 
--- Set the Wikipedia language edition used for all lookups. The chosen code
--- is persisted in KOReader's global settings so it survives a restart.
+-- Language code dialog.
 function WikiReader:showLanguageDialog()
     local dialog
     dialog = InputDialog:new{
@@ -596,9 +413,7 @@ function WikiReader:showLanguageDialog()
     dialog:onShowKeyboard()
 end
 
--- Look up the featured article title for a given date (defaults to today),
--- then hand off to openArticle(). Pass a "YYYY/MM/DD" string to fetch a
--- specific day's article instead of today's.
+-- Open featured article for a given date (defaults to today).
 function WikiReader:openFeaturedArticle(date)
     NetworkMgr:runWhenOnline(function()
         local info = InfoMessage:new{ text = _("Fetching featured article…") }
@@ -606,13 +421,11 @@ function WikiReader:openFeaturedArticle(date)
 
         UIManager:scheduleIn(0, function()
             local date_str = date or os.date("%Y/%m/%d")
-            -- Same host pattern ("<lang>.wikipedia.org") KOReader's built-in
-            -- Wikipedia lookup already talks to -- no separate API key needed.
             local url = string.format(
                 "https://%s.wikipedia.org/api/rest_v1/feed/featured/%s",
                 self.lang, date_str
             )
-            local ok, code, sink = httpGetJSON(url)
+            local ok, code, sink = wutil.httpGetJSON(url)
             UIManager:close(info)
 
             if not ok or code ~= 200 then
@@ -632,8 +445,6 @@ function WikiReader:openFeaturedArticle(date)
             end
 
             local tfa = data.tfa
-            -- Field names have shifted a little across API versions; try
-            -- the likely candidates in order.
             local title = (tfa.titles and tfa.titles.normalized)
                 or tfa.normalizedtitle
                 or tfa.title
@@ -647,1089 +458,34 @@ function WikiReader:openFeaturedArticle(date)
     end)
 end
 
--- Removes <tag ...>...</tag> blocks whose `attr_name` attribute matches
--- any of `attr_patterns`, correctly handling same-tag elements nested
--- inside them (an infobox table can contain a nested table; a div can
--- nest other divs). Lua's plain string patterns can't express "find the
--- matching close tag" on their own -- %b()-style balanced matching only
--- works for single-character delimiters -- so this walks the string by
--- hand instead, tracking nesting depth.
-local function stripElementsByAttr(html, tag, attr_name, attr_patterns)
-    local open_pat = "<" .. tag .. "[^>]*>"
-    local close_pat = "</" .. tag .. "%s*>"
-    local attr_capture_pat = attr_name .. [[%s*=%s*"([^"]*)"]]
-    local out = {}
-    local pos = 1
-    while true do
-        local open_start, open_end = html:find(open_pat, pos)
-        if not open_start then
-            table.insert(out, html:sub(pos))
-            break
-        end
-        local attr_value = html:sub(open_start, open_end):match(attr_capture_pat) or ""
-        local matches = false
-        for _, pat in ipairs(attr_patterns) do
-            if attr_value:lower():find(pat, 1, true) then
-                matches = true
-                break
-            end
-        end
-        if not matches then
-            table.insert(out, html:sub(pos, open_end))
-            pos = open_end + 1
-        else
-            table.insert(out, html:sub(pos, open_start - 1)) -- text before this element
-            local depth = 1
-            local scan_pos = open_end + 1
-            while depth > 0 do
-                local next_open_start, next_open_end = html:find(open_pat, scan_pos)
-                local next_close_start, next_close_end = html:find(close_pat, scan_pos)
-                if not next_close_start then
-                    scan_pos = #html + 1 -- malformed: bail, drop the rest
-                    break
-                elseif next_open_start and next_open_start < next_close_start then
-                    depth = depth + 1
-                    scan_pos = next_open_end + 1
-                else
-                    depth = depth - 1
-                    scan_pos = next_close_end + 1
-                end
-            end
-            pos = scan_pos
-        end
-    end
-    return table.concat(out)
-end
-
--- Thin wrapper for the common case (matching on `class`).
-local function stripElementsByClass(html, tag, class_patterns)
-    return stripElementsByAttr(html, tag, "class", class_patterns)
-end
-
--- Removes specific classes and optionally transforms the style attribute on
--- elements whose class matches any of `class_patterns`, while keeping the
--- element and its content intact. This is useful for things like quote boxes
--- that have float classes (floatleft/floatright) and inline width styles that
--- break the reflowable layout.
---
--- `remove_style` can be:
---   - true: remove the entire style attribute
---   - a function: called with the current style value, returns the replacement
---   - false/nil: leave the style attribute untouched
-local function cleanElementClasses(html, tag, class_patterns, classes_to_remove, remove_style)
-    local open_pat = "<" .. tag .. "[^>]*>"
-    local out = {}
-    local pos = 1
-    while true do
-        local open_start, open_end = html:find(open_pat, pos)
-        if not open_start then
-            table.insert(out, html:sub(pos))
-            break
-        end
-
-        local open_tag = html:sub(open_start, open_end)
-        local class_attr = open_tag:match([[class%s*=%s*"([^"]*)"]]) or ""
-        local matches = false
-        for _, pat in ipairs(class_patterns) do
-            if class_attr:lower():find(pat, 1, true) then
-                matches = true
-                break
-            end
-        end
-
-        if not matches then
-            table.insert(out, html:sub(pos, open_end))
-            pos = open_end + 1
-        else
-            local modified_tag = open_tag
-
-            -- Remove each specified class from the class attribute
-            for _, cls in ipairs(classes_to_remove) do
-                -- class="... cls ..." (middle of class list)
-                modified_tag = modified_tag:gsub('(class%s*=%s*"[^"]*)%s' .. cls .. '(%s[^"]*")', '%1%2')
-                -- class="cls ..." (start of class list)
-                modified_tag = modified_tag:gsub('(class%s*=%s*")' .. cls .. '(%s[^"]*")', '%1%2')
-                -- class="... cls" (end of class list)
-                modified_tag = modified_tag:gsub('(class%s*=%s*"[^"]*)%s' .. cls .. '(")', '%1%2')
-                -- class="cls" (only class)
-                modified_tag = modified_tag:gsub('(class%s*=%s*")' .. cls .. '(")', '%1%2')
-            end
-
-            -- Handle the style attribute: remove, transform, or leave as-is
-            if remove_style == true then
-                modified_tag = modified_tag:gsub('%s*style%s*=%s*"[^"]*"', '')
-            elseif type(remove_style) == "function" then
-                -- Transform an existing style attribute, or synthesize a new
-                -- one if the tag has none (e.g. force width:100%% on tables
-                -- that don't set any width themselves). The transform receives
-                -- the current style value ("" if absent) and returns the
-                -- replacement; an empty/nil return means "leave it as-is".
-                local style_val = modified_tag:match('style%s*=%s*"([^"]*)"') or ""
-                local new_style = remove_style(style_val)
-                if new_style and new_style ~= "" then
-                    if style_val ~= "" then
-                        modified_tag = modified_tag:gsub('style%s*=%s*"[^"]*"', 'style="' .. new_style .. '"')
-                    else
-                        modified_tag = modified_tag:gsub('^(<[^>]+)', '%1 style="' .. new_style .. '"')
-                    end
-                end
-            end
-
-            -- Tidy up any leftover double spaces
-            modified_tag = modified_tag:gsub('%s+', ' ')
-            modified_tag = modified_tag:gsub(' %s*>', '>')
-
-            table.insert(out, html:sub(pos, open_start - 1))
-            table.insert(out, modified_tag)
-            pos = open_end + 1
-        end
-    end
-    return table.concat(out)
-end
-
--- Fetches and converts an article, with images permanently disabled and
--- a handful of clutter elements stripped from the HTML before it's ever
--- handed to createEpub(): infobox tables, image-caption boxes, and the
--- category list at the bottom of the article. There's no parameter or
--- hook on createEpub() for filtering its HTML, so we temporarily replace
--- the lower-level function it calls internally to fetch that HTML
--- (getFullPageHtml), run the genuine one, clean up what it returns, and
--- put the original back immediately afterwards either way.
---
--- Image captions specifically need handling two different ways: Wikipedia
--- is mid-migration (through 2025-2026) from its legacy renderer to a
--- newer one called Parsoid, and the two mark up captioned images
--- completely differently -- legacy wraps them in <div class="thumb">,
--- Parsoid wraps them in <figure typeof="mw:File/Thumb"> with a
--- <figcaption>. Since which one any given request actually gets depends
--- on that rollout (wiki by wiki, gradually) rather than anything we
--- control, both are stripped so this doesn't quietly break again when
--- the rollout reaches wherever it hasn't already.
--- What counts as a "leading notice" for extractLeadingNotices() below:
--- hatnotes (disambiguation/redirect notices) and the maintenance/cleanup
--- banner family (the various "*mbox" classes Wikipedia's templates use).
--- "mw:transclusion" is kept as a fallback signal for cases where a
--- template's output is wrapped in a Parsoid transclusion div that
--- doesn't carry the inner class itself -- real Wikipedia HTML samples
--- checked while building this didn't actually need it (hatnotes/ambox
--- carried their class directly), but it's cheap, harmless insurance for
--- article/template combinations that do wrap that way.
-local LEADING_NOTICE_TAGS = { "div", "table" }
-local LEADING_NOTICE_PATTERNS = {
-    "hatnote", "ambox", "tmbox", "cmbox", "ombox", "dmbox", "fmbox",
-    "mw:transclusion",
-}
-
-local function elementIsLeadingNotice(open_tag)
-    local class_attr = open_tag:match([[class%s*=%s*"([^"]*)"]]) or ""
-    local typeof_attr = open_tag:match([[typeof%s*=%s*"([^"]*)"]]) or ""
-    local combined = (class_attr .. " " .. typeof_attr):lower()
-    for _, pat in ipairs(LEADING_NOTICE_PATTERNS) do
-        if combined:find(pat, 1, true) then
-            return true
-        end
-    end
-    return false
-end
-
--- Skips whitespace, HTML comments, <style>...</style> blocks,
--- self-closing <link .../> / <meta .../> tags, and empty <p></p>
--- elements sitting at `pos`. Real Wikipedia HTML interleaves
--- <style>/<link> between sibling elements for CSS deduplication (one
--- per hatnote/banner, in between them), and MediaWiki emits empty
--- <p class="mw-empty-elt"> tags as spacing artifacts around templates --
--- without skipping these, a scan that only knows how to recognize
--- notice elements themselves stops dead at the first one, missing
--- everything after it (confirmed against two different real articles:
--- one needed the style/link handling, the other needed the empty-<p>
--- handling to get past the same shape of problem in a different spot).
-local function skipLeadingCruft(html, pos)
-    while true do
-        local start_pos = pos
-        local _, ws_end = html:find("^%s*", pos)
-        pos = (ws_end or pos - 1) + 1
-        local c_start, c_end = html:find("^<!%-%-.-%-%->", pos)
-        if c_start then pos = c_end + 1 end
-        local s_start, s_end = html:find("^<style[^>]*>.-</style%s*>", pos)
-        if s_start then pos = s_end + 1 end
-        local l_start, l_end = html:find("^<link[^>]*/?>", pos)
-        if l_start then pos = l_end + 1 end
-        local m_start, m_end = html:find("^<meta[^>]*/?>", pos)
-        if m_start then pos = m_end + 1 end
-        local p_start, p_end = html:find("^<p[^>]*>%s*</p%s*>", pos)
-        if p_start then pos = p_end + 1 end
-        if pos == start_pos then
-            return pos
-        end
-    end
-end
-
--- Finds the close tag matching an already-found opening tag of `tag`
--- (given the position right after that opening tag), tracking nesting
--- depth so same-named descendants don't confuse the search. Returns the
--- close tag's start and end positions, or nil if unclosed/malformed.
-local function findMatchingClose(html, tag, open_end)
-    local open_pat = "<" .. tag .. "[^>]*>"
-    local close_pat = "</" .. tag .. "%s*>"
-    local depth = 1
-    local scan_pos = open_end + 1
-    while depth > 0 do
-        local next_open_start, next_open_end = html:find(open_pat, scan_pos)
-        local next_close_start, next_close_end = html:find(close_pat, scan_pos)
-        if not next_close_start then
-            return nil
-        elseif next_open_start and next_open_start < next_close_start then
-            depth = depth + 1
-            scan_pos = next_open_end + 1
-        else
-            depth = depth - 1
-            if depth == 0 then
-                return next_close_start, next_close_end
-            end
-            scan_pos = next_close_end + 1
-        end
-    end
-end
-
-local function extractLeadingNoticesInner(html)
-    local pos = skipLeadingCruft(html, 1)
-    local notices = {}
-    while true do
-        local matched_tag, open_start, open_end
-        for _, tag in ipairs(LEADING_NOTICE_TAGS) do
-            local o_start, o_end = html:find("^<" .. tag .. "[^>]*>", pos)
-            if o_start and elementIsLeadingNotice(html:sub(o_start, o_end)) then
-                matched_tag, open_start, open_end = tag, o_start, o_end
-                break
-            end
-        end
-        if not matched_tag then
-            break -- next element isn't a notice -- this is where the real article starts
-        end
-        local close_start, close_end = findMatchingClose(html, matched_tag, open_end)
-        if not close_end then
-            return table.concat(notices), html:sub(pos) -- malformed: bail, keep the rest as-is
-        end
-        table.insert(notices, html:sub(pos, close_end))
-        pos = skipLeadingCruft(html, close_end + 1)
-    end
-    return table.concat(notices), html:sub(pos)
-end
-
--- Pulls any hatnotes/maintenance-template elements sitting right at the
--- very start of the article HTML out into their own string, leaving
--- everything from the genuine first paragraph/heading onward in a
--- second string. Only looks at the front of the document -- a
--- maintenance banner turning up mid-article (rare, but possible) is left
--- exactly where it is.
---
--- MediaWiki -- both the legacy parser and Parsoid, confirmed against a
--- real API response -- wraps the entire rendered article body in
--- <div class="mw-parser-output">...</div>. That wrapper is the actual
--- first element in the HTML, and its own class matches none of our
--- notice patterns, so without accounting for it the scan above finds
--- nothing at all and gives up immediately -- looking inside it instead
--- (while leaving its own opening/closing tags exactly where they are in
--- the final output) is what makes detection work in practice rather than
--- only in a hand-built test case.
-local function extractLeadingNotices(html)
-    local wrap_open_start, wrap_open_end = html:find('^<div[^>]-class="[^"]*mw%-parser%-output[^"]*"[^>]*>')
-    if not wrap_open_start then
-        return extractLeadingNoticesInner(html)
-    end
-    local wrap_close_start = findMatchingClose(html, "div", wrap_open_end)
-    if not wrap_close_start then
-        return extractLeadingNoticesInner(html)
-    end
-    local prefix = html:sub(1, wrap_open_end)
-    local inner = html:sub(wrap_open_end + 1, wrap_close_start - 1)
-    local suffix = html:sub(wrap_close_start)
-    local notices, rest = extractLeadingNoticesInner(inner)
-    return notices, prefix .. rest .. suffix
-end
-
--- Scans the full HTML for any notice elements (hatnotes, maintenance banners
--- such as ambox/tmbox/cmbox/ombox/dmbox/fmbox) that were NOT caught by
--- extractLeadingNotices() -- i.e. section-level notices like "This section
--- has multiple issues...", "This section needs more citations...", etc. --
--- and wraps each one in a <div class="wikireader-notices"> box so they get
--- the same visual treatment as top-of-article notices.
---
--- This is deliberately a second pass applied to the "rest" HTML after
--- extractLeadingNotices() has already handled the front-of-article notices,
--- to avoid double-wrapping them.
-local function wrapSectionNotices(html)
-    local pos = 1
-    local out = {}
-    while true do
-        local matched_tag, open_start, open_end
-        for _, tag in ipairs(LEADING_NOTICE_TAGS) do
-            local o_start, o_end = html:find("<" .. tag .. "[^>]*>", pos)
-            if o_start and (not open_start or o_start < open_start) then
-                open_start, open_end = o_start, o_end
-                matched_tag = tag
-            end
-        end
-        if not open_start then
-            table.insert(out, html:sub(pos))
-            break
-        end
-        local open_tag = html:sub(open_start, open_end)
-        if elementIsLeadingNotice(open_tag) then
-            table.insert(out, html:sub(pos, open_start - 1))
-            local close_start, close_end = findMatchingClose(html, matched_tag, open_end)
-            if not close_end then
-                table.insert(out, html:sub(open_start))
-                break
-            end
-            local notice_content = html:sub(open_start, close_end)
-            table.insert(out, string.format(
-                [[<div class="wikireader-notices">%s</div>]],
-                notice_content
-            ))
-            pos = close_end + 1
-        else
-            table.insert(out, html:sub(pos, open_end))
-            pos = open_end + 1
-        end
-    end
-    return table.concat(out)
-end
-
---[[-------------------------------------------------------------------------
-Math (LaTeX) to readable-text conversion.
-
-Wikipedia renders each formula in two ways at once: a hidden MathML
-<math> element (wrapped in <span style="display:none"> for screen-readers),
-plus a visible <img> pointing at a rendered SVG of the formula. The
-<math> is hidden from display and crengine can't render MathML anyway;
-and because this plugin fetches articles with images permanently disabled,
-the <img> fallback is stripped too. Result: formulas silently vanish.
-
-The fix: extract the raw LaTeX source embedded in every <math> block
-(either from an <annotation encoding="application/x-tex"> or from the
-alttext="..." attribute) and replace the whole wrapper span with a
-best-effort Unicode transcription. Fractions, roots and superscripts
-become linear text -- not a typeset-quality rendering, but the mathematics
-is preserved and readable.
---]]
-
--- Unicode superscripts (all common chars)
-local ltx_sup = {
-    ["0"]="⁰", ["1"]="¹", ["2"]="²", ["3"]="³", ["4"]="⁴",
-    ["5"]="⁵", ["6"]="⁶", ["7"]="⁷", ["8"]="⁸", ["9"]="⁹",
-    ["-"]="⁻", ["+"]="⁺", ["("]="⁽", [")"]="⁾", [","]=",",
-}
--- Unicode subscripts (digits and a few letters)
-local ltx_sub = {
-    ["0"]="₀", ["1"]="₁", ["2"]="₂", ["3"]="₃", ["4"]="₄",
-    ["5"]="₅", ["6"]="₆", ["7"]="₇", ["8"]="₈", ["9"]="₉",
-    ["-"]="₋", ["+"]="₊", ["("]="₍", [")"]="₎",
-}
-
--- Symbols that are just a single Unicode character
-local ltx_sym = {
-    partial="∂", nabla="∇", infty="∞", cdot="·",
-    pm="±", mp="∓", times="×", div="÷",
-    forall="∀", exists="∃",
-    ["in"]="∈", notin="∉", ni="∋",
-    subset="⊂", supset="⊃", subseteq="⊆", supseteq="⊇",
-    subsetneq="⊊", supsetneq="⊋",
-    cup="∪", cap="∩", setminus="∖",
-    emptyset="∅", varnothing="∅",
-    to="→", rightarrow="→", leftarrow="←",
-    leftrightarrow="↔", Rightarrow="⇒", Leftarrow="⇐",
-    Leftrightarrow="⇔", longrightarrow="→",
-    uparrow="↑", downarrow="↓", mapsto="↦",
-    mid="|", parallel="∥",
-    leq="≤", le="≤", geq="≥", ge="≥", neq="≠", ne="≠",
-    approx="≈", sim="∼", simeq="≃", cong="≅", equiv="≡",
-    propto="∝", ldots="…", dots="…", cdots="⋯", vdots="⋮", ddots="⋱",
-    int="∫", iint="∬", iiint="∭", oint="∮",
-    sum="∑", prod="∏", coprod="∐",
-    prime="′", ell="ℓ",
-    langle="⟨", rangle="⟩",
-    neg="¬", land="∧", lor="∨", iff="⇔", implies="⇒",
-    Re="ℜ", Im="ℑ", hbar="ℏ", aleph="ℵ",
-    therefore="∴", because="∵",
-    left="", right="", big="", Big="", bigg="", Bigg="",
-    bigl="", bigr="", Bigl="", Bigr="", biggl="", biggr="", Biggl="", Biggr="",
-    displaystyle="", textstyle="", scriptstyle="", scriptscriptstyle="",
-    quad=" ", qquad=" ", enskip=" ", enspace=" ", thinspace=" ",
-    ["not"]="¬",
-}
-
-local ltx_greek = {
-    alpha="α", beta="β", gamma="γ", delta="δ",
-    epsilon="ε", varepsilon="ε", zeta="ζ", eta="η",
-    theta="θ", vartheta="ϑ", iota="ι", kappa="κ",
-    lambda="λ", mu="μ", nu="ν", xi="ξ",
-    pi="π", varpi="ϖ", rho="ρ", varrho="ϱ",
-    sigma="σ", varsigma="ς", tau="τ", upsilon="υ",
-    phi="φ", varphi="φ", chi="χ", psi="ψ", omega="ω",
-    Gamma="Γ", Delta="Δ", Theta="Θ", Lambda="Λ",
-    Xi="Ξ", Pi="Π", Sigma="Σ", Upsilon="Υ",
-    Phi="Φ", Psi="Ψ", Omega="Ω",
-}
-
-local function ltxConsumeGroup(str, pos)
-    -- pos points at '{'. Returns content string and position of '}',
-    -- handling nested braces.
-    local depth = 0
-    local i = pos
-    local n = #str
-    while i <= n do
-        local c = str:sub(i, i)
-        if c == "{" then
-            depth = depth + 1
-        elseif c == "}" then
-            depth = depth - 1
-            if depth == 0 then
-                return str:sub(pos + 1, i - 1), i
-            end
-        end
-        i = i + 1
-    end
-    return str:sub(pos + 1), n -- unclosed, return rest
-end
-
-local function ltxSkipSpaces(tex, pos)
-    while pos <= #tex and (tex:sub(pos, pos) == " " or tex:sub(pos, pos) == "\t") do
-        pos = pos + 1
-    end
-    return pos
-end
-
--- Reads one LaTeX argument (either a {braced} group or a single token,
--- e.g. the compact `\frac12` form). Returns the raw substring and the new
--- position just past it.
-local function ltxReadArg(tex, pos)
-    pos = ltxSkipSpaces(tex, pos)
-    if tex:sub(pos, pos) == "{" then
-        local inner, e = ltxConsumeGroup(tex, pos)
-        return inner, e + 1
-    end
-    if tex:sub(pos, pos) == "\\" then
-        local cs, ce = tex:find("\\[a-zA-Z]+", pos)
-        if cs and cs == pos then
-            return tex:sub(pos, ce), ce + 1
-        end
-        return tex:sub(pos, pos + 1), pos + 2
-    end
-    return tex:sub(pos, pos), pos + 1
-end
-
-local function ltxSup(str)
-    local out, all_sup = {}, true
-    for i = 1, #str do
-        local c = str:sub(i, i)
-        local u = ltx_sup[c]
-        if u then
-            out[#out+1] = u
-        else
-            all_sup = false
-            break
-        end
-    end
-    if all_sup and #out > 0 then
-        return table.concat(out)
-    end
-    if #str == 0 then
-        return ""
-    end
-    if #str == 1 then
-        -- single-char textual superscript, e.g. ^n -- no parens needed
-        return "^" .. str
-    end
-    return "^( " .. str .. " )"
-end
-
-local function ltxSub(str)
-    local out, all_sub = {}, true
-    for i = 1, #str do
-        local c = str:sub(i, i)
-        local u = ltx_sub[c]
-        if u then
-            out[#out+1] = u
-        else
-            all_sub = false
-            break
-        end
-    end
-    if all_sub and #out > 0 then
-        return table.concat(out)
-    end
-    if #str == 0 then
-        return ""
-    end
-    if #str == 1 then
-        -- single-char textual subscript, e.g. _n
-        return "_" .. str
-    end
-    return "_(" .. str .. ")"
-end
-
-local function ltxToText(tex)
-    local out = {}
-    local pos, n = 1, #tex
-    while pos <= n do
-        local c = tex:sub(pos, pos)
-        if c == "\\" then
-            -- Alpha command? (must start exactly at pos)
-            local cmd = nil
-            local cmd_cs, cmd_ce = tex:find("\\[a-zA-Z]+", pos)
-            if cmd_cs and cmd_cs == pos then
-                cmd = tex:sub(pos + 1, cmd_ce)
-                pos = cmd_ce + 1 -- past the last letter
-            end
-            if cmd then
-                if cmd == "frac" or cmd == "dfrac" or cmd == "tfrac" then
-                    local num, den
-                    num, pos = ltxReadArg(tex, pos)
-                    den, pos = ltxReadArg(tex, pos)
-                    table.insert(out, "(" .. ltxToText(num) .. ")/(" .. ltxToText(den) .. ")")
-                elseif cmd == "sqrt" then
-                    pos = ltxSkipSpaces(tex, pos)
-                    if tex:sub(pos, pos) == "[" then
-                        local close = tex:find("]", pos)
-                        pos = (close or pos) + 1
-                        pos = ltxSkipSpaces(tex, pos)
-                    end
-                    if tex:sub(pos, pos) == "{" then
-                        local e
-                        local inner
-                        inner, e = ltxConsumeGroup(tex, pos)
-                        pos = e + 1
-                        table.insert(out, "√(" .. ltxToText(inner) .. ")")
-                    else
-                        table.insert(out, "√")
-                    end
-                elseif cmd == "begin" or cmd == "end" then
-                    -- Environment name, e.g. \begin{aligned} / \end{cases} --
-                    -- skip it, keep going (the content itself is already
-                    -- being rendered inline by the surrounding scan).
-                    pos = ltxSkipSpaces(tex, pos)
-                    if tex:sub(pos, pos) == "{" then
-                        local e
-                        _, e = ltxConsumeGroup(tex, pos)
-                        pos = e + 1
-                    end
-                elseif cmd == "text" or cmd == "mathrm" or cmd == "textnormal"
-                    or cmd == "boldsymbol" or cmd == "mathbf" or cmd == "mathit"
-                    or cmd == "mbox" or cmd == "hbox" then
-                    pos = ltxSkipSpaces(tex, pos)
-                    if tex:sub(pos, pos) == "{" then
-                        local e, inner
-                        inner, e = ltxConsumeGroup(tex, pos)
-                        pos = e + 1
-                        table.insert(out, inner)
-                    end
-                elseif cmd == "operatorname" then
-                    pos = ltxSkipSpaces(tex, pos)
-                    if tex:sub(pos, pos) == "{" then
-                        local e, inner
-                        inner, e = ltxConsumeGroup(tex, pos)
-                        pos = e + 1
-                        table.insert(out, inner)
-                    end
-                elseif cmd == "mathbb" or cmd == "Bbb" then
-                    pos = ltxSkipSpaces(tex, pos)
-                    if tex:sub(pos, pos) == "{" then
-                        local e, inner
-                        inner, e = ltxConsumeGroup(tex, pos)
-                        pos = e + 1
-                        local bb = { R="ℝ", C="ℂ", N="ℕ", Z="ℤ", Q="ℚ", H="ℍ", P="ℙ" }
-                        table.insert(out, bb[inner] or inner)
-                    end
-                elseif cmd == "overline" or cmd == "bar" or cmd == "prime" then
-                    pos = ltxSkipSpaces(tex, pos)
-                    if tex:sub(pos, pos) == "{" then
-                        local e, inner
-                        inner, e = ltxConsumeGroup(tex, pos)
-                        pos = e + 1
-                        table.insert(out, inner)
-                    end
-                elseif cmd == "vec" or cmd == "hat" or cmd == "dot"
-                    or cmd == "ddot" or cmd == "tilde" then
-                    pos = ltxSkipSpaces(tex, pos)
-                    if tex:sub(pos, pos) == "{" then
-                        local e, inner
-                        inner, e = ltxConsumeGroup(tex, pos)
-                        pos = e + 1
-                        table.insert(out, inner)
-                    end
-                elseif cmd == "left" or cmd == "right" then
-                    pos = ltxSkipSpaces(tex, pos)
-                    local d = tex:sub(pos, pos)
-                    if d == "\\" then
-                        -- \left\{  \left.  etc.
-                        local d2 = tex:sub(pos + 1, pos + 1)
-                        local mm = { ["{"]="{", ["}"]="}", ["|"]="|", ["."]="" }
-                        if mm[d2] ~= nil then table.insert(out, mm[d2]) end
-                        pos = pos + 2
-                    else
-                        local m = { ["("]="(", [")"]=")", ["["]="[", ["]"]="]",
-                                    ["{"]="{", ["}"]="}", ["|"]="|", ["."]="" }
-                        table.insert(out, m[d] or "")
-                        pos = pos + 1
-                    end
-                elseif cmd == "big" or cmd == "Big" or cmd == "bigg" or cmd == "Bigg"
-                    or cmd == "bigl" or cmd == "bigr" or cmd == "Bigl" or cmd == "Bigr"
-                    or cmd == "biggl" or cmd == "biggr" or cmd == "Biggl" or cmd == "Biggr" then
-                    pos = ltxSkipSpaces(tex, pos)
-                    local d = tex:sub(pos, pos)
-                    if d == "\\" then
-                        pos = pos + 2
-                    else
-                        if d ~= "" then table.insert(out, d) end
-                        pos = pos + 1
-                    end
-                elseif ltx_sym[cmd] ~= nil then
-                    table.insert(out, ltx_sym[cmd])
-                    pos = ltxSkipSpaces(tex, pos)
-                elseif ltx_greek[cmd] then
-                    table.insert(out, ltx_greek[cmd])
-                    pos = ltxSkipSpaces(tex, pos)
-                else
-                    -- Unknown command: drop backslash, keep the word as-is
-                    table.insert(out, cmd)
-                    pos = ltxSkipSpaces(tex, pos)
-                end
-            else
-                -- Single-character escape, e.g. \{ \% \_ \$ \#
-                local ch = tex:sub(pos + 1, pos + 1)
-                local esc = { ["{"]="{", ["}"]="}", ["%"]="%", ["_"]="_", ["$"]="$",
-                              ["#"]="#", ["&"]="&", ["|"]="|", ["("]="(", [")"]=")",
-                              ["["]="[", ["]"]="]", ["/"]="/", [","]=" ", [";"]=" ",
-                              [":"]="  ", ["!"]="", ["'"]="′", [" "]=" ", ["~"]=" ",
-                              ["\\"]="" }
-                table.insert(out, esc[ch] or ch or "")
-                if ch == "" then pos = pos + 1 end -- trailing backslash
-                pos = pos + 2
-            end
-        elseif c == "^" then
-            local next_c = tex:sub(pos + 1, pos + 1)
-            if next_c == "{" then
-                local inner, e = ltxConsumeGroup(tex, pos + 1)
-                pos = e + 1
-                table.insert(out, ltxSup(ltxToText(inner)))
-            else
-                pos = pos + 2
-                table.insert(out, ltxSup(next_c))
-            end
-        elseif c == "_" then
-            local next_c = tex:sub(pos + 1, pos + 1)
-            if next_c == "{" then
-                local inner, e = ltxConsumeGroup(tex, pos + 1)
-                pos = e + 1
-                table.insert(out, ltxSub(ltxToText(inner)))
-            else
-                pos = pos + 2
-                table.insert(out, ltxSub(next_c))
-            end
-        elseif c == "&" then
-            -- Alignment column separator (e.g. inside \begin{aligned}):
-            -- render as a plain space instead of a hard ampersand.
-            table.insert(out, " ")
-            pos = pos + 1
-        elseif c == "{" or c == "}" then
-            -- Unmatched brace: skip silently (TeX groups are consumed by
-            -- our per-command handling, so stray braces are just artifacts
-            -- of the outer {\displaystyle ...} wrapper that we already
-            -- stripped).
-            pos = pos + 1
-        else
-            table.insert(out, c)
-            pos = pos + 1
-        end
-    end
-    return table.concat(out)
-end
-
-local function wikireaderLatexToText(tex)
-    -- Strip outer {\displaystyle ...} / \textstyle / \scriptstyle wrappers
-    tex = tex:gsub("^%s*{\\displaystyle%s*(.-)}$", "%1")
-    tex = tex:gsub("^%s*{\\textstyle%s*(.-)}$", "%1")
-    tex = tex:gsub("^%s*{\\scriptstyle%s*(.-)}$", "%1")
-    tex = tex:gsub("^%s*{\\scriptscriptstyle%s*(.-)}$", "%1")
-    -- Decode HTML entities (alttext is entity-encoded)
-    tex = util.htmlEntitiesToUtf8(tex)
-    tex = tex:gsub("%s+", " "):match("^%s*(.-)%s*$") or tex
-    return ltxToText(tex)
-end
-
--- Extracts the LaTeX source from a <math> block (from <annotation> or alttext)
--- and returns the readable text, or nil if none found.
-local function mathBlockToText(math_html)
-    local tex = math_html:match('<annotation[^>]*>%s*(.-)%s*</annotation>')
-    if not tex then
-        tex = math_html:match('alttext%s*=%s*"([^"]*)"')
-        if tex then tex = util.htmlEntitiesToUtf8(tex) end
-    end
-    if not tex or tex == "" then return nil end
-    return wikireaderLatexToText(tex)
-end
-
--- Replace every <span class="mwe-math-element...">...</span> block (the
--- wrapper around every formula) with a readable text approximation of
--- the embedded LaTeX. Also handles any bare <math> tags as a fallback.
-local function replaceMathElements(html)
-    local out = {}
-    local pos = 1
-    local open_pat = '<span class="mwe%-math%-element[^>]*>'
-    while true do
-        local os_, oe = html:find(open_pat, pos)
-        if not os_ then
-            table.insert(out, html:sub(pos))
-            break
-        end
-        local open_tag = html:sub(os_, oe)
-        local cs, ce = findMatchingClose(html, "span", oe)
-        if not ce then
-            -- Malformed; bail, keep rest as-is
-            table.insert(out, html:sub(pos))
-            break
-        end
-        local block = html:sub(os_, ce)
-        table.insert(out, html:sub(pos, os_ - 1))
-        local text = mathBlockToText(block)
-        if text then
-            local is_block = open_tag:find("mwe%-math%-element%-block", 1) ~= nil
-            local style = is_block
-                and 'display:block; text-align:center; margin:0.6em 0; font-style:italic;'
-                or  'white-space:nowrap; font-style:italic;'
-            table.insert(out, string.format(
-                '<span class="wikireader-math" style="%s">%s</span>', style, text))
-        end
-        pos = ce + 1
-    end
-    local result = table.concat(out)
-    -- Fallback: any bare <math>...</math> that wasn't inside a wrapper span
-    result = result:gsub('<math[^>]*>.-</math>', function(math_block)
-        local text = mathBlockToText(math_block)
-        if text then
-            return string.format('<span class="wikireader-math" style="font-style:italic;">%s</span>', text)
-        end
-        return ""
-    end)
-    return result
-end
-
-function WikiReader:buildEpub(epub_path, title, lang, callback)
-    local Wikipedia = require("ui/wikipedia")
-    local Trapper = require("ui/trapper")
-    local Archiver = require("ffi/archiver")
-
-    -- Will hold the short description extracted from HTML
-    local short_description = nil
-    -- Will hold the resolved article title from the API response (used to
-    -- fix the epub metadata and cache filename when the search term doesn't
-    -- match the canonical title, e.g. "french revolution" -> "French Revolution").
-    local resolved_title = nil
-
-    -- KOReader's wiki_phtml_params (the query for getFullPageHtml, which
-    -- createEpub() calls) is the one place that's missing a `redirects`
-    -- marker -- wiki_full_params and wiki_images_params both set it. Without
-    -- it, a link that points at a redirect (e.g. "Upper_New_York_Bay", which
-    -- Wikipedia redirects to "New_York_Harbor") fetches the redirect stub's
-    -- HTML instead of following through to the real article, so the epub
-    -- becomes a "middleman" page full of links rather than the article
-    -- itself. The `parse` API action does support `redirects`; we just have
-    -- to ask for it. Patch it in for the duration of the build and put it
-    -- back afterwards, exactly like the getFullPageHtml/Archiver patches.
-    local original_phtml_redirects = Wikipedia.wiki_phtml_params.redirects
-    Wikipedia.wiki_phtml_params.redirects = ""
-
-    local original_getFullPageHtml = Wikipedia.getFullPageHtml
-    Wikipedia.getFullPageHtml = function(self, wiki_title, wiki_lang)
-        -- getFullPageHtml() throws when the page doesn't exist (it does
-        -- error(result.error.info), e.g. "The page you specified doesn't
-        -- exist."). If we let that propagate, createEpub() catches it and
-        -- pops up its own InfoMessage with the raw error (file:line prefix
-        -- and all) before our caller gets a chance to show the friendlier
-        -- "Couldn't download that article." message. Catch it here and
-        -- return nil instead: createEpub() then fails fast and silently
-        -- (it can't index nil), we skip its internal error popup entirely,
-        -- and buildEpub()'s own pcall handles the rest the usual way.
-        local ok, result = pcall(original_getFullPageHtml, self, wiki_title, wiki_lang)
-        if not ok or not result then
-            return nil
-        end
-        if result and result.text and result.text["*"] then
-            local html = result.text["*"]
-
-            -- Extract short description from the HTML before stripping it.
-            --
-            -- NOTE: this div is NOT always present in the HTML returned by
-            -- the `parse` action. As Wikipedia's Parsoid rollout proceeds, the
-            -- server can return a response that omits <div class="shortdescription">
-            -- entirely (observed on some devices/CDN edges even for articles that
-            -- do have a short description). So this is only the first attempt;
-            -- if it fails we fall back to the query API's pageprops below.
-            local short_desc_pat = '<div[^>]*class="[^"]*shortdescription[^"]*"[^>]*>(.-)</div>'
-            local short_desc_match = html:match(short_desc_pat)
-            if short_desc_match then
-                -- Decode HTML entities and clean up whitespace
-                short_description = short_desc_match:gsub('&[^;]+;', ' '):gsub('%s+', ' '):match('^%s*(.-)%s*$')
-                if short_description == '' then
-                    short_description = nil
-                end
-            end
-
-            -- Fallback: the short description lives authoritatively in the
-            -- query API's pageprops as "wikibase-shortdesc", independent of
-            -- whatever HTML rendering the `parse` action happened to return.
-            -- Reaching for it here keeps the epub working even when the HTML
-            -- omits the shortdescription div.
-            if not short_description then
-                local JSON = require("json")
-                local props_url = string.format(
-                    "https://%s.wikipedia.org/w/api.php?action=query&prop=pageprops&titles=%s&format=json",
-                    wiki_lang or "en", socket_url.escape(wiki_title)
-                )
-                local props_ok, props_code, props_sink = httpGetJSON(props_url)
-                if props_ok and props_code == 200 then
-                    local props_parse_ok, props_data = pcall(JSON.decode, table.concat(props_sink))
-                    if props_parse_ok and props_data and props_data.query and props_data.query.pages then
-                        for _, props_page in pairs(props_data.query.pages) do
-                            if props_page.pageprops and props_page.pageprops["wikibase-shortdesc"] then
-                                short_description = props_page.pageprops["wikibase-shortdesc"]
-                                break
-                            end
-                        end
-                    end
-                end
-            end
-
-            -- Capture the resolved title from the API response so we can fix
-            -- the epub metadata and cache filename later (the title passed into
-            -- createEpub is the raw search term, which may differ in case etc.).
-            if result.title then
-                resolved_title = result.title
-            end
-            
-            -- "navbox" also covers campaignbox (the "V·T·E ..." collapsible
-            -- box for military-conflict chronologies, etc.) -- Campaignbox
-            -- is itself built on top of the generic Navbox template, and
-            -- despite being passed as a parameter *into* Infobox military
-            -- conflict, it renders as a separate sibling table right after
-            -- the infobox's own table rather than nested inside it, so it
-            -- needs its own entry here to be caught. "rmbox" covers the
-            -- route-map ({{Routemap}}) collapsible tables that Wikipedia's
-            -- route-map templates render as huge full-width diagram boxes
-            -- (e.g. river/railway course maps) -- a mess in a single-column
-            -- reflowable epub layout, so strip them like the other box
-            -- tables.
-            html = stripElementsByClass(html, "table", { "infobox", "navbox", "sidebar", "vertical-navbox", "rmbox" })
-            -- wikitable (standard Wikipedia data tables) should be kept, but
-            -- floatleft/floatright and an explicit width make them break out
-            -- of the reflowable column. Remove the float classes and set the
-            -- width to 100%% so the table fills the screen width.
-            html = cleanElementClasses(html, "table", { "wikitable" }, { "floatleft", "floatright" }, function(style)
-                if style == "" then
-                    return "width:100%%"
-                elseif style:find('width%s*:') then
-                    return style:gsub('width%s*:%s*[^;]+', 'width:100%%')
-                else
-                    return style .. ';width:100%%'
-                end
-            end)
-            -- "side-box" covers the {{listen}}/audio-sample box (icon,
-            -- play button, description, "Problems playing this file?"
-            -- footer) among other supplementary side-content templates.
-            -- Unlike hatnotes/maintenance banners, these can turn up
-            -- anywhere in the article body, not just at the very start,
-            -- so this needs the general strip here rather than the
-            -- leading-notices handling below -- and they're doubly
-            -- pointless in an epub anyway, since crengine has no audio
-            -- playback capability at all. "shortdescription" is the hidden
-            -- metadata div MediaWiki emits at the very top of (almost)
-            -- every article; it has style="display:none" so it's never
-            -- visible itself, but it *used* to be caught by the
-            -- leading-notices scan as a "notice" and pulled into the
-            -- front-matter box -- rendering as an empty bordered box on
-            -- articles with no real hatnotes. It's metadata, not a notice,
-            -- so strip it outright rather than treat it as one.
-            html = stripElementsByClass(html, "div", { "thumb", "catlinks", "navbox", "vertical-navbox", "side-box", "spoken-wikipedia", "shortdescription" })
-            html = stripElementsByClass(html, "ul", { "gallery" })
-            -- Quote boxes with pullquote/quotebox classes are floats that break
-            -- layout; remove the float classes and width style from them so they
-            -- render as normal in-flow block elements.
-            html = cleanElementClasses(html, "div", { "quotebox", "pullquote" }, { "floatleft", "floatright" }, true)
-            -- Coordinates rendered by {{coord}} templates (e.g. "54°44′28″N 2°06′36″W")
-            -- are useless in an epub and just clutter the lead paragraph.
-            html = stripElementsByClass(html, "span", { "geo-inline-hidden" })
-            -- Parsoid's captioned-image markup.
-            html = stripElementsByAttr(html, "figure", "typeof", { "mw:file", "mw:image", "mw:video", "mw:audio" })
-            -- Belt and braces: strip any stray <audio> elements directly,
-            -- in case some other template ever embeds one outside a
-            -- side-box wrapper.
-            html = html:gsub("<audio.-</audio%s*>", "")
-            -- Convert math formulas from hidden MathML+img to readable text
-            html = replaceMathElements(html)
-
-            -- Pull any hatnotes/maintenance banners off the very front of
-            -- the article into their own bordered box (so it's visually
-            -- obvious they're not part of the article text itself), and
-            -- put a divider right after them -- or, if there weren't any,
-            -- right at the very start -- to separate that front section
-            -- from the real lead paragraph.
-            local notices, rest = extractLeadingNotices(html)
-            -- Also wrap any section-level notices (e.g. "This section has
-            -- multiple issues...", "This section needs more citations...")
-            -- in the same wikireader-notices box for consistent styling.
-            rest = wrapSectionNotices(rest)
-            if notices ~= "" then
-                html = string.format(
-                    [[<div class="wikireader-notices">%s</div><hr class="koreaderwikifrontpage"/>%s]],
-                    notices, rest
-                )
-            else
-                html = [[<hr class="koreaderwikifrontpage"/>]] .. rest
-            end
-
-            result.text["*"] = html
-        end
-        return result
-    end
-
-    -- createEpub() also writes its own front-matter directly into
-    -- content.html at the very end -- a title, a "Wikipedia EN" subtitle,
-    -- a "Saved on <date> / See online version for up-to-date content"
-    -- paragraph, and a divider (all tagged class="koreaderwikifrontpage").
-    -- That's not part of the article HTML at all, so the getFullPageHtml
-    -- hook above can't reach it; it only exists once the epub's zip entry
-    -- itself is written. We want the subtitle and paragraph gone (title
-    -- stays), and the divider removed from here since the hook above
-    -- already inserted its own -- positioned after any hatnote/maintenance
-    -- box -- at the start of the article content instead.
-    --
-    -- The same hook also appends a real stylesheet rule for the notices
-    -- box so the class alone provides all the styling.
-    --
-    -- We also add the short description as a subtitle paragraph after the
-    -- main title if one was successfully fetched.
-    local original_addFileFromMemory = Archiver.Writer.addFileFromMemory
-    Archiver.Writer.addFileFromMemory = function(self, entry_path, content, mtime)
-        if entry_path == "OEBPS/content.html" then
-            content = stripElementsByClass(content, "p", { "koreaderwikifrontpage" })
-            content = stripElementsByClass(content, "h5", { "koreaderwikifrontpage" })
-            content = content:gsub('<hr class="koreaderwikifrontpage"%s*/?>', "", 1)
-            -- Add short description as subtitle after the title.
-            -- Use a <div> instead of a <p> to avoid the default paragraph margins
-            -- and padding that crengine applies, which can throw off centering.
-            if short_description and short_description ~= "" then
-                -- Find the title heading and add description after it with center alignment
-                content = content:gsub(
-                    '(<h1[^>]*>.-</h1>)',
-                    '%1\n<div style="font-style:italic; color:#666; margin-top:0.2em; margin-bottom:1em; text-align:center;">' .. short_description .. '</div>'
-                )
-            end
-            -- Fix the HTML <title> element in the head if the API returned a
-            -- canonical title that differs from the search term.
-            if resolved_title then
-                content = content:gsub('(<title>).-(</title>)', '%1' .. resolved_title .. '%2')
-            end
-        elseif entry_path == "OEBPS/content.opf" then
-            -- Fix the <dc:title> metadata if the API returned a canonical title
-            -- that differs from the search term.
-            if resolved_title then
-                content = content:gsub('(<dc:title>).-(</dc:title>)', '%1' .. resolved_title .. '%2')
-            end
-        elseif entry_path == "OEBPS/toc.ncx" then
-            -- Fix the title in the NCX docTitle and the root navPoint label.
-            if resolved_title then
-                content = content:gsub('(<docTitle>%s*<text>).-(</text>%s*</docTitle>)', '%1' .. resolved_title .. '%2')
-                content = content:gsub('(<navPoint[^>]*>%s*<navLabel>%s*<text>).-(</text>%s*</navLabel>%s*<content src="content%.html"/>)', '%1' .. resolved_title .. '%2')
-            end
-        elseif entry_path == "OEBPS/stylesheet.css" then
-            content = content .. [[
-
-.wikireader-notices {
-  border: 1px solid #888;
-  padding: 0.6em 0.8em;
-  margin: 0 0 1em 0;
-  font-style: italic;
-  font-size: 80%;
-}
-
-blockquote {
-  background: #f4f4f4;
-  border-left: 3px solid #ccc;
-  padding: 0.5em 0.8em;
-  margin: 0.5em 0;
-  font-style: italic;
-}
-
-.wikireader-math {
-  white-space: nowrap;
-}
-]]
-        end
-        return original_addFileFromMemory(self, entry_path, content, mtime)
-    end
-
-    Trapper:wrap(function()
-        local ok, success = pcall(Wikipedia.createEpub, Wikipedia, epub_path, title, lang, false)
-        -- Always restore all patches, success or not.
-        Wikipedia.wiki_phtml_params.redirects = original_phtml_redirects
-        Wikipedia.getFullPageHtml = original_getFullPageHtml
-        Archiver.Writer.addFileFromMemory = original_addFileFromMemory
-        if ok and success then
-            -- If the API resolved the title to a canonical form (e.g.
-            -- "french revolution" -> "French Revolution"), rename the cache
-            -- file to match so subsequent lookups hit the right cache entry.
-            local used_path = epub_path
-            if resolved_title and resolved_title ~= title then
-                local new_path = getCachePath(resolved_title, lang)
-                if new_path ~= epub_path then
-                    os.rename(epub_path, new_path)
-                    DocSettings.updateLocation(epub_path, new_path)
-                    used_path = new_path
-                end
-            end
-            callback(true, used_path)
-        else
-            Trapper:reset()
-            callback(false)
-        end
-    end)
-end
-
 -- Shared plumbing: serve `title` from the cache if we have a fresh-enough
 -- copy; otherwise fetch it, cache it, and hand the resulting path to
--- `open_fn`. `open_fn` is what differs between "open fresh" (from the
--- main menu) and "replace the article I'm already reading" (a tapped
--- link or a back-navigation step).
+-- `open_fn`.
 function WikiReader:fetchAndOpen(title, lang, open_fn)
     lang = lang or self.lang
 
-    local cached_path = getFreshCachePath(title, lang)
+    local cached_path = cache.getFreshCachePath(title, lang)
     if cached_path then
         open_fn(cached_path)
         return
     end
 
     NetworkMgr:runWhenOnline(function()
-        local epub_path = getCachePath(title, lang)
-        self:buildEpub(epub_path, title, lang, function(success, used_path)
+        local epub_path = cache.getCachePath(title, lang)
+        epub.buildEpub(epub_path, title, lang, function(success, used_path)
             if not success then
                 UIManager:show(InfoMessage:new{
                     text = _("Couldn't download that article. Check the title and your connection."),
                 })
                 return
             end
-            pruneCache()
+            cache.pruneCache()
             open_fn(used_path or epub_path)
         end)
     end)
 end
 
--- Open an article as a brand new reader session (from the main menu:
--- search, or today's featured article). Safe to call whether or not
--- something else is currently open -- ReaderUI:showReader() signals any
--- existing reader to close itself first. This is a fresh starting point,
--- so it clears any earlier back-history.
+-- Open an article as a brand new reader session (from the main menu).
 function WikiReader:openArticle(title, lang)
     self:fetchAndOpen(title, lang, function(epub_path)
         nav_history = {}
@@ -1739,12 +495,7 @@ function WikiReader:openArticle(title, lang)
     end)
 end
 
--- Search for an article by title, with fallback to a search results page
--- if the exact title doesn't exist. First checks via the lightweight query
--- API whether the page exists; if it does, opens it normally via
--- openArticle(). If not, searches Wikipedia for matching pages and builds
--- an EPUB of the results (with links that the plugin's link handler can
--- intercept), then opens that.
+-- Search for an article by title, with fallback to a search results page.
 function WikiReader:searchArticle(title, lang)
     lang = lang or self.lang
 
@@ -1753,15 +504,11 @@ function WikiReader:searchArticle(title, lang)
         UIManager:show(info)
 
         UIManager:scheduleIn(0, function()
-            -- Check if the exact article exists via the query API.
-            -- The response has a "pages" table keyed by pageid; a missing
-            -- page gets key -1 with a "missing" field, while a real page
-            -- gets a positive pageid and no "missing" field.
             local check_url = string.format(
                 "https://%s.wikipedia.org/w/api.php?action=query&titles=%s&format=json&redirects=",
                 lang, socket_url.escape(title)
             )
-            local ok, code, sink = httpGetJSON(check_url)
+            local ok, code, sink = wutil.httpGetJSON(check_url)
             UIManager:close(info)
 
             if ok and code == 200 then
@@ -1771,17 +518,12 @@ function WikiReader:searchArticle(title, lang)
                 if parse_ok and data and data.query and data.query.pages then
                     for _, page in pairs(data.query.pages) do
                         if not page.missing then
-                            -- Exact article exists (or was resolved via redirects)
                             self:openArticle(title, lang)
                             return
                         end
                     end
                 end
             else
-                -- API check failed (network issue, etc.): fall back to the
-                -- original behaviour so the user still gets the familiar
-                -- "Couldn't download that article" message rather than
-                -- being silently dropped.
                 self:openArticle(title, lang)
                 return
             end
@@ -1791,7 +533,7 @@ function WikiReader:searchArticle(title, lang)
                 "https://%s.wikipedia.org/w/api.php?action=query&list=search&srsearch=%s&format=json&srlimit=20&srprop=snippet",
                 lang, socket_url.escape(title)
             )
-            local search_ok, search_code, search_sink = httpGetJSON(search_url)
+            local search_ok, search_code, search_sink = wutil.httpGetJSON(search_url)
             if not search_ok or search_code ~= 200 then
                 UIManager:show(InfoMessage:new{
                     text = _("Couldn't search Wikipedia. Check your connection and try again."),
@@ -1817,16 +559,15 @@ function WikiReader:searchArticle(title, lang)
                 return
             end
 
-            -- Build a search results EPUB and open it
-            local epub_path = getCachePath("__search__" .. title, lang)
-            self:buildSearchEpub(epub_path, title, lang, results, function(success, used_path)
+            local epub_path = cache.getCachePath("__search__" .. title, lang)
+            epub.buildSearchEpub(epub_path, title, lang, results, function(success, used_path)
                 if not success then
                     UIManager:show(InfoMessage:new{
                         text = _("Couldn't build search results page."),
                     })
                     return
                 end
-                pruneCache()
+                cache.pruneCache()
                 nav_history = {}
                 nav_current = { title = title, lang = lang, path = used_path }
                 local ReaderUI = require("apps/reader/readerui")
@@ -1836,204 +577,7 @@ function WikiReader:searchArticle(title, lang)
     end)
 end
 
--- Build a minimal EPUB from a list of Wikipedia search results. Each
--- result is a clickable link the plugin's link handler can intercept
--- (same format as any other Wikipedia article link). The EPUB is written
--- directly via the Archiver, bypassing the heavier createEpub() path
--- (which expects a real Wikipedia article page).
--- If custom_title is provided, it's used as the page heading instead of
--- "Search results for...".
-function WikiReader:buildSearchEpub(epub_path, query, lang, results, callback, custom_title)
-    local Archiver = require("ffi/archiver")
-    local mtime = os.time()
-
-    local display_title = custom_title or query
-    local is_search = not custom_title
-
-    -- Build the HTML content: title, description, then each result as a
-    -- heading link followed by a plain-text snippet.
-    local html_parts = {}
-    table.insert(html_parts, '<?xml version="1.0" encoding="utf-8"?>\n')
-    table.insert(html_parts, '<!DOCTYPE html>\n')
-    table.insert(html_parts, '<html xmlns="http://www.w3.org/1999/xhtml">\n')
-    table.insert(html_parts, '<head>\n')
-    table.insert(html_parts, '<meta charset="utf-8"/>\n')
-    table.insert(html_parts, '<link rel="stylesheet" type="text/css" href="stylesheet.css"/>\n')
-    table.insert(html_parts, '<title>')
-    if is_search then
-        table.insert(html_parts, string.format('Search results for "%s"', query))
-    else
-        table.insert(html_parts, display_title)
-    end
-    table.insert(html_parts, '</title>\n')
-    table.insert(html_parts, '</head>\n')
-    table.insert(html_parts, '<body>\n')
-    if is_search then
-        table.insert(html_parts, '<h1 class="koreaderwikifrontpage">Search results</h1>\n')
-        table.insert(html_parts, '<p class="koreaderwikifrontpage">')
-        table.insert(html_parts, string.format('for "%s"', query))
-        table.insert(html_parts, '</p>\n')
-        table.insert(html_parts, '<hr class="koreaderwikifrontpage"/>\n')
-    else
-        table.insert(html_parts, '<h1 class="koreaderwikifrontpage">')
-        table.insert(html_parts, display_title)
-        table.insert(html_parts, '</h1>\n')
-        table.insert(html_parts, '<hr class="koreaderwikifrontpage"/>\n')
-    end
-
-    for _, result in ipairs(results) do
-        local result_title = result.title
-        -- Strip HTML tags from the snippet (e.g. <span class="searchmatch">)
-        local snippet = (result.snippet or ""):gsub("<[^>]*>", "")
-        -- Decode HTML entities in the snippet (&#039; → ', &amp; → &, …)
-        -- so they render as readable characters rather than raw entity codes.
-        snippet = util.htmlEntitiesToUtf8(snippet)
-        -- Append "…" only if there is actual text that looks truncated
-        -- (empty snippets, e.g. category article lists, get no ellipsis)
-        if snippet ~= "" and not snippet:match("[.!?…]$") then
-            snippet = snippet .. "…"
-        end
-        -- Escape HTML entities in title and snippet for safe inclusion in HTML
-        result_title = result_title:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"):gsub('"', "&quot;")
-        snippet = snippet:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"):gsub('"', "&quot;")
-        local link = string.format('https://%s.wikipedia.org/wiki/%s', lang, socket_url.escape(result.title))
-
-        -- Title as a plain <p> (same size as category links); snippet only
-        -- rendered when there is one.
-        if snippet == "" then
-            table.insert(html_parts, string.format(
-                '<p class="article-link"><a href="%s">· %s</a></p>\n',
-                link, result_title))
-        else
-            table.insert(html_parts, string.format(
-                '<p class="article-link"><a href="%s">· %s</a></p>\n<p class="snippet">%s</p>\n',
-                link, result_title, snippet))
-        end
-    end
-
-    table.insert(html_parts, '</body>\n')
-    table.insert(html_parts, '</html>\n')
-    local html_content = table.concat(html_parts)
-
-    -- Minimal CSS for the search results page
-    local css = [[
-body {
-  text-align: justify;
-}
-h1.koreaderwikifrontpage {
-  text-align: center;
-  margin-top: 0;
-}
-p.koreaderwikifrontpage {
-  font-style: italic;
-  text-align: center;
-  margin-bottom: 1em;
-  text-indent: 0;
-}
-hr.koreaderwikifrontpage {
-  margin-left: 20%;
-  margin-right: 20%;
-  margin-bottom: 1.2em;
-}
-.search-result {
-  margin-bottom: 1em;
-}
-p.article-link {
-  margin: 0.4em 0;
-}
-p.snippet {
-  margin: 0 0 0.8em 0;
-  font-size: 80%;
-}
-a {
-  text-decoration: underline;
-  color: inherit;
-}
-]]
-
-    -- Build the EPUB via the Archiver (same pattern as createEpub() in
-    -- KOReader's frontend/ui/wikipedia.lua, but with our own content).
-    local epub = Archiver.Writer:new{}
-    local epub_path_tmp = epub_path .. ".tmp"
-    if not epub:open(epub_path_tmp, "epub") then
-        callback(false)
-        return
-    end
-
-    epub:setZipCompression("store")
-    epub:addFileFromMemory("mimetype", "application/epub+zip", mtime)
-    epub:setZipCompression("deflate")
-
-    epub:addFileFromMemory("META-INF/container.xml", [[
-<?xml version="1.0"?>
-<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
-  <rootfiles>
-    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
-  </rootfiles>
-</container>]], mtime)
-
-    local bookid = string.format("search_%s_%s_%d", lang, query:gsub("[^%w]", "_"), mtime)
-    local opf = string.format([[
-<?xml version='1.0' encoding='utf-8'?>
-<package xmlns="http://www.idpf.org/2007/opf"
-        xmlns:dc="http://purl.org/dc/elements/1.1/"
-        unique-identifier="bookid" version="2.0">
-  <metadata>
-    <dc:title>Search results for "%s"</dc:title>
-    <dc:identifier id="bookid">%s</dc:identifier>
-    <dc:language>%s</dc:language>
-  </metadata>
-  <manifest>
-    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
-    <item id="content" href="content.html" media-type="application/xhtml+xml"/>
-    <item id="css" href="stylesheet.css" media-type="text/css"/>
-  </manifest>
-  <spine toc="ncx">
-    <itemref idref="content"/>
-  </spine>
-</package>
-]], query, bookid, lang)
-    epub:addFileFromMemory("OEBPS/content.opf", opf, mtime)
-
-    epub:addFileFromMemory("OEBPS/content.html", html_content, mtime)
-    epub:addFileFromMemory("OEBPS/stylesheet.css", css, mtime)
-
-    local ncx = string.format([[
-<?xml version="1.0" encoding="UTF-8"?>
-<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
-  <head>
-    <meta name="dtb:uid" content="%s"/>
-    <meta name="dtb:depth" content="1"/>
-    <meta name="dtb:totalPageCount" content="0"/>
-    <meta name="dtb:maxPageNumber" content="0"/>
-  </head>
-  <docTitle>
-    <text>Search results for "%s"</text>
-  </docTitle>
-  <navMap>
-    <navPoint id="navpoint-1" playOrder="1">
-      <navLabel>
-        <text>Search results</text>
-      </navLabel>
-      <content src="content.html"/>
-    </navPoint>
-  </navMap>
-</ncx>
-]], bookid, query)
-    epub:addFileFromMemory("OEBPS/toc.ncx", ncx, mtime)
-
-    epub:close()
-
-    os.rename(epub_path_tmp, epub_path)
-    callback(true, epub_path)
-end
-
--- Open an article in place of the one currently being read (a tapped
--- in-article link). switchDocument() properly closes the current
--- document (menus, highlights, etc.) before opening the new one --
--- this is the same call KOReader's own built-in Wikipedia epub handling
--- uses for the equivalent "read this instead" action. The article we're
--- navigating away from is pushed onto the back-history stack.
+-- Open an article in place of the one currently being read (a tapped link).
 function WikiReader:openArticleInPlace(title, lang)
     local from_article = nav_current
     self:fetchAndOpen(title, lang, function(epub_path)
@@ -2045,10 +589,7 @@ function WikiReader:openArticleInPlace(title, lang)
     end)
 end
 
--- Step back to the article you were on before the last link you
--- followed. Usually instant (served from the cache above); only needs
--- a network connection if that article's cached copy has expired or
--- was itself evicted since.
+-- Step back to the previous article in the back-history.
 function WikiReader:onWikiReaderGoBack()
     if #nav_history == 0 then
         UIManager:show(InfoMessage:new{ text = _("No previous Wikipedia article to go back to.") })
@@ -2056,9 +597,6 @@ function WikiReader:onWikiReaderGoBack()
     end
     local prev = nav_history[#nav_history]
 
-    -- If we have a cached file path, open it directly (covers category
-    -- EPUBs and search results that aren't backed by a real Wikipedia
-    -- article).
     if prev.path and lfs.attributes(prev.path) then
         table.remove(nav_history)
         nav_current = prev
@@ -2074,10 +612,6 @@ function WikiReader:onWikiReaderGoBack()
     self:fetchAndOpen(prev.title, prev.lang, function(epub_path)
         table.remove(nav_history)
         nav_current = prev
-        -- This menu entry/gesture is reachable from the File Manager too
-        -- (e.g. you went a few articles deep, then closed the reader) --
-        -- self.ui there has no switchDocument(), so fall back to opening
-        -- a fresh reader session in that case.
         if self.ui and self.ui.switchDocument then
             self.ui:switchDocument(epub_path)
         else
@@ -2088,8 +622,6 @@ function WikiReader:onWikiReaderGoBack()
 end
 
 -- Returns the directory where the built-in Wikipedia feature saves its EPUBs.
--- Respects the user's "wikipedia_save_dir" setting, falling back to the
--- default "Wikipedia" folder inside the reader's home directory.
 function WikiReader:getWikipediaSaveDir()
     local filemanagerutil = require("apps/filemanager/filemanagerutil")
     local DictQuickLookup = require("ui/widget/dictquicklookup")
@@ -2101,10 +633,7 @@ function WikiReader:getWikipediaSaveDir()
     return dir
 end
 
--- Save the currently reading article (epub + sidecar folder) to the
--- built-in Wikipedia save location under a "wikireader" subdirectory.
--- Uses DocSettings.updateLocation to properly copy the sidecar data,
--- the same way KOReader's own file manager does when copying a book.
+-- Save the currently reading article to the built-in Wikipedia save folder.
 function WikiReader:saveCurrentArticle()
     if not nav_current or not nav_current.path then
         UIManager:show(InfoMessage:new{
@@ -2121,22 +650,17 @@ function WikiReader:saveCurrentArticle()
         return
     end
 
-    -- Determine the save directory: <wikipedia_save_dir>/wikireader/
     local wiki_dir = self:getWikipediaSaveDir()
     local save_dir = wiki_dir .. "/wikireader"
     if not util.pathExists(save_dir) then
         util.makePath(save_dir)
     end
 
-    -- Build a filename from the article title, same naming style as the
-    -- built-in Wikipedia save feature ("<Title>.<LANG>.epub").
     local lang = (nav_current.lang or self.lang or "en"):upper()
     local filename = nav_current.title .. "." .. lang .. ".epub"
     filename = util.getSafeFilename(filename, save_dir):gsub("_", " ")
     local dest_path = save_dir .. "/" .. filename
 
-    -- If a file with that name already exists, prompt for confirmation
-    -- to overwrite.
     if lfs.attributes(dest_path) then
         UIManager:show(ConfirmBox:new{
             text = T(_("%1 already exists. Overwrite?"), BD.filename(filename)),
@@ -2153,9 +677,6 @@ end
 
 -- Actually performs the file copy and sidecar relocation.
 function WikiReader:doSaveArticle(src_path, dest_path, display_filename)
-    -- Copy the epub file using ffi/util.copyFile (the frontend util module
-    -- does not expose copyFile, but ffi/util does).
-    -- Note: copyFile returns nil on success, or an error string on failure.
     local ffiutil = require("ffi/util")
     local err = ffiutil.copyFile(src_path, dest_path)
     if err then
@@ -2165,10 +686,6 @@ function WikiReader:doSaveArticle(src_path, dest_path, display_filename)
         return
     end
 
-    -- Copy the sidecar folder (reading progress, bookmarks, etc.) using
-    -- KOReader's own sidecar update mechanism, which handles all metadata
-    -- locations (doc, dir, hash). The third argument (true) means "copy"
-    -- rather than "move".
     DocSettings.updateLocation(src_path, dest_path, true)
 
     UIManager:show(InfoMessage:new{
@@ -2176,13 +693,13 @@ function WikiReader:doSaveArticle(src_path, dest_path, display_filename)
     })
 end
 
--- Delete every cached article (epub + sidecar) from the cache directory.
+-- Delete every cached article from the cache directory.
 function WikiReader:clearCache()
-    local dir = getCacheDir()
+    local dir = cache.getCacheDir()
     local count = 0
     for name in lfs.dir(dir) do
         if name:match("%.epub$") then
-            removeCachedFile(dir .. "/" .. name)
+            cache.removeCachedFile(dir .. "/" .. name)
             count = count + 1
         end
     end
@@ -2191,192 +708,7 @@ function WikiReader:clearCache()
     })
 end
 
--- Fetch and show the top-level categories from Wikipedia:Featured_articles,
--- Build a tree from the flat sections list returned by the API.
--- Each node has: title, section_index, children[].
--- The toplevel nodes are returned.
-local function buildCategoryTree(sections)
-    local root = { title = "root", toclevel = 0, children = {} }
-    local stack = { root }
-
-    for _, s in ipairs(sections) do
-        local node = {
-            title = s.line,
-            section_index = s.index,
-            toclevel = s.toclevel,
-            children = {},
-        }
-        -- Pop stack until we find the parent (parent has lower toclevel)
-        while #stack > 0 and stack[#stack].toclevel >= s.toclevel do
-            table.remove(stack)
-        end
-        -- Add as child of the current top of stack
-        table.insert(stack[#stack].children, node)
-        -- Push node onto stack
-        table.insert(stack, node)
-    end
-
-    return root.children
-end
-
--- Show a ButtonDialog for one level of the category tree, then recurse
--- into subcategories or fetch articles from a leaf section.
--- Build an EPUB for a level of the category tree (subcategories plus any
--- leaf articles), then open it. Subcategories use a special URL format
--- that the link handler intercepts; articles use standard Wikipedia URLs.
-function WikiReader:buildCategoryEpub(nodes, title, direct_articles)
-    local lang = self.lang
-    local html_parts = {}
-    table.insert(html_parts, '<?xml version="1.0" encoding="utf-8"?>\n')
-    table.insert(html_parts, '<!DOCTYPE html>\n')
-    table.insert(html_parts, '<html xmlns="http://www.w3.org/1999/xhtml">\n')
-    table.insert(html_parts, '<head>\n')
-    table.insert(html_parts, '<meta charset="utf-8"/>\n')
-    table.insert(html_parts, '<link rel="stylesheet" type="text/css" href="stylesheet.css"/>\n')
-    table.insert(html_parts, '<title>')
-    table.insert(html_parts, title)
-    table.insert(html_parts, '</title>\n')
-    table.insert(html_parts, '</head>\n')
-    table.insert(html_parts, '<body>\n')
-    table.insert(html_parts, '<h1>')
-    table.insert(html_parts, title)
-    table.insert(html_parts, '</h1>\n')
-    table.insert(html_parts, '<hr/>\n')
-
-    -- Subcategories (prefixed with a symbol to distinguish from articles)
-    for _, node in ipairs(nodes) do
-        local escaped_title = node.title:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"):gsub('"', "&quot;")
-        local link = string.format('https://%s.wikipedia.org/wiki/Wikipedia:Featured_articles#section_%s',
-            lang, node.section_index)
-        table.insert(html_parts, string.format(
-            '<p class="category-link"><a href="%s">▸ %s</a></p>\n',
-            link, escaped_title))
-    end
-
-    -- Direct articles (articles that belong to this category, not to any subcategory)
-    if direct_articles and #direct_articles > 0 then
-        if #nodes > 0 then
-            table.insert(html_parts, '<hr/>\n')
-        end
-        for _, article in ipairs(direct_articles) do
-            local escaped_title = article.title:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"):gsub('"', "&quot;")
-            local link = string.format('https://%s.wikipedia.org/wiki/%s', lang, socket_url.escape(article.title))
-            table.insert(html_parts, string.format(
-                '<p class="article-link"><a href="%s">· %s</a></p>\n',
-                link, escaped_title))
-        end
-    end
-
-    table.insert(html_parts, '</body>\n')
-    table.insert(html_parts, '</html>\n')
-    local html_content = table.concat(html_parts)
-
-    local css = [[
-body {
-  text-align: justify;
-}
-h1 {
-  text-align: center;
-  margin-top: 0;
-}
-h2 {
-  font-size: 120%;
-  margin-top: 1em;
-}
-hr {
-  margin-left: 20%;
-  margin-right: 20%;
-  margin-bottom: 1em;
-}
-p.category-link {
-  margin: 0.5em 0;
-}
-p.article-link {
-  margin: 0.3em 0;
-}
-a {
-  text-decoration: underline;
-  color: inherit;
-}
-]]
-
-    local epub_path = getCachePath("__category__" .. title, lang)
-    local Archiver = require("ffi/archiver")
-    local mtime = os.time()
-    local epub = Archiver.Writer:new{}
-    local epub_path_tmp = epub_path .. ".tmp"
-    if not epub:open(epub_path_tmp, "epub") then
-        return false
-    end
-
-    epub:setZipCompression("store")
-    epub:addFileFromMemory("mimetype", "application/epub+zip", mtime)
-    epub:setZipCompression("deflate")
-
-    epub:addFileFromMemory("META-INF/container.xml", [[
-<?xml version="1.0"?>
-<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
-  <rootfiles>
-    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
-  </rootfiles>
-</container>]], mtime)
-
-    local safe_title = title:gsub("[^%w]", "_")
-    local bookid = string.format("category_%s_%s_%d", lang, safe_title, mtime)
-    local opf = string.format([[
-<?xml version='1.0' encoding='utf-8'?>
-<package xmlns="http://www.idpf.org/2007/opf"
-        xmlns:dc="http://purl.org/dc/elements/1.1/"
-        unique-identifier="bookid" version="2.0">
-  <metadata>
-    <dc:title>%s</dc:title>
-    <dc:identifier id="bookid">%s</dc:identifier>
-    <dc:language>%s</dc:language>
-  </metadata>
-  <manifest>
-    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
-    <item id="content" href="content.html" media-type="application/xhtml+xml"/>
-    <item id="css" href="stylesheet.css" media-type="text/css"/>
-  </manifest>
-  <spine toc="ncx">
-    <itemref idref="content"/>
-  </spine>
-</package>
-]], title, bookid, lang)
-    epub:addFileFromMemory("OEBPS/content.opf", opf, mtime)
-    epub:addFileFromMemory("OEBPS/content.html", html_content, mtime)
-    epub:addFileFromMemory("OEBPS/stylesheet.css", css, mtime)
-
-    local ncx = string.format([[
-<?xml version="1.0" encoding="UTF-8"?>
-<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
-  <head>
-    <meta name="dtb:uid" content="%s"/>
-    <meta name="dtb:depth" content="1"/>
-    <meta name="dtb:totalPageCount" content="0"/>
-    <meta name="dtb:maxPageNumber" content="0"/>
-  </head>
-  <docTitle>
-    <text>%s</text>
-  </docTitle>
-  <navMap>
-    <navPoint id="navpoint-1" playOrder="1">
-      <navLabel>
-        <text>%s</text>
-      </navLabel>
-      <content src="content.html"/>
-    </navPoint>
-  </navMap>
-</ncx>
-]], bookid, title, title)
-    epub:addFileFromMemory("OEBPS/toc.ncx", ncx, mtime)
-    epub:close()
-    os.rename(epub_path_tmp, epub_path)
-    return true, epub_path
-end
-
--- Fetch and show the top-level categories from Wikipedia:Featured_articles,
--- then fetch articles from the chosen category and open them as an EPUB.
+-- Show the top-level featured-article categories.
 function WikiReader:showFeaturedCategories()
     NetworkMgr:runWhenOnline(function()
         local info = InfoMessage:new{ text = _("Loading categories…") }
@@ -2387,7 +719,7 @@ function WikiReader:showFeaturedCategories()
                 "https://%s.wikipedia.org/w/api.php?action=parse&page=Wikipedia:Featured_articles&prop=sections&format=json",
                 self.lang
             )
-            local ok, code, sink = httpGetJSON(sections_url)
+            local ok, code, sink = wutil.httpGetJSON(sections_url)
             UIManager:close(info)
 
             if not ok or code ~= 200 then
@@ -2407,9 +739,7 @@ function WikiReader:showFeaturedCategories()
                 return
             end
 
-            -- Build a tree from the sections and populate the lookup table
-            -- for the link handler
-            local tree = buildCategoryTree(data.parse.sections)
+            local tree = categories.buildCategoryTree(data.parse.sections)
             if #tree == 0 then
                 UIManager:show(InfoMessage:new{
                     text = _("No categories found."),
@@ -2417,50 +747,28 @@ function WikiReader:showFeaturedCategories()
                 return
             end
 
-            -- Populate the module-level lookup table for the link handler
-            local function fillLookup(nodes)
-                for _, node in ipairs(nodes) do
-                    category_section_titles[node.section_index] = node.title
-                    fillLookup(node.children)
-                end
-            end
-            fillLookup(tree)
-            -- Also store the full tree for subcategory navigation
-            category_tree = tree
+            categories.fillLookup(tree)
+            categories.category_tree = tree
 
-            -- Build the first-level EPUB and open it
-            local ok_build, epub_path = self:buildCategoryEpub(tree, _("Featured article categories"))
+            local ok_build, cat_epub_path = epub.buildCategoryEpub(tree, _("Featured article categories"), self.lang)
             if not ok_build then
                 UIManager:show(InfoMessage:new{
                     text = _("Couldn't build category page."),
                 })
                 return
             end
-            pruneCache()
+            cache.pruneCache()
             nav_history = {}
-            nav_current = { title = _("Featured article categories"), lang = self.lang, path = epub_path }
+            nav_current = { title = _("Featured article categories"), lang = self.lang, path = cat_epub_path }
             local ReaderUI = require("apps/reader/readerui")
-            ReaderUI:showReader(epub_path)
+            ReaderUI:showReader(cat_epub_path)
         end)
     end)
 end
 
--- Fetch articles from a specific featured-article category section and open
--- them as an EPUB (reusing the buildSearchEpub mechanism). If the section has
--- subcategories in the tree, builds a category EPUB instead.
+-- Fetch articles from a specific featured-article category section.
 function WikiReader:fetchFeaturedCategoryArticles(section_index, section_title)
-    -- Look up the node in the tree to find its children
-    local function findNode(nodes, index)
-        for _, node in ipairs(nodes) do
-            if node.section_index == index then
-                return node
-            end
-            local found = findNode(node.children, index)
-            if found then return found end
-        end
-        return nil
-    end
-    local node = findNode(category_tree, section_index)
+    local node = categories.findNode(categories.category_tree, section_index)
 
     NetworkMgr:runWhenOnline(function()
         local info = InfoMessage:new{ text = T(_("Loading %1…"), section_title) }
@@ -2470,14 +778,14 @@ function WikiReader:fetchFeaturedCategoryArticles(section_index, section_title)
         UIManager:scheduleIn(0, function()
             -- Fetch links for a section, from cache if already fetched this session
             local function getCachedLinks(sindex)
-                if section_links_cache[sindex] then
-                    return section_links_cache[sindex].titles
+                if categories.section_links_cache[sindex] then
+                    return categories.section_links_cache[sindex].titles
                 end
                 local url = string.format(
                     "https://%s.wikipedia.org/w/api.php?action=parse&page=Wikipedia:Featured_articles&section=%s&prop=links&format=json",
                     self.lang, sindex
                 )
-                local ok, code, sink = httpGetJSON(url)
+                local ok, code, sink = wutil.httpGetJSON(url)
                 if not ok or code ~= 200 then return nil end
                 local JSON = require("json")
                 local body = table.concat(sink)
@@ -2489,7 +797,7 @@ function WikiReader:fetchFeaturedCategoryArticles(section_index, section_title)
                         table.insert(titles, link["*"])
                     end
                 end
-                section_links_cache[sindex] = { titles = titles }
+                categories.section_links_cache[sindex] = { titles = titles }
                 return titles
             end
 
@@ -2503,8 +811,7 @@ function WikiReader:fetchFeaturedCategoryArticles(section_index, section_title)
             end
 
             if node and #node.children > 0 then
-                -- Has subcategories: fetch each child's links and compute
-                -- direct articles by subtraction.
+                -- Has subcategories: fetch each child's links and compute direct articles
                 local child_links_set = {}
                 for _, child in ipairs(node.children) do
                     local child_links = getCachedLinks(child.section_index)
@@ -2515,7 +822,6 @@ function WikiReader:fetchFeaturedCategoryArticles(section_index, section_title)
                     end
                 end
 
-                -- Direct articles = all_links minus any that belong to a child
                 local direct_articles = {}
                 for _, title in ipairs(all_links) do
                     if not child_links_set[title] then
@@ -2525,14 +831,14 @@ function WikiReader:fetchFeaturedCategoryArticles(section_index, section_title)
 
                 UIManager:close(info)
 
-                local ok_build, cat_epub_path = self:buildCategoryEpub(node.children, section_title, direct_articles)
+                local ok_build, cat_epub_path = epub.buildCategoryEpub(node.children, section_title, self.lang, direct_articles)
                 if not ok_build then
                     UIManager:show(InfoMessage:new{
                         text = _("Couldn't build category page."),
                     })
                     return
                 end
-                pruneCache()
+                cache.pruneCache()
                 local from_article = nav_current
                 if from_article then
                     table.insert(nav_history, from_article)
@@ -2560,15 +866,15 @@ function WikiReader:fetchFeaturedCategoryArticles(section_index, section_title)
                     return
                 end
 
-                local epub_path = getCachePath("__featured__" .. section_title, self.lang)
-                self:buildSearchEpub(epub_path, section_title, self.lang, articles, function(success, used_path)
+                local epub_path = cache.getCachePath("__featured__" .. section_title, self.lang)
+                epub.buildSearchEpub(epub_path, section_title, self.lang, articles, function(success, used_path)
                     if not success then
                         UIManager:show(InfoMessage:new{
                             text = _("Couldn't build category page."),
                         })
                         return
                     end
-                    pruneCache()
+                    cache.pruneCache()
                     local from_article = nav_current
                     if from_article then
                         table.insert(nav_history, from_article)
