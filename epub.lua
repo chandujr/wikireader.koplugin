@@ -192,7 +192,7 @@ blockquote {
                     used_path = new_path
                 end
             end
-            callback(true, used_path)
+            callback(true, used_path, resolved_title)
         else
             Trapper:reset()
             callback(false)

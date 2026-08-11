@@ -460,19 +460,24 @@ end
 
 -- Shared plumbing: serve `title` from the cache if we have a fresh-enough
 -- copy; otherwise fetch it, cache it, and hand the resulting path to
--- `open_fn`.
+-- `open_fn`. `open_fn` is called with (path, resolved_title) where
+-- resolved_title is the actual article title from the API response
+-- (preserving correct casing), or nil if the title couldn't be resolved.
 function WikiReader:fetchAndOpen(title, lang, open_fn)
     lang = lang or self.lang
 
     local cached_path = cache.getFreshCachePath(title, lang)
     if cached_path then
-        open_fn(cached_path)
+        -- Cache hit: the cached file was already renamed to the resolved
+        -- title (by buildEpub on first fetch), so `title` already has the
+        -- correct casing, otherwise the cache would have been missed.
+        open_fn(cached_path, title)
         return
     end
 
     NetworkMgr:runWhenOnline(function()
         local epub_path = cache.getCachePath(title, lang)
-        epub.buildEpub(epub_path, title, lang, function(success, used_path)
+        epub.buildEpub(epub_path, title, lang, function(success, used_path, resolved_title)
             if not success then
                 UIManager:show(InfoMessage:new{
                     text = _("Couldn't download that article. Check the title and your connection."),
@@ -480,16 +485,16 @@ function WikiReader:fetchAndOpen(title, lang, open_fn)
                 return
             end
             cache.pruneCache()
-            open_fn(used_path or epub_path)
+            open_fn(used_path or epub_path, resolved_title)
         end)
     end)
 end
 
 -- Open an article as a brand new reader session (from the main menu).
 function WikiReader:openArticle(title, lang)
-    self:fetchAndOpen(title, lang, function(epub_path)
+    self:fetchAndOpen(title, lang, function(epub_path, resolved_title)
         nav_history = {}
-        nav_current = { title = title, lang = lang or self.lang, path = epub_path }
+        nav_current = { title = resolved_title or title, lang = lang or self.lang, path = epub_path }
         local ReaderUI = require("apps/reader/readerui")
         ReaderUI:showReader(epub_path)
     end)
@@ -580,11 +585,11 @@ end
 -- Open an article in place of the one currently being read (a tapped link).
 function WikiReader:openArticleInPlace(title, lang)
     local from_article = nav_current
-    self:fetchAndOpen(title, lang, function(epub_path)
+    self:fetchAndOpen(title, lang, function(epub_path, resolved_title)
         if from_article then
             table.insert(nav_history, from_article)
         end
-        nav_current = { title = title, lang = lang or self.lang, path = epub_path }
+        nav_current = { title = resolved_title or title, lang = lang or self.lang, path = epub_path }
         self.ui:switchDocument(epub_path)
     end)
 end
@@ -609,9 +614,9 @@ function WikiReader:onWikiReaderGoBack()
         return
     end
 
-    self:fetchAndOpen(prev.title, prev.lang, function(epub_path)
+    self:fetchAndOpen(prev.title, prev.lang, function(epub_path, resolved_title)
         table.remove(nav_history)
-        nav_current = prev
+        nav_current = { title = resolved_title or prev.title, lang = prev.lang, path = epub_path }
         if self.ui and self.ui.switchDocument then
             self.ui:switchDocument(epub_path)
         else
