@@ -699,15 +699,52 @@ function WikiReader:doSaveArticle(src_path, dest_path, display_filename)
 end
 
 -- Delete every cached article from the cache directory.
+-- Walks the entire cache dir and removes everything: epub files, leftover
+-- sidecar (.sdr) directories, and any orphaned files.
 function WikiReader:clearCache()
     local dir = cache.getCacheDir()
     local count = 0
+
+    -- First pass: remove all files (use removeCachedFile for epubs so
+    -- DocSettings.updateLocation can clean up the associated .sdr dir).
     for name in lfs.dir(dir) do
-        if name:match("%.epub$") then
-            cache.removeCachedFile(dir .. "/" .. name)
-            count = count + 1
+        if name ~= "." and name ~= ".." then
+            local path = dir .. "/" .. name
+            local attr = lfs.attributes(path)
+            if attr and attr.mode == "file" then
+                if name:match("%.epub$") then
+                    cache.removeCachedFile(path)
+                else
+                    os.remove(path)
+                end
+                count = count + 1
+            end
         end
     end
+
+    -- Second pass: remove any remaining directories (e.g., .sdr sidecars
+    -- that weren't cleaned up by the first pass, or orphaned dirs).
+    for name in lfs.dir(dir) do
+        if name ~= "." and name ~= ".." then
+            local path = dir .. "/" .. name
+            local attr = lfs.attributes(path)
+            if attr and attr.mode == "directory" then
+                -- Recursively delete everything inside the directory.
+                for f in lfs.dir(path) do
+                    if f ~= "." and f ~= ".." then
+                        local fpath = path .. "/" .. f
+                        local fattr = lfs.attributes(fpath)
+                        if fattr and fattr.mode == "file" then
+                            os.remove(fpath)
+                            count = count + 1
+                        end
+                    end
+                end
+                lfs.rmdir(path)
+            end
+        end
+    end
+
     UIManager:show(InfoMessage:new{
         text = T(_("Cache cleared (%1 file(s) deleted)."), count),
     })
