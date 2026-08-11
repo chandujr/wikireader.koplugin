@@ -102,6 +102,7 @@ function M.buildEpub(epub_path, title, lang, callback)
             html = htmlclean.stripElementsByClass(html, "ul", { "gallery" })
             html = htmlclean.cleanElementClasses(html, "div", { "quotebox", "pullquote" }, { "floatleft", "floatright" }, true)
             html = htmlclean.stripElementsByClass(html, "span", { "geo-inline-hidden" })
+            html = htmlclean.mergeQuoteCites(html)
             html = htmlclean.stripElementsByAttr(html, "figure", "typeof", { "mw:file", "mw:image", "mw:video", "mw:audio" })
             html = html:gsub("<audio.-</audio%s*>", "")
             html = latex.replaceMathElements(html)
@@ -166,6 +167,25 @@ blockquote {
   padding: 0.5em 0.8em;
   margin: 0.5em 0;
   font-style: italic;
+}
+
+/* Attribution line of Template:Quote, merged inside blockquote by
+   htmlclean.mergeQuoteCites(). Right-aligned, normal weight and slightly
+   smaller so it reads as a distinct " — who said it" trailing note. */
+.wikireader-cite {
+  text-align: right;
+  font-style: normal;
+  font-size: 85%;
+  margin-top: 0.4em;
+}
+
+/* Fallback in case any templatequotecite div was not merged into a
+   blockquote, so it never renders as a bare dangling line. */
+.templatequotecite {
+  text-align: right;
+  font-style: italic;
+  font-size: 85%;
+  margin: 0.2em 0 0.8em 0;
 }
 
 .wikireader-math {

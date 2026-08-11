@@ -150,6 +150,75 @@ function M.cleanElementClasses(html, tag, class_patterns, classes_to_remove, rem
 end
 
 --[[-------------------------------------------------------------------------
+Quote attribution (Template:Quote) merging
+--]]
+
+-- MediaWiki renders Template:Quote / Template:Blockquote as a <blockquote>
+-- immediately followed by a sibling <div class="templatequotecite"> holding
+-- the attribution line (the name / source of the person who said it). Left
+-- outside the blockquote, that line dangles below the styled quote box as an
+-- unstyled, disconnected afterthought, which looks bad in the reflowed EPUB.
+-- This moves the attribution *inside* the blockquote -- as a trailing
+-- <div class="wikireader-cite"> that the stylesheet styles as a
+-- right-aligned attribution line -- so each quote renders as a single,
+-- self-contained box.
+--
+-- MediaWiki output handled here looks like:
+--   <blockquote class="templatequote"><p>...</p></blockquote>
+--   <div class="templatequotecite"><p style="display:inline;padding-left:2.3em;">— Person</p></div>
+function M.mergeQuoteCites(html)
+    local function skipWs(pos)
+        local _, e = html:find('^%s*', pos)
+        return (e or pos - 1) + 1
+    end
+
+    local out = {}
+    local pos = 1
+    while true do
+        local bq_start, bq_open_end = html:find('<blockquote[^>]*>', pos)
+        if not bq_start then
+            table.insert(out, html:sub(pos))
+            break
+        end
+        local bq_close_start, bq_close_end = wutil.findMatchingClose(html, "blockquote", bq_open_end)
+        if not bq_close_start then
+            table.insert(out, html:sub(pos))
+            break
+        end
+
+        -- The attribution div must directly follow </blockquote> (only
+        -- whitespace in between) for it to belong to this quote.
+        local after_close = skipWs(bq_close_end + 1)
+        local cite_open_start, cite_open_end = html:find('<div class="templatequotecite">', after_close)
+        if cite_open_start ~= after_close then
+            table.insert(out, html:sub(pos, bq_close_end))
+            pos = bq_close_end + 1
+        else
+            local cite_close_start, cite_close_end = wutil.findMatchingClose(html, "div", cite_open_end)
+            if not cite_close_end then
+                table.insert(out, html:sub(pos, bq_close_end))
+                pos = bq_close_end + 1
+            else
+                local cite_content = html:sub(cite_open_end + 1, cite_close_start - 1)
+                -- Drop the inline style on the inner <p> (a fixed left padding
+                -- and display override meant for the web layout).
+                cite_content = cite_content:gsub('(<p[^>]*%s)style%s*=%s*"[^"]*"', '%1')
+                cite_content = cite_content:gsub('<p style="[^"]*">', '<p>')
+                cite_content = cite_content:gsub('<p%s+>', '<p>')
+
+                table.insert(out, html:sub(pos, bq_start - 1))  -- text before this quote
+                table.insert(out, html:sub(bq_start, bq_open_end))
+                table.insert(out, html:sub(bq_open_end + 1, bq_close_start - 1))
+                table.insert(out, '<div class="wikireader-cite">' .. cite_content .. '</div>')
+                table.insert(out, '</blockquote>')
+                pos = cite_close_end + 1
+            end
+        end
+    end
+    return table.concat(out)
+end
+
+--[[-------------------------------------------------------------------------
 Leading notice (hatnote / maintenance banner) extraction
 --]]
 
