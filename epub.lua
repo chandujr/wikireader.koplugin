@@ -203,7 +203,9 @@ blockquote {
 pre.wikireader-cladogram {
   font-size: 90%;
   line-height: 1.25;
-  margin: 0.5em 0;
+  border: 1px solid #888;
+  padding: 0.6em 0.8em;
+  margin: 0 0 1em 0;
 }
 ]]
         end
