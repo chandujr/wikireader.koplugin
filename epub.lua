@@ -15,6 +15,7 @@ local logger = require("logger")
 local _ = require("gettext")
 
 local cache = require("wikireader-cache")
+local cladogram = require("cladogram")
 local htmlclean = require("htmlclean")
 local latex = require("latex")
 local wutil = require("wikiutil")
@@ -106,6 +107,9 @@ function M.buildEpub(epub_path, title, lang, callback)
             html = htmlclean.stripElementsByAttr(html, "figure", "typeof", { "mw:file", "mw:image", "mw:video", "mw:audio" })
             html = html:gsub("<audio.-</audio%s*>", "")
             html = latex.replaceMathElements(html)
+            -- Render cladograms (Template:Clade phylogeny trees) as text
+            -- diagrams, since crengine cannot draw their CSS border lines.
+            html = cladogram.replaceCladograms(html)
 
             -- Extract hatnotes and wrap section notices
             local notices, rest = htmlclean.extractLeadingNotices(html)
@@ -190,6 +194,16 @@ blockquote {
 
 .wikireader-math {
   white-space: nowrap;
+}
+
+/* Cladogram (phylogeny tree) diagrams, converted to box-drawing text by
+   cladogram.lua. The base stylesheet already keeps <pre> left-aligned;
+   shrink the monospace a touch and keep lines from stretching across the
+   full page so the tree reads as one compact diagram. */
+pre.wikireader-cladogram {
+  font-size: 90%;
+  line-height: 1.25;
+  margin: 0.5em 0;
 }
 ]]
         end
