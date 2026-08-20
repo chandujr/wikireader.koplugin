@@ -1,9 +1,11 @@
 -- EPUB building for WikiReader.
 -- Wraps KOReader's built-in Wikipedia.createEpub() with HTML cleanup
--- (stripping infoboxes, navboxes, image captions, etc.; converting math
+-- (stripping navboxes, removing image captions, etc.; converting math
 -- formulas to readable text; extracting hatnotes into bordered boxes).
--- Also provides standalone EPUB builders for search results and category
--- navigation pages.
+-- Infobox tables are stripped by default; the "Show infoboxes (full
+-- width)" setting keeps them instead, forced to span the full page
+-- width like wikitables. Also provides standalone EPUB builders for
+-- search results and category navigation pages.
 
 local Archiver = require("ffi/archiver")
 local DocSettings = require("docsettings")
@@ -29,14 +31,20 @@ Full article EPUB builder
 
 -- Fetches and converts an article, with images permanently disabled and
 -- a handful of clutter elements stripped from the HTML before it's ever
--- handed to createEpub(): infobox tables, the category list at the bottom
--- of the article, etc.
+-- handed to createEpub(): infobox tables (unless the full-width infobox
+-- option is on, see below), the category list at the bottom of the
+-- article, etc.
 --
 -- When "images as QR codes" is enabled (the default), image boxes (and
 -- their captions) are kept in the document, but each image is replaced by
 -- a small QR code pointing at the image's File: description page --
 -- generated on the fly and embedded in the EPUB, so nothing is ever
 -- downloaded. See qrimage.lua.
+--
+-- A kept infobox keeps only its text data: its media cells (images *and*
+-- captions) are dropped by htmlclean.stripImageCells before the QR pass,
+-- so no QR codes appear inside the box either (see the comment around
+-- the stripImageCells call below).
 --
 -- See the detailed comment in the original main.lua for full rationale.
 function M.buildEpub(epub_path, title, lang, callback)
@@ -103,17 +111,69 @@ function M.buildEpub(epub_path, title, lang, callback)
                 resolved_title = result.title
             end
 
-            -- Strip clutter elements
-            html = htmlclean.stripElementsByClass(html, "table", { "infobox", "navbox", "sidebar", "vertical-navbox", "rmbox" })
-            html = htmlclean.cleanElementClasses(html, "table", { "wikitable" }, { "floatleft", "floatright" }, function(style)
+            -- Infobox tables are normally stripped (their default fixed side
+            -- width and float make body text wrap around them, which wrecks
+            -- a single-column reflowable layout). When "Show infoboxes
+            -- (full width)" is enabled, they are kept instead and forced to
+            -- span the full page width exactly like the wikitables below,
+            -- so the box reads as a normal full-width table. Its media
+            -- cells (images and captions) are dropped by stripImageCells
+            -- below -- QR codes or real images would only clutter the box.
+            local infobox_full_width = G_reader_settings:isTrue("wikireader_full_width_infoboxes")
+
+            -- Force a kept table to span the whole page width and drop any
+            -- inline float, so body text can never sit beside it in the
+            -- single-column reflowable layout. (floatleft/floatright class
+            -- removal is handled separately by cleanElementClasses.)
+            --
+            -- NOTE: cleanElementClasses splices this return value into the
+            -- tag via a gsub replacement where % is special, so any literal
+            -- percent must survive as %% (decoded back to % by that final
+            -- splice). The width/float declarations are therefore removed by
+            -- *deleting* with a gsub (replacement "") and the "width:100%%"
+            -- suffix is appended plain -- never pushed through a gsub
+            -- replacement -- to avoid double-decoding it to "width:100".
+            local function forceFullWidthStyle(style)
+                style = style:gsub('width%s*:%s*[^;]+', '') -- existing fixed width
+                style = style:gsub('float%s*:%s*[^;]+', '') -- inline float
+                style = style:gsub(';%s*;+', ';'):gsub('^%s*;?%s*', ''):gsub(';%s*$', '')
+                -- Any % left in the kept declarations must also be escaped
+                -- for the final splice (e.g. font-size: 80%): each % becomes
+                -- %% here, which the splice decodes back to a single %.
+                style = style:gsub('%%', '%%%%')
                 if style == "" then
                     return "width:100%%"
-                elseif style:find('width%s*:') then
-                    return style:gsub('width%s*:%s*[^;]+', 'width:100%%')
-                else
-                    return style .. ';width:100%%'
                 end
-            end)
+                return style .. ';width:100%%'
+            end
+
+            -- Strip clutter tables: chronology/nav/sidebar/route-map boxes
+            -- are always dropped; infoboxes only while full-width mode is
+            -- off (the default).
+            local stripped_tables = { "navbox", "sidebar", "vertical-navbox", "rmbox" }
+            if not infobox_full_width then
+                table.insert(stripped_tables, "infobox")
+            end
+            html = htmlclean.stripElementsByClass(html, "table", stripped_tables)
+            html = htmlclean.cleanElementClasses(html, "table", { "wikitable" }, { "floatleft", "floatright" }, forceFullWidthStyle)
+            if infobox_full_width then
+                html = htmlclean.cleanElementClasses(html, "table", { "infobox" }, { "floatleft", "floatright" }, forceFullWidthStyle)
+                -- A kept infobox shows its *text* data only: drop every
+                -- media-bearing cell (lead portrait, maps, emblem/symbol
+                -- stacks, ...) together with its caption text. QR codes
+                -- would clutter the box and their captions fight the
+                -- single-column layout -- see htmlclean.stripImageCells.
+                -- (Must run before replaceImagesWithQr below, so no QR
+                -- placeholder is ever generated inside the infobox.)
+                html = htmlclean.stripImageCells(html)
+                -- Center the box's full-width rows (title, section headers,
+                -- office-tenure/term rows, footer) like Wikipedia does: the
+                -- base stylesheet has no .infobox rules, and crengine's CSS
+                -- may not reliably apply the descendant selectors we append
+                -- to it, so the alignment is put inline on each cell where
+                -- it always wins over any left-align defaults.
+                html = htmlclean.centerInfoboxCells(html)
+            end
             if qr_enabled then
                 -- Keep image boxes: figure/gallery/div.thumb wrappers are
                 -- left intact so their images can be QR-coded below.
@@ -236,6 +296,28 @@ figure[typeof~='mw:File/Frame'] {
 }
 li.gallerybox {
     padding-top: 0.5em !important;
+}
+]]
+            end
+            if infobox_full_width then
+                -- Kept full-width infoboxes: mirror Wikipedia's own infobox
+                -- alignment. The base stylesheet has no .infobox rules, so
+                -- full-width data rows (office tenure, term dates, etc., in
+                -- .infobox-full-data/.infobox-header/.infobox-subheader/
+                -- .infobox-above/.infobox-below cells) would fall back to
+                -- left-aligned. Label/data pairs are already left-aligned
+                -- via the inline style="text-align:left" Wikipedia emits on
+                -- .infobox-label cells, so only these rows need centering.
+                content = content .. [[
+
+.infobox .infobox-title,
+.infobox .infobox-above,
+.infobox .infobox-header,
+.infobox .infobox-subheader,
+.infobox .infobox-image,
+.infobox .infobox-full-data,
+.infobox .infobox-below {
+  text-align: center;
 }
 ]]
             end

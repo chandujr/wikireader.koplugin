@@ -14,6 +14,10 @@ transcoded player for video/audio instead of a huge original download).
 Nothing is ever fetched; a tiny
 black-and-white PNG is embedded per figure.
 
+Media inside infobox tables is stripped entirely (images *and* captions),
+so kept infoboxes show text only; prose icons inside
+<span typeof="mw:File"> remain untouched.
+
 The QR encoding itself is KOReader's own pure-Lua implementation
 (ffi/qrencode -- the same one the built-in QR sharing widget uses), and
 the PNG is written with a minimal chunk writer, with the IDAT payload
@@ -210,6 +214,10 @@ local VOID_TAGS = {
 -- MediaWiki uses those spans for small inline icons in the prose (moon
 -- phase symbols, flags, ...), which would be silly as QR codes. Images in
 -- galleries are covered anyway via their div.thumb/li.gallerybox parents.
+-- Kept infoboxes (the "Show infoboxes (full width)" option) are NOT an
+-- image-box context either: their media is stripped entirely before this
+-- pass runs (see htmlclean.stripImageCells), so nothing inside them should
+-- become a QR code.
 local function classify(tag, attrs)
     if tag == "figure" then
         local typeof = (attrs:match([[typeof%s*=%s*"([^"]*)"]]) or ""):lower()

@@ -47,7 +47,11 @@ pointless in an epub regardless, since crengine has no audio playback
 capability at all), the shortdescription hidden metadata div, and the
 category list at the bottom of the page are stripped from the HTML
 before conversion -- they tend to make a mess of a single-column
-reflowable layout. Image boxes are kept but their images are replaced by
+reflowable layout. Infoboxes specifically can be kept instead of
+stripped via the "Show infoboxes (full width)" option, which forces
+them to span the full page width (like wikitables) so they no longer
+crowd the body text; media inside them is then QR-coded like any other
+image box. Image boxes are kept but their images are replaced by
 QR codes of the image URLs (see above). The shortdescription is
 hidden metadata that would otherwise produce an empty bordered box when
 misidentified as a hatnote. This handles both of Wikipedia's current
@@ -264,6 +268,17 @@ function WikiReader:addToMainMenu(menu_items)
                     G_reader_settings:flipNilOrTrue("wikireader_qr_images")
                 end,
                 help_text = _("When enabled, each article image (and video/audio figure) is replaced by a small QR code pointing at the media's File: description page -- the box and its caption stay, and scanning the code with a phone opens that page (showing the image, or the transcoded player for video/audio, instead of the full-size original download; nothing is fetched by the reader). When disabled, image boxes are removed completely as before. "),
+            },
+            {
+                text = _("Show infoboxes (full width)"),
+                keep_menu_open = true,
+                checked_func = function()
+                    return G_reader_settings:isTrue("wikireader_full_width_infoboxes")
+                end,
+                callback = function()
+                    G_reader_settings:flipNilOrFalse("wikireader_full_width_infoboxes")
+                end,
+                help_text = _("When enabled, infobox tables are kept in the article and stretched to the full page width (like wikitables), instead of being removed. Images and captions inside them are dropped, so the box shows only its text data. When disabled, infoboxes are stripped from the article as before."),
             },
             {
                 text = _("Clear cache"),

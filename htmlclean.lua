@@ -126,10 +126,14 @@ function M.cleanElementClasses(html, tag, class_patterns, classes_to_remove, rem
             if remove_style == true then
                 modified_tag = modified_tag:gsub('%s*style%s*=%s*"[^"]*"', '')
             elseif type(remove_style) == "function" then
-                local style_val = modified_tag:match('style%s*=%s*"([^"]*)"') or ""
+                local style_attr = modified_tag:match('style%s*=%s*"[^"]*"')
+                local style_val = style_attr and style_attr:match('style%s*=%s*"([^"]*)"') or ""
                 local new_style = remove_style(style_val)
                 if new_style and new_style ~= "" then
-                    if style_val ~= "" then
+                    -- Distinguish "no style attribute" from an explicitly
+                    -- empty one (style=""): replace in place if present,
+                    -- otherwise insert a new attribute.
+                    if style_attr then
                         modified_tag = modified_tag:gsub('style%s*=%s*"[^"]*"', 'style="' .. new_style .. '"')
                     else
                         modified_tag = modified_tag:gsub('^(<[^>]+)', '%1 style="' .. new_style .. '"')
@@ -147,6 +151,166 @@ function M.cleanElementClasses(html, tag, class_patterns, classes_to_remove, rem
         end
     end
     return table.concat(out)
+end
+
+--[[-------------------------------------------------------------------------
+Media removal inside kept infobox tables
+--]]
+
+-- Removes, wholesale, every <td>...</td> cell inside a table matching
+-- `class_patterns` whose content contains an image/media element (<img>,
+-- <video>, <audio>, <figure>, a <span typeof="mw:File..."> wrapper or a
+-- kartographer <mapframe>). The caption/title text of such a cell is a
+-- sibling or child of the image (e.g. a "infobox-caption" div, or the
+-- ib-settlement-cols caption rows next to each symbol image), so dropping
+-- the whole cell removes the image AND its caption together -- exactly
+-- what we want for a kept full-width infobox: the box keeps its text data
+-- but shows no media and no captions (QR codes included, since this runs
+-- before the QR replacement pass).
+--
+-- Nesting is handled the same way as stripElementsByAttr: a nested table
+-- inside a cell contributes its own <td> opens/closes, and the depth walk
+-- over <td>/</td> still finds the matching close of the outer cell, so
+-- whole media-bearing sub-regions (nested maps, symbol stacks) go away as
+-- one unit.
+--
+-- Cells with class "infobox-image" or "infobox-caption" are dropped even
+-- without media content, for legacy layouts where the caption sits in its
+-- own row.
+--
+-- Only tables matching class_patterns are touched; everything else is
+-- returned unchanged.
+function M.stripImageCells(html, class_patterns)
+    class_patterns = class_patterns or { "infobox" }
+    local out = {}
+    local pos = 1
+    while true do
+        local t_start, t_open_end = html:find("<table[^>]*>", pos)
+        if not t_start then
+            table.insert(out, html:sub(pos))
+            break
+        end
+        local open_tag = html:sub(t_start, t_open_end)
+        local class_attr = open_tag:match([[class%s*=%s*"([^"]*)"]]) or ""
+        local matches = false
+        for _, pat in ipairs(class_patterns) do
+            if class_attr:lower():find(pat, 1, true) then
+                matches = true
+                break
+            end
+        end
+        if not matches then
+            table.insert(out, html:sub(pos, t_open_end))
+            pos = t_open_end + 1
+        else
+            local close_start, close_end = wutil.findMatchingClose(html, "table", t_open_end)
+            if not close_start then
+                table.insert(out, html:sub(pos))
+                break
+            end
+            table.insert(out, html:sub(pos, t_start - 1))
+            table.insert(out, open_tag)
+            table.insert(out, M.stripImageCellsInBlock(html:sub(t_open_end + 1, close_start - 1)))
+            table.insert(out, html:sub(close_start, close_end))
+            pos = close_end + 1
+        end
+    end
+    return table.concat(out)
+end
+
+-- Inner helper: given the content between the <table ...> and </table> of
+-- a matching table, drop every <td>...</td> block that contains media (or
+-- is an infobox-image/infobox-caption cell). Exposed for testing.
+function M.stripImageCellsInBlock(block)
+    local out = {}
+    local pos = 1
+    while true do
+        local open_start, open_end = block:find("<td[^>]*>", pos)
+        if not open_start then
+            table.insert(out, block:sub(pos))
+            break
+        end
+        local close_start, close_end = wutil.findMatchingClose(block, "td", open_end)
+        if not close_start then
+            table.insert(out, block:sub(pos))
+            break
+        end
+        local open_tag = block:sub(open_start, open_end)
+        local cell_class = (open_tag:match([[class%s*=%s*"([^"]*)"]]) or ""):lower()
+        local content = block:sub(open_end + 1, close_start - 1):lower()
+        local has_media = content:find("<img", 1, true)
+            or content:find("<video", 1, true)
+            or content:find("<audio", 1, true)
+            or content:find("<figure", 1, true)
+            or content:find("<mapframe", 1, true)
+            or content:find('typeof="mw:file', 1, true)
+        if has_media or cell_class:find("infobox-image", 1, true) or cell_class:find("infobox-caption", 1, true) then
+            -- Media-bearing cell (image + any caption): drop the whole cell.
+            table.insert(out, block:sub(pos, open_start - 1))
+        else
+            table.insert(out, block:sub(pos, close_end))
+        end
+        pos = close_end + 1
+    end
+    -- Dropped cells leave empty <tr></tr> rows behind; remove them so
+    -- they don't add stray spacing in the reflowed layout.
+    local result = table.concat(out)
+    return (result:gsub("<tr[^>]*>%s*</tr%s*>", ""))
+end
+
+--[[-------------------------------------------------------------------------
+Infobox cell alignment
+--]]
+
+-- Centers the full-width cells of kept infoboxes (.infobox-title/above/
+-- header/subheader/image/full-data/below) by putting text-align:center
+-- directly on each cell as an inline style, mirroring Wikipedia's own
+-- stylesheet (MediaWiki:Common.css centers exactly these classes).
+--
+-- This is done as an inline style -- not (only) a stylesheet rule --
+-- because Wikipedia itself emits style="text-align:left" inline on the
+-- .infobox-label/.infobox-data pairs, and the same inline mechanism is
+-- what reliably applies in crengine: the base EPUB stylesheet has no
+-- .infobox rules at all, so those full-width rows would otherwise fall
+-- back to the cell's default left alignment.
+--
+-- Cells already carrying an explicit text-align declaration are left
+-- alone; everything else gets the alignment appended to its existing
+-- style attribute (or a new one). Only cells inside infobox tables are
+-- touched -- the class names are distinctive enough that scoping is done
+-- by matching them directly.
+function M.centerInfoboxCells(html)
+    return (html:gsub('(<t[dh][^>]*class%s*=%s*"([^"]*)"[^>]*>)', function(tag, classes)
+        if not (classes:find("infobox%-title", 1)
+            or classes:find("infobox%-above", 1)
+            or classes:find("infobox%-header", 1)
+            or classes:find("infobox%-subheader", 1)
+            or classes:find("infobox%-image", 1)
+            or classes:find("infobox%-full%-data", 1)
+            or classes:find("infobox%-below", 1)) then
+            return tag
+        end
+        local style_attr = tag:match('style%s*=%s*"[^"]*"')
+        if style_attr then
+            if style_attr:find('text%-align%s*:') then
+                return tag -- explicit alignment wins
+            end
+            -- Append inside the existing style="..." (function replacement:
+            -- the style text may contain % (e.g. font-size:80%) and gsub
+            -- function replacements never re-parse % in their result).
+            return (tag:gsub('(style%s*=%s*")([^"]*)(")', function(prefix, value, suffix)
+                if value == "" then
+                    return prefix .. "text-align:center" .. suffix
+                end
+                if value:match(';%s*$') then
+                    return prefix .. value .. "text-align:center" .. suffix
+                end
+                return prefix .. value .. ";text-align:center" .. suffix
+            end))
+        end
+        -- No style attribute: insert one right after the tag name.
+        return (tag:gsub('^(<[^%s>]+)', '%1 style="text-align:center"'))
+    end))
 end
 
 --[[-------------------------------------------------------------------------
