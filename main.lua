@@ -11,12 +11,13 @@ contents all render normally, because it *is* a normal EPUB.
 
 Images are never downloaded -- an article can contain dozens of them,
 each several hundred KB, so fetching them all before reading would be
-slow. Instead, each image inside an image box is replaced by a small QR
-code pointing at the image's File: description page (generated on the fly
-and embedded in the EPUB): the box and its caption stay in the document,
-and scanning the QR code with a phone opens that page -- where the real
-image, its description and its attribution live. This can be turned off in
-the menu (Image boxes are then removed entirely, the old behaviour).
+slow. Instead, each media item (an image, or an audio/video figure) in
+the article is replaced by a small QR code pointing at that media's
+File: description page (generated on the fly and embedded in the EPUB):
+the box and its caption stay in the document, and scanning the QR code
+with a phone opens that page -- where the real media, its description
+and its attribution live. This can be turned off in the menu (Media
+boxes are then removed entirely, the old behaviour).
 
 The last 10 distinct articles you've visited are kept as actual EPUB
 files (not re-downloaded every time you land on them again) for up to a
@@ -48,10 +49,10 @@ capability at all), the shortdescription hidden metadata div, and the
 category list at the bottom of the page are stripped from the HTML
 before conversion -- they tend to make a mess of a single-column
 reflowable layout. Infoboxes specifically can be kept instead of
-stripped via the "Show infoboxes (full width)" option, which forces
-them to span the full page width (like wikitables) so they no longer
-crowd the body text; media inside them is then QR-coded like any other
-image box. Image boxes are kept but their images are replaced by
+stripped via the "Show infoboxes" option, which forces them to span
+the full page width (like wikitables) so they no longer crowd the
+body text; media inside them is then QR-coded like any other image
+box. Image boxes are kept but their images are replaced by
 QR codes of the image URLs (see above). The shortdescription is
 hidden metadata that would otherwise produce an empty bordered box when
 misidentified as a hatnote. This handles both of Wikipedia's current
@@ -262,23 +263,23 @@ function WikiReader:addToMainMenu(menu_items)
                 text = _("Show media as QR codes"),
                 keep_menu_open = true,
                 checked_func = function()
-                    return G_reader_settings:nilOrTrue("wikireader_qr_images")
+                    return G_reader_settings:nilOrTrue("wikireader_qr_media")
                 end,
                 callback = function()
-                    G_reader_settings:flipNilOrTrue("wikireader_qr_images")
+                    G_reader_settings:flipNilOrTrue("wikireader_qr_media")
                 end,
-                help_text = _("When enabled, each article image (and video/audio figure) is replaced by a small QR code pointing at the media's File: description page -- the box and its caption stay, and scanning the code with a phone opens that page (showing the image, or the transcoded player for video/audio, instead of the full-size original download; nothing is fetched by the reader). When disabled, image boxes are removed completely as before. "),
+                help_text = _("When enabled, each media item in an article (an image, or an audio/video figure) is replaced by a small QR code pointing at that media's File: description page -- the box and its caption stay, and scanning the code with a phone opens that page (showing the image, or the transcoded player for audio/video, instead of the full-size original download; nothing is fetched by the reader). When disabled, media boxes are removed completely as before."),
             },
             {
-                text = _("Show infoboxes (full width)"),
+                text = _("Show infoboxes"),
                 keep_menu_open = true,
                 checked_func = function()
-                    return G_reader_settings:isTrue("wikireader_full_width_infoboxes")
+                    return G_reader_settings:isTrue("wikireader_show_infoboxes")
                 end,
                 callback = function()
-                    G_reader_settings:flipNilOrFalse("wikireader_full_width_infoboxes")
+                    G_reader_settings:flipNilOrFalse("wikireader_show_infoboxes")
                 end,
-                help_text = _("When enabled, infobox tables are kept in the article and stretched to the full page width (like wikitables), instead of being removed. Images and captions inside them are dropped, so the box shows only its text data. When disabled, infoboxes are stripped from the article as before."),
+                help_text = _("When enabled, infobox tables are kept in the article instead of being removed, showing only their text data (images and captions inside them are dropped). When disabled, infoboxes are stripped from the article as before."),
             },
             {
                 text = _("Clear cache"),

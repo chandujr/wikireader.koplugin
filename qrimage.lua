@@ -214,7 +214,7 @@ local VOID_TAGS = {
 -- MediaWiki uses those spans for small inline icons in the prose (moon
 -- phase symbols, flags, ...), which would be silly as QR codes. Images in
 -- galleries are covered anyway via their div.thumb/li.gallerybox parents.
--- Kept infoboxes (the "Show infoboxes (full width)" option) are NOT an
+-- Kept infoboxes (the "Show infoboxes" option) are NOT an
 -- image-box context either: their media is stripped entirely before this
 -- pass runs (see htmlclean.stripImageCells), so nothing inside them should
 -- become a QR code.
