@@ -6,12 +6,16 @@ Wikipedia, open a featured article (today's, a date you pick, or a random
 one), set the Wikipedia language edition, and step back through articles
 you've read. Whatever you pick is fetched, converted to an EPUB (reusing
 the same conversion code KOReader's built-in Wikipedia lookup already
-uses), and opened straight into the reader -- headings, images, and a
-table of contents all render normally, because it *is* a normal EPUB.
+uses), and opened straight into the reader -- headings and a table of
+contents all render normally, because it *is* a normal EPUB.
 
-Images are permanently disabled -- articles download and open without
-ever asking, since dozens of images can otherwise take a long time to
-fetch before you can start reading.
+Images are never downloaded -- an article can contain dozens of them,
+each several hundred KB, so fetching them all before reading would be
+slow. Instead, each image inside an image box is replaced by a small QR
+code of that image's URL (generated on the fly and embedded in the EPUB):
+the box and its caption stay in the document, and scanning the QR code
+with a phone opens the real image. This can be turned off in the menu
+(Image boxes are then removed entirely, the old behaviour).
 
 The last 10 distinct articles you've visited are kept as actual EPUB
 files (not re-downloaded every time you land on them again) for up to a
@@ -36,15 +40,14 @@ previous article" action in Settings > Gestures) steps back through
 ArticleC -> ArticleB -> ArticleA.
 
 Infobox tables, campaignbox/navbox chronology boxes, route-map (RMbox)
-tables, sidebar boxes, image-caption boxes, side-boxes (this covers the
+tables, sidebar boxes, side-boxes (this covers the
 {{listen}} audio-sample box among other supplementary side content --
 pointless in an epub regardless, since crengine has no audio playback
 capability at all), the shortdescription hidden metadata div, and the
 category list at the bottom of the page are stripped from the HTML
 before conversion -- they tend to make a mess of a single-column
-reflowable layout, and the caption/audio boxes in particular are
-pointless once images/audio are disabled (an empty bordered box with
-just a caption or description left in it). The shortdescription is
+reflowable layout. Image boxes are kept but their images are replaced by
+QR codes of the image URLs (see above). The shortdescription is
 hidden metadata that would otherwise produce an empty bordered box when
 misidentified as a hatnote. This handles both of Wikipedia's current
 image markup conventions (it's mid-migration between the two as of
@@ -249,6 +252,17 @@ function WikiReader:addToMainMenu(menu_items)
                     G_reader_settings:flipNilOrTrue("wikireader_skip_link_dialog")
                 end,
                 help_text = _("When enabled, tapping a Wikipedia link inside an article opens the linked article directly without showing the external-link dialog box first."),
+            },
+            {
+                text = _("Show images as QR codes"),
+                keep_menu_open = true,
+                checked_func = function()
+                    return G_reader_settings:nilOrTrue("wikireader_qr_images")
+                end,
+                callback = function()
+                    G_reader_settings:flipNilOrTrue("wikireader_qr_images")
+                end,
+                help_text = _("When enabled, each article image is replaced by a small QR code of the image's URL -- the box and its caption stay, and scanning the code with a phone opens the image (nothing is downloaded). When disabled, image boxes are removed completely as before. "),
             },
             {
                 text = _("Clear cache"),
