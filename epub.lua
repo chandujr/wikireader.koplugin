@@ -126,21 +126,23 @@ function M.buildEpub(epub_path, title, lang, callback)
             html = htmlclean.cleanElementClasses(html, "div", { "quotebox", "pullquote" }, { "floatleft", "floatright" }, true)
             html = htmlclean.stripElementsByClass(html, "span", { "geo-inline-hidden" })
             html = htmlclean.mergeQuoteCites(html)
-            -- Audio/video figures carry no image to QR-code, so drop them.
-            -- (Image figures are handled below, when QR images are enabled.)
-            html = htmlclean.stripElementsByAttr(html, "figure", "typeof", { "mw:video", "mw:audio" })
+            -- Media figures: in QR mode every media figure is kept, and
+            -- qrimage turns each embedded <img>/<video>/<audio> into a QR
+            -- code of its URL (see qrimage.lua). Otherwise, original
+            -- behaviour: drop all media figure boxes and stray audio
+            -- players before conversion.
             if not qr_enabled then
-                -- Original behaviour: drop image figures completely.
-                html = htmlclean.stripElementsByAttr(html, "figure", "typeof", { "mw:file", "mw:image" })
+                html = htmlclean.stripElementsByAttr(html, "figure", "typeof", { "mw:file", "mw:image", "mw:video", "mw:audio" })
+                html = html:gsub("<audio.-</audio%s*>", "")
             end
-            html = html:gsub("<audio.-</audio%s*>", "")
             html = latex.replaceMathElements(html)
             -- Render cladograms (Template:Clade phylogeny trees) as text
             -- diagrams, since crengine cannot draw their CSS border lines.
             html = cladogram.replaceCladograms(html)
-            -- Replace every image inside an image box with a QR-code
-            -- placeholder (keeping the box and its caption). The actual QR
-            -- PNGs are stitched in from the Archiver hooks below.
+            -- Replace every image / video / audio element inside an image
+            -- box with a QR-code placeholder (keeping the box and its
+            -- caption). The actual QR PNGs are stitched in from the
+            -- Archiver hooks below.
             if qr_enabled then
                 html = qrimage.replaceImagesWithQr(html, qr_images, qr_size)
             end

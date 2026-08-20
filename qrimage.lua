@@ -6,10 +6,11 @@ photographs/diagrams are never downloaded, because an article can contain
 dozens of them and each can be several hundred KB. Previously that meant
 dropping the whole image box -- image *and* caption -- from the EPUB.
 
-Instead, this module replaces each article image with a small QR code of
-the image's URL: the box (and its caption) stays in the document, and
-scanning the QR code with a phone opens the real image. Nothing is ever
-fetched; a tiny black-and-white PNG is embedded per figure.
+Instead, this module replaces each article image -- and each video/audio
+figure -- with a small QR code of the media's URL: the box (and its
+caption) stays in the document, and scanning the QR code with a phone
+opens the real image or media. Nothing is ever fetched; a tiny
+black-and-white PNG is embedded per figure.
 
 The QR encoding itself is KOReader's own pure-Lua implementation
 (ffi/qrencode -- the same one the built-in QR sharing widget uses), and
@@ -172,7 +173,9 @@ local VOID_TAGS = {
 local function classify(tag, attrs)
     if tag == "figure" then
         local typeof = (attrs:match([[typeof%s*=%s*"([^"]*)"]]) or ""):lower()
-        if typeof:find("mw:file") ~= nil or typeof:find("mw:image") ~= nil then
+        if typeof:find("mw:file") ~= nil
+            or typeof:find("mw:image") ~= nil
+            or typeof:find("mw:video") ~= nil then
             return { tag = tag, is_img = true }
         end
     elseif tag == "div" then
@@ -198,6 +201,18 @@ local function inImageBox(stack)
     return false
 end
 
+-- Generates the QR PNG for `url`, appends it to `qr_images` and returns
+-- the marker span. Returns "" if the URL could not be QR-coded.
+local function makeQr(url, qr_images, qr_size)
+    local index = #qr_images + 1
+    local png = M.qrPng(url, qr_size)
+    if not png then
+        return ""
+    end
+    qr_images[index] = { path = string.format("images/qr%05d.png", index), png = png, url = url }
+    return string.format('<span class="wikireader-qrimg" data-qrindex="%d"></span>', index)
+end
+
 -- Replaces one <img> tag with a QR placeholder span, appending the
 -- generated PNG to `qr_images`. Returns the marker HTML, or "" if the
 -- image had no usable URL / could not be QR-coded (the caption survives).
@@ -210,21 +225,57 @@ local function qrImageTag(img_tag, attrs, qr_images, qr_size)
     if not url then
         return ""
     end
-    local index = #qr_images + 1
-    local png = M.qrPng(url, qr_size)
-    if not png then
-        return ""
-    end
-    qr_images[index] = { path = string.format("images/qr%05d.png", index), png = png, url = url }
-    return string.format('<span class="wikireader-qrimg" data-qrindex="%d"></span>', index)
+    return makeQr(url, qr_images, qr_size)
 end
 
--- Walks the article HTML and replaces every image that sits inside an
--- "image box" (figure, gallerybox, div.thumb) with a QR placeholder span.
--- The placeholders are later swapped for real <img> tags by the EPUB
--- builder, once it knows the final file layout. Any other <img> (inline
--- symbols, timeline renderings, ...) is left untouched for createEpub()
--- to deal with as before.
+-- Replaces a <video> or <audio> element found inside an image box with
+-- a QR placeholder of the media's URL. MediaWiki video/audio figures put
+-- the actual streams in <source> children: a handful of transcoded
+-- derivatives and usually the original full media file. The QR points at
+-- the original file when one is present (mirroring how image thumbnails
+-- QR-point at their full-size original), falling back to the first
+-- <source>, then to the element's own src, then to the poster frame (for
+-- videos). Returns the marker HTML, or "" if nothing usable was found
+-- (the caption survives).
+local function qrMediaTag(media_tag, media, qr_images, qr_size)
+    -- <source> children carry the actual streams. <track> children are
+    -- subtitle metadata (timedtext API), not media, so ignore them.
+    local original_src
+    local first_src
+    for src in media:gmatch([[<source[^>]*src%s*=%s*"([^"]*)"[^>]*>]]) do
+        if src:sub(1, 5) ~= "data:" then
+            if not first_src then
+                first_src = src
+            end
+            if not src:find("transcoded", 1, true) then
+                original_src = src
+            end
+        end
+    end
+    local url = original_src or first_src
+    if not url then
+        -- No <source> children: a direct <video src="...">, else the
+        -- poster thumbnail as a last resort.
+        url = media_tag:match([[src%s*=%s*"([^"]*)"]])
+            or media_tag:match([[poster%s*=%s*"([^"]*)"]])
+    end
+    if not url then
+        return ""
+    end
+    url = M.cleanImageUrl(url)
+    if not url then
+        return ""
+    end
+    return makeQr(url, qr_images, qr_size)
+end
+
+-- Walks the article HTML and replaces every image, video or audio
+-- element that sits inside an "image box" (figure, gallerybox, div.thumb)
+-- with a QR placeholder span. The placeholders are later swapped for real
+-- <img> tags by the EPUB builder, once it knows the final file layout.
+-- Any other <img>/<video>/<audio> (inline symbols, timeline renderings,
+-- pronunciation players outside boxes, ...) is left untouched for
+-- createEpub() to deal with as before.
 function M.replaceImagesWithQr(html, qr_images, qr_size)
     -- HTML comments can contain arbitrary text that would confuse the tag
     -- walker (and are meaningless in the final document anyway).
@@ -242,6 +293,7 @@ function M.replaceImagesWithQr(html, qr_images, qr_size)
         out[#out + 1] = html:sub(pos, s - 1)
         local tagname = tag:lower()
         local full = html:sub(s, e)
+        local consumed_until
         if tagname == "img" then
             if inImageBox(stack) then
                 out[#out + 1] = qrImageTag(full, attrs, qr_images, qr_size)
@@ -253,6 +305,18 @@ function M.replaceImagesWithQr(html, qr_images, qr_size)
                 stack[#stack] = nil
             end
             out[#out + 1] = full
+        elseif (tagname == "video" or tagname == "audio") and inImageBox(stack) then
+            -- Inside an image box: replace the whole <video>…</video> /
+            -- <audio>…</audio> element, since its <source> children carry
+            -- the actual URLs.
+            local close_start, close_end = html:find("</" .. tagname .. "%s*>", e + 1)
+            if close_start then
+                out[#out + 1] = qrMediaTag(full, html:sub(e + 1, close_start - 1), qr_images, qr_size)
+                consumed_until = close_end + 1  -- discard up to </video>|</audio>
+            else
+                -- Malformed (no close tag): leave the tag as-is.
+                out[#out + 1] = full
+            end
         elseif VOID_TAGS[tagname] or attrs:find("%s*/%s*$") then
             -- self-closing / void tag: nothing to push
             out[#out + 1] = full
@@ -260,7 +324,7 @@ function M.replaceImagesWithQr(html, qr_images, qr_size)
             stack[#stack + 1] = classify(tagname, attrs)
             out[#out + 1] = full
         end
-        pos = e + 1
+        pos = consumed_until or (e + 1)
     end
     local result = table.concat(out)
     -- Some layouts wrap the image in a link to the file page; drop that
