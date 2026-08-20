@@ -216,6 +216,26 @@ function M.buildEpub(epub_path, title, lang, callback)
                 content = content:gsub('(<navPoint[^>]*>%s*<navLabel>%s*<text>).-(</text>%s*</navLabel>%s*<content src="content%.html"/>)', '%1' .. resolved_title .. '%2')
             end
         elseif entry_path == "OEBPS/stylesheet.css" then
+            -- QR-code images (see qrimage.lua): KOReader's base stylesheet
+            -- zeroes the top padding of figure/gallery boxes when NO images
+            -- are included (real thumbnails would get padding-top: 0.5em).
+            -- A QR code is a flat rectangle with no strut, so without this
+            -- it would sit flush against the top dotted border. Restore the
+            -- same top padding the base rule gives real images. (A margin-top
+            -- on the <img> would be ignored: the figure is display: table,
+            -- so the image becomes an anonymous table-cell.)
+            if qr_enabled then
+                content = content .. [[
+
+figure[typeof~='mw:File/Thumb'],
+figure[typeof~='mw:File/Frame'] {
+    padding-top: 0.5em;
+}
+li.gallerybox {
+    padding-top: 0.5em !important;
+}
+]]
+            end
             content = content .. [[
 
 .wikireader-notices {
