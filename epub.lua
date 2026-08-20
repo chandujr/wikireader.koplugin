@@ -34,8 +34,9 @@ Full article EPUB builder
 --
 -- When "images as QR codes" is enabled (the default), image boxes (and
 -- their captions) are kept in the document, but each image is replaced by
--- a small QR code of the image's URL -- generated on the fly and embedded
--- in the EPUB, so nothing is ever downloaded. See qrimage.lua.
+-- a small QR code pointing at the image's File: description page --
+-- generated on the fly and embedded in the EPUB, so nothing is ever
+-- downloaded. See qrimage.lua.
 --
 -- See the detailed comment in the original main.lua for full rationale.
 function M.buildEpub(epub_path, title, lang, callback)
@@ -128,7 +129,7 @@ function M.buildEpub(epub_path, title, lang, callback)
             html = htmlclean.mergeQuoteCites(html)
             -- Media figures: in QR mode every media figure is kept, and
             -- qrimage turns each embedded <img>/<video>/<audio> into a QR
-            -- code of its URL (see qrimage.lua). Otherwise, original
+            -- code pointing at its File: description page (see qrimage.lua). Otherwise, original
             -- behaviour: drop all media figure boxes and stray audio
             -- players before conversion.
             if not qr_enabled then
@@ -144,7 +145,7 @@ function M.buildEpub(epub_path, title, lang, callback)
             -- caption). The actual QR PNGs are stitched in from the
             -- Archiver hooks below.
             if qr_enabled then
-                html = qrimage.replaceImagesWithQr(html, qr_images, qr_size)
+                html = qrimage.replaceImagesWithQr(html, qr_images, qr_size, lang)
             end
 
             -- Extract hatnotes and wrap section notices

@@ -7,9 +7,11 @@ dozens of them and each can be several hundred KB. Previously that meant
 dropping the whole image box -- image *and* caption -- from the EPUB.
 
 Instead, this module replaces each article image -- and each video/audio
-figure -- with a small QR code of the media's URL: the box (and its
-caption) stays in the document, and scanning the QR code with a phone
-opens the real image or media. Nothing is ever fetched; a tiny
+figure -- with a small QR code of the media's File: description page:
+the box (and its caption) stays in the document, and scanning the QR
+code with a phone opens that page (which shows the real image, or a
+transcoded player for video/audio instead of a huge original download).
+Nothing is ever fetched; a tiny
 black-and-white PNG is embedded per figure.
 
 The QR encoding itself is KOReader's own pure-Lua implementation
@@ -126,10 +128,11 @@ end
 Image URL handling
 --]]
 
--- Turns a Wikipedia <img> src into the URL the QR code should point at:
--- absolute, free of tracking query params, and upgraded from the thumbnail
--- to the original full-size file when the src is a thumb URL. Returns nil
--- for URLs we can't make sense of (relative paths, data: URIs, ...).
+-- Resolves a Wikipedia <img>/<media> src to an absolute URL, free of
+-- tracking query params, and upgraded from the original full-size file
+-- when the src is a thumbnail URL. Used by filePageUrl() to recover the
+-- original filename. Returns nil for URLs we can't make sense of
+-- (relative paths, data: URIs, ...).
 function M.cleanImageUrl(src)
     if src:sub(1, 2) == "//" then
         src = "https:" .. src
@@ -146,6 +149,43 @@ function M.cleanImageUrl(src)
         return prefix .. hashpath
     end
     return src
+end
+
+-- Builds the File: description-page URL for the upload.wikimedia.org media
+-- URL `mediaUrl` points at, on the wiki edition `lang`. The filename always
+-- occurs in the file's upload path, so we can recover it from any of the
+-- three forms (original, thumbnail, or transcoded derivative) and steer
+-- every QR scan -- image, video or audio alike -- at the File: page, where
+-- the description, the transcoded player (instead of the huge original
+-- download), and attribution live. Returns nil if no filename could be
+-- extracted (or no lang was given).
+function M.filePageUrl(mediaUrl, lang)
+    if not mediaUrl or not lang then
+        return nil
+    end
+    if mediaUrl:sub(1, 2) == "//" then
+        mediaUrl = "https:" .. mediaUrl
+    end
+    local filename
+    if mediaUrl:find("/transcoded/", 1, true) then
+        -- Transcoded media derivative, e.g.
+        --   .../wikipedia/commons/transcoded/c/dd/Original.ext/Original.ext.360p.vp9.webm
+        -- The original filename is the path segment right before the final
+        -- (derivative) segment, whatever the derivative's own name.
+        filename = mediaUrl:match("^.+/([^/]+)/[^/]+$")
+    else
+        -- Thumbnail or plain original: resolve to the original full-size
+        -- file, whose last path segment is the original filename.
+        local original = M.cleanImageUrl(mediaUrl)
+        if not original then
+            return nil
+        end
+        filename = original:match("([^/]+)$")
+    end
+    if not filename then
+        return nil
+    end
+    return string.format("https://%s.wikipedia.org/wiki/File:%s", lang, filename)
 end
 
 --[[-------------------------------------------------------------------------
@@ -216,28 +256,28 @@ end
 -- Replaces one <img> tag with a QR placeholder span, appending the
 -- generated PNG to `qr_images`. Returns the marker HTML, or "" if the
 -- image had no usable URL / could not be QR-coded (the caption survives).
-local function qrImageTag(img_tag, attrs, qr_images, qr_size)
+local function qrImageTag(img_tag, attrs, qr_images, qr_size, lang)
     local src = attrs:match([[src%s*=%s*"([^"]*)"]])
     if not src or src:sub(1, 5) == "data:" then
         return ""
     end
-    local url = M.cleanImageUrl(src)
+    local url = M.filePageUrl(src, lang)
     if not url then
         return ""
     end
     return makeQr(url, qr_images, qr_size)
 end
 
--- Replaces a <video> or <audio> element found inside an image box with
--- a QR placeholder of the media's URL. MediaWiki video/audio figures put
--- the actual streams in <source> children: a handful of transcoded
--- derivatives and usually the original full media file. The QR points at
--- the original file when one is present (mirroring how image thumbnails
--- QR-point at their full-size original), falling back to the first
--- <source>, then to the element's own src, then to the poster frame (for
--- videos). Returns the marker HTML, or "" if nothing usable was found
--- (the caption survives).
-local function qrMediaTag(media_tag, media, qr_images, qr_size)
+-- Replaces a video or <audio> element found inside an image box with
+-- a QR placeholder of the media's File: page. MediaWiki video/audio
+-- figures put the actual streams in <source> children: a handful of
+-- transcoded derivatives and usually the original full media file. The
+-- QR points at the file's description page (recovering the filename from
+-- the original file when one is present, or from the first usable
+-- <source>/poster otherwise), so the scan opens the transcoded player
+-- rather than a huge original download. Returns the marker HTML, or ""
+-- if nothing usable was found (the caption survives).
+local function qrMediaTag(media_tag, media, qr_images, qr_size, lang)
     -- <source> children carry the actual streams. <track> children are
     -- subtitle metadata (timedtext API), not media, so ignore them.
     local original_src
@@ -262,7 +302,7 @@ local function qrMediaTag(media_tag, media, qr_images, qr_size)
     if not url then
         return ""
     end
-    url = M.cleanImageUrl(url)
+    url = M.filePageUrl(url, lang)
     if not url then
         return ""
     end
@@ -276,7 +316,7 @@ end
 -- Any other <img>/<video>/<audio> (inline symbols, timeline renderings,
 -- pronunciation players outside boxes, ...) is left untouched for
 -- createEpub() to deal with as before.
-function M.replaceImagesWithQr(html, qr_images, qr_size)
+function M.replaceImagesWithQr(html, qr_images, qr_size, lang)
     -- HTML comments can contain arbitrary text that would confuse the tag
     -- walker (and are meaningless in the final document anyway).
     html = html:gsub("<!%-%-.-%-%->", "")
@@ -296,7 +336,7 @@ function M.replaceImagesWithQr(html, qr_images, qr_size)
         local consumed_until
         if tagname == "img" then
             if inImageBox(stack) then
-                out[#out + 1] = qrImageTag(full, attrs, qr_images, qr_size)
+                out[#out + 1] = qrImageTag(full, attrs, qr_images, qr_size, lang)
             else
                 out[#out + 1] = full
             end
@@ -311,7 +351,7 @@ function M.replaceImagesWithQr(html, qr_images, qr_size)
             -- the actual URLs.
             local close_start, close_end = html:find("</" .. tagname .. "%s*>", e + 1)
             if close_start then
-                out[#out + 1] = qrMediaTag(full, html:sub(e + 1, close_start - 1), qr_images, qr_size)
+                out[#out + 1] = qrMediaTag(full, html:sub(e + 1, close_start - 1), qr_images, qr_size, lang)
                 consumed_until = close_end + 1  -- discard up to </video>|</audio>
             else
                 -- Malformed (no close tag): leave the tag as-is.

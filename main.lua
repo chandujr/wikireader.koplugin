@@ -12,10 +12,11 @@ contents all render normally, because it *is* a normal EPUB.
 Images are never downloaded -- an article can contain dozens of them,
 each several hundred KB, so fetching them all before reading would be
 slow. Instead, each image inside an image box is replaced by a small QR
-code of that image's URL (generated on the fly and embedded in the EPUB):
-the box and its caption stay in the document, and scanning the QR code
-with a phone opens the real image. This can be turned off in the menu
-(Image boxes are then removed entirely, the old behaviour).
+code pointing at the image's File: description page (generated on the fly
+and embedded in the EPUB): the box and its caption stay in the document,
+and scanning the QR code with a phone opens that page -- where the real
+image, its description and its attribution live. This can be turned off in
+the menu (Image boxes are then removed entirely, the old behaviour).
 
 The last 10 distinct articles you've visited are kept as actual EPUB
 files (not re-downloaded every time you land on them again) for up to a
@@ -254,7 +255,7 @@ function WikiReader:addToMainMenu(menu_items)
                 help_text = _("When enabled, tapping a Wikipedia link inside an article opens the linked article directly without showing the external-link dialog box first."),
             },
             {
-                text = _("Show images as QR codes"),
+                text = _("Show media as QR codes"),
                 keep_menu_open = true,
                 checked_func = function()
                     return G_reader_settings:nilOrTrue("wikireader_qr_images")
@@ -262,7 +263,7 @@ function WikiReader:addToMainMenu(menu_items)
                 callback = function()
                     G_reader_settings:flipNilOrTrue("wikireader_qr_images")
                 end,
-                help_text = _("When enabled, each article image is replaced by a small QR code of the image's URL -- the box and its caption stay, and scanning the code with a phone opens the image (nothing is downloaded). When disabled, image boxes are removed completely as before. "),
+                help_text = _("When enabled, each article image (and video/audio figure) is replaced by a small QR code pointing at the media's File: description page -- the box and its caption stay, and scanning the code with a phone opens that page (showing the image, or the transcoded player for video/audio, instead of the full-size original download; nothing is fetched by the reader). When disabled, image boxes are removed completely as before. "),
             },
             {
                 text = _("Clear cache"),
