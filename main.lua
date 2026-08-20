@@ -241,45 +241,59 @@ function WikiReader:addToMainMenu(menu_items)
                 },
             },
             {
-                text_func = function()
-                    return T(_("Wikipedia language: %1"), self.lang:upper())
-                end,
-                callback = function()
-                    self:showLanguageDialog()
-                end,
-            },
-            {
-                text = _("Skip Wikipedia links dialog box"),
-                keep_menu_open = true,
-                checked_func = function()
-                    return G_reader_settings:nilOrTrue("wikireader_skip_link_dialog")
-                end,
-                callback = function()
-                    G_reader_settings:flipNilOrTrue("wikireader_skip_link_dialog")
-                end,
-                help_text = _("When enabled, tapping a Wikipedia link inside an article opens the linked article directly without showing the external-link dialog box first."),
-            },
-            {
-                text = _("Show media as QR codes"),
-                keep_menu_open = true,
-                checked_func = function()
-                    return G_reader_settings:nilOrTrue("wikireader_qr_media")
-                end,
-                callback = function()
-                    G_reader_settings:flipNilOrTrue("wikireader_qr_media")
-                end,
-                help_text = _("When enabled, each media item in an article (an image, or an audio/video figure) is replaced by a small QR code pointing at that media's File: description page -- the box and its caption stay, and scanning the code with a phone opens that page (showing the image, or the transcoded player for audio/video, instead of the full-size original download; nothing is fetched by the reader). When disabled, media boxes are removed completely as before."),
-            },
-            {
-                text = _("Show infoboxes"),
-                keep_menu_open = true,
-                checked_func = function()
-                    return G_reader_settings:isTrue("wikireader_show_infoboxes")
-                end,
-                callback = function()
-                    G_reader_settings:flipNilOrFalse("wikireader_show_infoboxes")
-                end,
-                help_text = _("When enabled, infobox tables are kept in the article instead of being removed, showing only their text data (images and captions inside them are dropped). When disabled, infoboxes are stripped from the article as before."),
+                text = _("Settings"),
+                sub_item_table = {
+                    {
+                        text_func = function()
+                            return T(_("Wikipedia language: %1"), self.lang:upper())
+                        end,
+                        callback = function()
+                            self:showLanguageDialog()
+                        end,
+                    },
+                    {
+                        text = _("Skip Wikipedia links dialog box"),
+                        keep_menu_open = true,
+                        checked_func = function()
+                            return G_reader_settings:nilOrTrue("wikireader_skip_link_dialog")
+                        end,
+                        callback = function()
+                            G_reader_settings:flipNilOrTrue("wikireader_skip_link_dialog")
+                        end,
+                        help_text = _("Whenever you tap a Wikipedia link inside an article, jump straight to that article without the intermediate dialog box."),
+                    },
+                    {
+                        text = _("Show media as QR codes"),
+                        keep_menu_open = true,
+                        checked_func = function()
+                            return G_reader_settings:nilOrTrue("wikireader_qr_media")
+                        end,
+                        callback = function()
+                            G_reader_settings:flipNilOrTrue("wikireader_qr_media")
+                        end,
+                        help_text = _("Replace images and other media in an article with small QR codes you can scan with your phone. Turn this off to remove the media boxes entirely."),
+                    },
+                    {
+                        text = _("Show infoboxes"),
+                        keep_menu_open = true,
+                        checked_func = function()
+                            return G_reader_settings:isTrue("wikireader_show_infoboxes")
+                        end,
+                        callback = function()
+                            G_reader_settings:flipNilOrFalse("wikireader_show_infoboxes")
+                        end,
+                        help_text = _("Keep the summary tables (infoboxes) that appear at the top of many articles. Their images are still removed for a cleaner reading view."),
+                    },
+                    {
+                        text = _("Gestures"),
+                        keep_menu_open = true,
+                        callback = function()
+                            UIManager:show(InfoMessage:new{
+                                text = _("You can bind a gesture to the \"Back to previous article\" action through the Gesture manager: \"General > WikiReader: back to previous article\"."),
+                            })
+                        end,
+                    },
+                },
             },
             {
                 text = _("Clear cache"),
@@ -293,7 +307,7 @@ function WikiReader:addToMainMenu(menu_items)
                         end,
                     })
                 end,
-                help_text = _("Remove all cached Wikipedia EPUB files and their reading progress."),
+                help_text = _("Remove all cached WikiReader EPUB files and their reading progress."),
             },
             {
                 text = _("Save current article"),
@@ -315,7 +329,7 @@ function WikiReader:addToMainMenu(menu_items)
                 callback = function()
                     self:shareCurrentArticleLink()
                 end,
-                help_text = _("Copy the current article's Wikipedia link to the clipboard and show a QR code of it that you can scan from another device."),
+                help_text = _("Copies the current article's Wikipedia link to the clipboard and shows a QR code of it that you can scan from another device."),
             },
             {
                 text_func = function()
