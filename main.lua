@@ -295,6 +295,7 @@ function WikiReader:addToMainMenu(menu_items)
                     },
                     {
                         text = _("About"),
+                        keep_menu_open = true,
                         callback = function()
                             self:showAbout()
                         end,
