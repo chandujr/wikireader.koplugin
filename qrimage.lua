@@ -218,6 +218,22 @@ local VOID_TAGS = {
 -- image-box context either: their media is stripped entirely before this
 -- pass runs (see htmlclean.stripImageCells), so nothing inside them should
 -- become a QR code.
+--
+-- Does the space-separated class attribute contain the exact token `token`?
+local function hasClass(cls, token)
+    for w in cls:gmatch("[^%s]+") do
+        if w == token then
+            return true
+        end
+    end
+    return false
+end
+
+-- Returns the lowercased value of the tag's class attribute, or "".
+local function className(attrs)
+    return (attrs:match([[class%s*=%s*"([^"]*)"]]) or ""):lower()
+end
+
 local function classify(tag, attrs)
     if tag == "figure" then
         local typeof = (attrs:match([[typeof%s*=%s*"([^"]*)"]]) or ""):lower()
@@ -227,7 +243,7 @@ local function classify(tag, attrs)
             return { tag = tag, is_img = true }
         end
     elseif tag == "div" then
-        local cls = (attrs:match([[class%s*=%s*"([^"]*)"]]) or ""):lower()
+        local cls = className(attrs)
         if cls:find("thumb") then
             return { tag = tag, is_img = true }
         end
@@ -331,48 +347,85 @@ function M.replaceImagesWithQr(html, qr_images, qr_size, lang)
     local out = {}
     local pos = 1
     local stack = {}
+    -- Depth of locmap containers currently being dropped (see below).
+    local suppress = 0
     local tag_pat = "<(/?)%s*([a-zA-Z][a-zA-Z0-9]*)([^>]*)>"
     while true do
         local s, e, is_close, tag, attrs = html:find(tag_pat, pos)
         if not s then
-            out[#out + 1] = html:sub(pos)
+            -- Trailing text after the last tag; unless we're mid-drop of a
+            -- locmap figure, keep it.
+            if suppress == 0 then
+                out[#out + 1] = html:sub(pos)
+            end
             break
         end
-        out[#out + 1] = html:sub(pos, s - 1)
         local tagname = tag:lower()
         local full = html:sub(s, e)
-        local consumed_until
-        if tagname == "img" then
-            if inImageBox(stack) then
-                out[#out + 1] = qrImageTag(full, attrs, qr_images, qr_size, lang)
-            else
-                out[#out + 1] = full
+
+        if suppress > 0 then
+            -- Inside a removed locmap figure: swallow every tag and the text
+            -- between them, but keep tracking open/close tags so we know when
+            -- the dropped container finally closes.
+            if is_close ~= "" then
+                if #stack > 0 and stack[#stack].tag == tagname then
+                    local entry = stack[#stack]
+                    stack[#stack] = nil
+                    if entry.is_dropped then
+                        suppress = suppress - 1
+                    end
+                end
+            elseif not (VOID_TAGS[tagname] or attrs:find("%s*/%s*$")) then
+                stack[#stack + 1] = { tag = tagname }
             end
-        elseif is_close ~= "" then
-            if #stack > 0 and stack[#stack].tag == tagname then
-                stack[#stack] = nil
-            end
-            out[#out + 1] = full
-        elseif (tagname == "video" or tagname == "audio") and inImageBox(stack) then
-            -- Inside an image box: replace the whole <video>…</video> /
-            -- <audio>…</audio> element, since its <source> children carry
-            -- the actual URLs.
-            local close_start, close_end = html:find("</" .. tagname .. "%s*>", e + 1)
-            if close_start then
-                out[#out + 1] = qrMediaTag(full, html:sub(e + 1, close_start - 1), qr_images, qr_size, lang)
-                consumed_until = close_end + 1  -- discard up to </video>|</audio>
-            else
-                -- Malformed (no close tag): leave the tag as-is.
-                out[#out + 1] = full
-            end
-        elseif VOID_TAGS[tagname] or attrs:find("%s*/%s*$") then
-            -- self-closing / void tag: nothing to push
-            out[#out + 1] = full
+            pos = e + 1
         else
-            stack[#stack + 1] = classify(tagname, attrs)
-            out[#out + 1] = full
+            out[#out + 1] = html:sub(pos, s - 1)
+            local consumed_until
+            if tagname == "img" then
+                if inImageBox(stack) then
+                    out[#out + 1] = qrImageTag(full, attrs, qr_images, qr_size, lang)
+                else
+                    out[#out + 1] = full
+                end
+            elseif is_close ~= "" then
+                if #stack > 0 and stack[#stack].tag == tagname then
+                    stack[#stack] = nil
+                end
+                out[#out + 1] = full
+            elseif (tagname == "video" or tagname == "audio") and inImageBox(stack) then
+                -- Inside an image box: replace the whole <video>…</video> /
+                -- <audio>…</audio> element, since its <source> children carry
+                -- the actual URLs.
+                local close_start, close_end = html:find("</" .. tagname .. "%s*>", e + 1)
+                if close_start then
+                    out[#out + 1] = qrMediaTag(full, html:sub(e + 1, close_start - 1), qr_images, qr_size, lang)
+                    consumed_until = close_end + 1  -- discard up to </video>|</audio>
+                else
+                    -- Malformed (no close tag): leave the tag as-is.
+                    out[#out + 1] = full
+                end
+            elseif VOID_TAGS[tagname] or attrs:find("%s*/%s*$") then
+                -- self-closing / void tag: nothing to push
+                out[#out + 1] = full
+            else
+                local entry = classify(tagname, attrs)
+                -- A location map (<div class="locmap">) is meant to be seen as
+                -- its base map with marker overlays composited on top. With
+                -- media images disabled we could only offer a bare, marker-
+                -- less map as a QR, which would be meaningless to the reader.
+                -- Drop the whole figure -- map, overlays and caption alike.
+                if tagname == "div" and hasClass(className(attrs), "locmap") then
+                    entry.is_dropped = true
+                    suppress = suppress + 1
+                    out[#out + 1] = ""  -- drop the locmap's open tag
+                else
+                    out[#out + 1] = full
+                end
+                stack[#stack + 1] = entry
+            end
+            pos = consumed_until or (e + 1)
         end
-        pos = consumed_until or (e + 1)
     end
     local result = table.concat(out)
     -- Some layouts wrap the image in a link to the file page; drop that
