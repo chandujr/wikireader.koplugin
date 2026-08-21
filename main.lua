@@ -293,6 +293,13 @@ function WikiReader:addToMainMenu(menu_items)
                             })
                         end,
                     },
+                    {
+                        text = _("About"),
+                        callback = function()
+                            self:showAbout()
+                        end,
+                        help_text = _("Show plugin name, description and version."),
+                    },
                 },
             },
             {
@@ -431,6 +438,15 @@ function WikiReader:openRandomFeaturedArticle()
     local random_t = start_t + math.random(0, end_t - start_t)
     local t = os.date("*t", random_t)
     self:openFeaturedArticle(wutil.formatApiDate(t.year, t.month, t.day))
+end
+
+-- Show an About dialog with the plugin's name, description and version
+-- (read from this plugin's _meta.lua file).
+function WikiReader:showAbout()
+    local version = self.version and (" " .. self.version) or ""
+    UIManager:show(InfoMessage:new{
+        text = (self.fullname or _("WikiReader")) .. version .. "\n\n" .. (self.description or ""),
+    })
 end
 
 -- Language code dialog.
