@@ -154,19 +154,31 @@ function M.cleanElementClasses(html, tag, class_patterns, classes_to_remove, rem
 end
 
 --[[-------------------------------------------------------------------------
-Media removal inside kept infobox tables
+Media removal inside kept infobox tables and inline flags
 --]]
 
--- Removes, wholesale, every <td>...</td> cell inside a table matching
--- `class_patterns` whose content contains an image/media element (<img>,
--- <video>, <audio>, <figure>, a <span typeof="mw:File..."> wrapper or a
--- kartographer <mapframe>). The caption/title text of such a cell is a
--- sibling or child of the image (e.g. a "infobox-caption" div, or the
--- ib-settlement-cols caption rows next to each symbol image), so dropping
--- the whole cell removes the image AND its caption together -- exactly
--- what we want for a kept full-width infobox: the box keeps its text data
--- but shows no media and no captions (QR codes included, since this runs
--- before the QR replacement pass).
+-- Cleans up the inside of a kept table (a kept full-width infobox). Two
+-- distinct things are removed, because keeping raw media would break the
+-- single-column reflowable layout:
+--
+--   1. Genuine media cells -- a cell whose content is basically an image
+--      box (lead portrait, map, emblem/symbol stack, a <figure>, audio/
+--      video, kartographer <mapframe>, ...). The caption/title text of
+--      such a cell is a sibling or child of the image (e.g. a
+--      "infobox-caption" div, or the ib-settlement-cols caption rows next
+--      to each symbol image). The whole cell -- image and caption -- is
+--      dropped, so the box keeps only its surrounding text data. This runs
+--      before the QR pass, so no QR placeholder is ever generated here.
+--
+--   2. Small inline icons (flags) that sit *beside* real text in a cell --
+--      the country flags next to combatants'/commanders' names in battle/
+--      war infoboxes, or the flags next to the strength/casualties rows.
+--      These are just the icon; the name/link/footnote it decorates is its
+--      own text, so the cell must *not* be lost. Instead only the icon
+--      bubble -- any <span> wrapping a tiny (<=24px) inline <img> flag or
+--      status glyph, whether it is classed `flagicon` or an inline `mw:File`
+--      span, even one with a `mw-file-description` link -- is removed and
+--      the text is kept.
 --
 -- Nesting is handled the same way as stripElementsByAttr: a nested table
 -- inside a cell contributes its own <td> opens/closes, and the depth walk
@@ -218,9 +230,153 @@ function M.stripImageCells(html, class_patterns)
     return table.concat(out)
 end
 
+-- Removes small inline icon bubbles from `content` while keeping the text
+-- they sit beside them. In a war/battle infobox a tiny inline icon (the
+-- 20-24px country flags / surrender / casualty / WIA / ranking-arrow
+-- glyphs) is placed *beside* a named entity or a number: it wraps only the
+-- small image and none of the surrounding name/link/footnote text, so
+-- removing the whole bubble strips just the icon and keeps what it
+-- decorated.
+--
+-- Genuine media (a lead painting, a header image collage, an emblem/coat
+-- of arms, a map) is displayed *large*: its <img> is rendered at 60px or
+-- more (typically 120-300px), or it is a <table>/<figure>/<mapframe>/<video>
+-- /<audio> box. The discriminator is therefore the <img> display width:
+-- images at 24px and under are inline icons, anything larger (or non-<img>
+-- media) is genuine figure media that must be left in place so the caller
+-- can drop the whole image cell. Relying on the anchor's CSS class does
+-- not work: the tiny flags may be wrapped in either `class="flagicon"`
+-- or a plain `<span typeof="mw:File">…</span>` *whose `<a class="mw-file-
+-- description">` link is identical to a real thumbnail's*. Only the
+-- rendered size tells them apart.
+--
+-- Icon bubbles never nest another flagicon, but their inner markup can
+-- contain other spans (mw-image-border / mw:File) and an optional <a>, so
+-- the matching close span is found by the same depth walk used elsewhere.
+-- Exposed for testing.
+function M.removeInlineIcons(content)
+    local out = {}
+    local pos = 1
+    while true do
+        local open_start = content:find("<span", pos, true)
+        if not open_start then
+            table.insert(out, content:sub(pos))
+            break
+        end
+        local open_end = content:find(">", open_start, true)
+        if not open_end then
+            table.insert(out, content:sub(pos))
+            break
+        end
+        local lower = content:sub(open_start, open_end):lower()
+
+        -- A <span class="...flagicon..."> is always a small inline icon.
+        -- A <span typeof="mw:File"> is a small inline icon when its inner
+        -- <img> is rendered small (<=24px); genuine figure boxes carry a
+        -- large <img> or a <table>/<figure>/<mapframe>/<video>/<audio> and
+        -- are left intact for cellHasMedia to see.
+        local iconish = false
+        if lower:find("flagicon", 1, true) then
+            iconish = true
+        elseif lower:find('typeof%s*=%s*"mw:file', 1) then
+            local _, close_end = wutil.findMatchingClose(content, "span", open_end)
+            if close_end then
+                local inner = content:sub(open_end + 1, close_end - 1)
+                local imgw = M.imgDisplayWidth(inner)
+                iconish = imgw ~= nil and imgw <= 24
+            else
+                -- Unclosed mw:File span: safest to treat as an icon and drop
+                -- just its open tag, never swallowing following text.
+                iconish = true
+            end
+        end
+
+        if iconish then
+            -- Inline icon bubble: drop it and keep the surrounding text.
+            local _, close_end = wutil.findMatchingClose(content, "span", open_end)
+            if not close_end then
+                -- Unclosed bubble: drop just the open tag; never swallow
+                -- the text that may follow it.
+                table.insert(out, content:sub(pos, open_end))
+                pos = open_end + 1
+            else
+                table.insert(out, content:sub(pos, open_start - 1))
+                pos = close_end + 1
+            end
+        else
+            -- Not an icon bubble (a text-only span or a genuine figure
+            -- container): keep it, then ADVANCE ONLY past its open tag.
+            -- This lets us still dig into nested spans (e.g. a flagicon
+            -- lurking inside a <span class="nowrap">) and remove them,
+            -- unlike skipping to the matching close.
+            table.insert(out, content:sub(pos, open_end))
+            pos = open_end + 1
+        end
+    end
+    return table.concat(out)
+end
+
+-- Returns the rendered display width of the first <img ...> box inside
+-- `s`, or nil if there is no <img> (or no width= attribute on it). Only the
+-- *display* width (the `width="N"` attribute MediaWiki sets on the rendered
+-- image) is meaningful; `data-file-width`/`srcset` carry the source pixel
+-- size and must be ignored.
+function M.imgDisplayWidth(s)
+    local img = s:find("<img", 1, true)
+    if not img then return nil end
+    local close = s:find(">", img, true)
+    if not close then return nil end
+    -- limit to the tag; skip any data-file-width/ srcset embedded number by
+    -- anchoring on a standalone width= before class="mw-file-element".
+    local tag = s:sub(img, close)
+    local _, _, w = tag:find('width%s*=%s*"(%d+)"%s+height')
+    if not w then
+        -- some images omit height; fall back to the first width attribute.
+        _, _, w = tag:find('width%s*=%s*"(%d+)"')
+    end
+    return tonumber(w)
+end
+
+-- Returns true if a cell's content still holds a *genuine* media element
+-- once the small inline icons have been removed: a real large image (its
+-- <img> is rendered at more than 24px, i.e. a lead painting / header
+-- collage / emblem / map), a <table> image box, a <figure>, a kartographer
+-- <mapframe>, or <video>/<audio>. A cell still carrying one of these is a
+-- real image cell and is dropped wholly; anything left is only
+-- inline-icon-free text and is kept.
+function M.cellHasMedia(content)
+    if content:find("<video", 1, true)
+        or content:find("<audio", 1, true)
+        or content:find("<figure", 1, true)
+        or content:find("<mapframe", 1, true) then
+        return true
+    end
+    -- otherwise a real image box / large <img>: only when an <img> box is
+    -- rendered larger than an inline icon (i.e. >24px).
+    local pos = 1
+    while true do
+        local img = content:find("<img", pos, true)
+        if not img then break end
+        local close = content:find(">", img, true)
+        if close then
+            local w = content:sub(img, close):match('width%s*=%s*"(%d+)"')
+            if not w then
+                -- MediaWiki always sets width on a rendered image; a bare
+                -- <img ...> without it is unusual -- treat as media.
+                return true
+            end
+            if tonumber(w) > 24 then
+                return true
+            end
+        end
+        pos = (close or img) + 1
+    end
+    return false
+end
 -- Inner helper: given the content between the <table ...> and </table> of
--- a matching table, drop every <td>...</td> block that contains media (or
--- is an infobox-image/infobox-caption cell). Exposed for testing.
+-- a matching table, drop the media from genuine image/caption cells, but
+-- keep the text (names, links, footnotes, ...) of cells that merely carry
+-- a small inline flag beside their real content. Exposed for testing.
 function M.stripImageCellsInBlock(block)
     local out = {}
     local pos = 1
@@ -237,18 +393,36 @@ function M.stripImageCellsInBlock(block)
         end
         local open_tag = block:sub(open_start, open_end)
         local cell_class = (open_tag:match([[class%s*=%s*"([^"]*)"]]) or ""):lower()
-        local content = block:sub(open_end + 1, close_start - 1):lower()
-        local has_media = content:find("<img", 1, true)
-            or content:find("<video", 1, true)
-            or content:find("<audio", 1, true)
-            or content:find("<figure", 1, true)
-            or content:find("<mapframe", 1, true)
-            or content:find('typeof="mw:file', 1, true)
-        if has_media or cell_class:find("infobox-image", 1, true) or cell_class:find("infobox-caption", 1, true) then
+        local content = block:sub(open_end + 1, close_start - 1)
+
+        -- Remove any inline icon bubbles first (flags, surrender/WIA glyphs,
+        -- ranking arrows): this drops the icons next to a name / number but
+        -- keeps the surrounding text, unlike genuine media cells below.
+        local stripped = M.removeInlineIcons(content)
+
+        -- A cell that (still) holds a genuine image element, or that is an
+        -- explicit infobox-image/infobox-caption cell, is a real media
+        -- cell: drop it whole (image and its caption together, as before).
+        local drop_cell = cell_class:find("infobox-image", 1, true)
+            or cell_class:find("infobox-caption", 1, true)
+            or M.cellHasMedia(stripped:lower())
+
+        if drop_cell then
             -- Media-bearing cell (image + any caption): drop the whole cell.
             table.insert(out, block:sub(pos, open_start - 1))
         else
-            table.insert(out, block:sub(pos, close_end))
+            -- The cell now holds only text (the flag icons are gone). If
+            -- that left just a gap (an icon-only row), drop it too; keep
+            -- the cell with its text otherwise.
+            local plain = stripped:gsub("<[^>]*>", ""):gsub("&[^;]+;", ""):gsub("%s", "")
+            if plain == "" then
+                table.insert(out, block:sub(pos, open_start - 1))
+            else
+                table.insert(out, block:sub(pos, open_start - 1))
+                table.insert(out, open_tag)
+                table.insert(out, stripped)
+                table.insert(out, block:sub(close_start, close_end))
+            end
         end
         pos = close_end + 1
     end

@@ -41,10 +41,12 @@ Full article EPUB builder
 -- media's File: description page -- generated on the fly and embedded in
 -- the EPUB, so nothing is ever downloaded. See qrimage.lua.
 --
--- A kept infobox keeps only its text data: its media cells (images *and*
--- captions) are dropped by htmlclean.stripImageCells before the QR pass,
--- so no QR codes appear inside the box either (see the comment around
--- the stripImageCells call below).
+-- A kept infobox keeps its text data and drops its images: genuine
+-- media cells (lead portraits, maps, emblems, ... ) are removed outright by
+-- htmlclean.stripImageCells before the QR pass (so no QR codes appear
+-- inside the box), while the small inline flags next to a combatant's /
+-- commander's name are removed and the name/link/footnote text is kept.
+-- See the comment around the stripImageCells call below.
 --
 -- See the detailed comment in the original main.lua for full rationale.
 function M.buildEpub(epub_path, title, lang, callback)
@@ -158,13 +160,14 @@ function M.buildEpub(epub_path, title, lang, callback)
             html = htmlclean.cleanElementClasses(html, "table", { "wikitable" }, { "floatleft", "floatright" }, forceFullWidthStyle)
             if infobox_full_width then
                 html = htmlclean.cleanElementClasses(html, "table", { "infobox" }, { "floatleft", "floatright" }, forceFullWidthStyle)
-                -- A kept infobox shows its *text* data only: drop every
-                -- media-bearing cell (lead portrait, maps, emblem/symbol
-                -- stacks, ...) together with its caption text. QR codes
-                -- would clutter the box and their captions fight the
-                -- single-column layout -- see htmlclean.stripImageCells.
-                -- (Must run before replaceImagesWithQr below, so no QR
-                -- placeholder is ever generated inside the infobox.)
+                -- A kept infobox keeps its text data and drops images: genuine media
+                -- cells (lead portrait, maps, emblem/symbol stacks, ...)
+                -- are dropped along with their caption text, but the small
+                -- inline flags next to a combatant's / commander's name are
+                -- removed and the name/link/footnote text is kept, so battle
+                -- / war infoboxes keep the named entities they list. QR
+                -- codes would clutter the box -- see htmlclean.stripImageCells
+                -- (must run before the QR pass so no placeholder is created).
                 html = htmlclean.stripImageCells(html)
                 -- Center the box's full-width rows (title, section headers,
                 -- office-tenure/term rows, footer) like Wikipedia does: the

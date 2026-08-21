@@ -14,8 +14,9 @@ transcoded player for video/audio instead of a huge original download).
 Nothing is ever fetched; a tiny
 black-and-white PNG is embedded per figure.
 
-Media inside infobox tables is stripped entirely (images *and* captions),
-so kept infoboxes show text only; prose icons inside
+Media inside infobox tables is stripped (genuine image cells dropped, and
+inline flag icons removed while keeping the name text they sit beside), so
+kept infoboxes show text only; prose icons inside
 <span typeof="mw:File"> remain untouched.
 
 The QR encoding itself is KOReader's own pure-Lua implementation
