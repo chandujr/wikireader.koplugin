@@ -285,6 +285,17 @@ function WikiReader:addToMainMenu(menu_items)
                         help_text = _("Keep the summary tables (infoboxes) that appear at the top of many articles. Their images are still removed for a cleaner reading view."),
                     },
                     {
+                        text = _("Disable hyperlinks"),
+                        keep_menu_open = true,
+                        checked_func = function()
+                            return G_reader_settings:isTrue("wikireader_disable_hyperlinks")
+                        end,
+                        callback = function()
+                            G_reader_settings:flipNilOrFalse("wikireader_disable_hyperlinks")
+                        end,
+                        help_text = _("Remove links to other Wikipedia articles from downloaded EPUBs, keeping their text. Links to references, footnotes and external sites are kept. Applies to newly fetched articles; clear the cache to re-download existing ones."),
+                    },
+                    {
                         text = _("Gestures"),
                         keep_menu_open = true,
                         callback = function()

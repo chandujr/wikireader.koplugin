@@ -70,6 +70,71 @@ function M.stripElementsByClass(html, tag, class_patterns)
 end
 
 --[[-------------------------------------------------------------------------
+Wikipedia article hyperlink removal ("Disable hyperlinks" option)
+--]]
+
+-- Returns true when an <a ...> open tag's href points at another Wikipedia
+-- article (in this or any other language edition), or at a nonexistent one.
+-- The raw Parsoid HTML handed to us by action=parse uses:
+--   <a href="/wiki/Some_Title">          internal article links
+--   <a href="https://xx.wikipedia.org/wiki/...">  cross-edition links
+--   <a href="/w/index.php?title=X&action=edit&redlink=1"> dead (red) links
+-- Everything else -- <a href="#cite_note-..."> reference/footnote anchors,
+-- and genuine external http(s) links -- is deliberately NOT matched.
+local function anchorIsWikiArticleLink(open_tag)
+    local href = open_tag:match([[href%s*=%s*"([^"]*)"]])
+    if not href then
+        return false
+    end
+    if href:sub(1, 6) == "/wiki/" then
+        return true
+    end
+    if href:find("^https?://%w+%.wikipedia%.org/wiki/") then
+        return true
+    end
+    if href:find("redlink=1", 1, true) then
+        return true
+    end
+    return false
+end
+
+-- Unwraps every <a> whose href points at another Wikipedia article,
+-- keeping the anchor's inner content (the visible text, footnote marks,
+-- images, ...) while dropping the clickable link itself. Reference and
+-- footnote anchors (<a href="#cite_note-...">) and real external links
+-- are left untouched. Valid HTML never nests <a> elements, but the same
+-- depth walk used elsewhere guards against malformed markup anyway.
+function M.stripArticleLinks(html)
+    local out = {}
+    local pos = 1
+    while true do
+        local open_start, open_end = html:find("<a%s[^>]*>", pos)
+        if not open_start then
+            table.insert(out, html:sub(pos))
+            break
+        end
+        if anchorIsWikiArticleLink(html:sub(open_start, open_end)) then
+            local close_start, close_end = wutil.findMatchingClose(html, "a", open_end)
+            if not close_end then
+                -- Unclosed anchor: drop just the open tag, keep what follows.
+                table.insert(out, html:sub(pos, open_start - 1))
+                pos = open_end + 1
+            else
+                -- Unwrap: emit everything except the <a ...> ... </a> tags.
+                table.insert(out, html:sub(pos, open_start - 1))
+                table.insert(out, html:sub(open_end + 1, close_start - 1))
+                pos = close_end + 1
+            end
+        else
+            -- Kept anchor: advance only past its open tag.
+            table.insert(out, html:sub(pos, open_end))
+            pos = open_end + 1
+        end
+    end
+    return table.concat(out)
+end
+
+--[[-------------------------------------------------------------------------
 Element class cleaning (keep element, remove/modify classes)
 --]]
 

@@ -190,6 +190,13 @@ function M.buildEpub(epub_path, title, lang, callback)
             html = htmlclean.cleanElementClasses(html, "div", { "quotebox", "pullquote" }, { "floatleft", "floatright" }, true)
             html = htmlclean.stripElementsByClass(html, "span", { "geo-inline-hidden" })
             html = htmlclean.mergeQuoteCites(html)
+            -- "Disable hyperlinks": unwrap every <a> pointing at another
+            -- Wikipedia article (keeping its text); reference/footnote
+            -- anchors and genuine external links stay clickable. Runs before
+            -- the QR pass so media description links are gone by then.
+            if G_reader_settings:isTrue("wikireader_disable_hyperlinks") then
+                html = htmlclean.stripArticleLinks(html)
+            end
             -- Media figures: in QR mode every media figure is kept, and
             -- qrimage turns each embedded <img>/<video>/<audio> into a QR
             -- code pointing at its File: description page (see qrimage.lua). Otherwise, original
