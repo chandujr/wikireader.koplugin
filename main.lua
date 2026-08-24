@@ -293,7 +293,7 @@ function WikiReader:addToMainMenu(menu_items)
                         callback = function()
                             G_reader_settings:flipNilOrFalse("wikireader_disable_hyperlinks")
                         end,
-                        help_text = _("Remove links to other Wikipedia articles from downloaded EPUBs, keeping their text. Links to references, footnotes and external sites are kept. Applies to newly fetched articles; clear the cache to re-download existing ones."),
+                        help_text = _("Remove links to other Wikipedia articles from downloaded EPUBs, keeping their text. Links to references, footnotes and external sites are kept."),
                     },
                     {
                         text = _("Gestures"),
@@ -313,6 +313,17 @@ function WikiReader:addToMainMenu(menu_items)
                         help_text = _("Show plugin name, description and version."),
                     },
                 },
+            },
+            {
+                text = _("Refetch current article"),
+                keep_menu_open = true,
+                enabled_func = function()
+                    return nav_current ~= nil and nav_current.title ~= nil
+                end,
+                callback = function()
+                    self:refetchCurrentArticle()
+                end,
+                help_text = _("Delete the cached copy of the article you are reading and download it again, so the media, infobox and hyperlink settings in \"Settings\" also apply to it. Your reading position is kept."),
             },
             {
                 text = _("Clear cache"),
@@ -676,6 +687,62 @@ function WikiReader:openArticleInPlace(title, lang)
         end
         nav_current = { title = resolved_title or title, lang = lang or self.lang, path = epub_path }
         self.ui:switchDocument(epub_path)
+    end)
+end
+
+-- Delete the cached copy of the article currently being read and download
+-- it again with the settings as they are right now. Toggling "Show media as
+-- QR codes", "Show infoboxes" or "Disable hyperlinks" only affects future
+-- fetches -- the already-built EPUB keeps whatever it was built with -- so
+-- this is how those toggles get applied to an article that's already open.
+function WikiReader:refetchCurrentArticle()
+    if not nav_current or not nav_current.title then
+        UIManager:show(InfoMessage:new{ text = _("No article is currently open.") })
+        return
+    end
+
+    local title = nav_current.title
+    local lang = nav_current.lang or self.lang
+
+    -- Remove only the cached EPUB itself, deliberately keeping its
+    -- .sdr sidecar: the reading position stored there is restored by
+    -- percentage on reopen, so the user keeps their place in the
+    -- rebuilt article (bookmarks/highlights survive as well). A plain
+    -- os.remove() is enough to stop the rebuild below being
+    -- short-circuited by a cache hit.
+    local cached_path = cache.getCachePath(title, lang)
+    os.remove(cached_path)
+    -- The file on disk may be keyed by the resolved title (different
+    -- casing) rather than the title we have here; remove that one too.
+    if nav_current.path and nav_current.path ~= cached_path
+        and lfs.attributes(nav_current.path) then
+        os.remove(nav_current.path)
+    end
+
+    NetworkMgr:runWhenOnline(function()
+        local info = InfoMessage:new{ text = _("Re-fetching current article…") }
+        UIManager:show(info)
+
+        local epub_path = cache.getCachePath(title, lang)
+        epub.buildEpub(epub_path, title, lang, function(success, used_path, resolved_title)
+            UIManager:close(info)
+            if not success then
+                UIManager:show(InfoMessage:new{
+                    text = _("Couldn't re-download that article. Check your connection and try again."),
+                })
+                return
+            end
+            cache.pruneCache()
+
+            used_path = used_path or epub_path
+            nav_current = { title = resolved_title or title, lang = lang, path = used_path }
+            if self.ui and self.ui.switchDocument then
+                self.ui:switchDocument(used_path)
+            else
+                local ReaderUI = require("apps/reader/readerui")
+                ReaderUI:showReader(used_path)
+            end
+        end)
     end)
 end
 
