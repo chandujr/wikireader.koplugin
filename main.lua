@@ -199,6 +199,61 @@ function WikiReader:init()
     end
 end
 
+-- KOReader can open one of our cached article EPUBs directly -- most
+-- commonly via the "open last document" restore at startup, but also when
+-- the file is picked from the file manager or file history. In that case
+-- no WikiReader code path ran to record what is being read, so nav_current
+-- stays nil and menu actions like "Refetch current article" are greyed out.
+--
+-- ReaderReady fires after any document has been fully loaded, and our
+-- cached EPUBs are self-describing: they only ever live in the plugin's
+-- cache directory, and their metadata carries the exact Wikipedia title
+-- (dc:title, written by createEpub()) and language edition (dc:language).
+-- So we recognise our own files here and rebuild nav_current from that,
+-- making refetch/save/share/back-history work as if the article had been
+-- opened through the plugin in the first place. Reading position is not
+-- touched: KOReader restores it from the .sdr sidecar on its own.
+function WikiReader:onReaderReady()
+    local file = self.ui.document and self.ui.document.file
+    if not file then return end
+
+    -- Only react to documents inside our cache directory; for anything
+    -- else (a regular book opened after an article) drop the stale
+    -- reference so the menu doesn't offer actions on a book that isn't
+    -- a Wikipedia article.
+    local cache_dir = cache.getCacheDir()
+    if file:sub(1, #cache_dir + 1) ~= cache_dir .. "/" then
+        nav_current = nil
+        return
+    end
+
+    local filename = file:match("([^/]+)$")
+    -- Non-article helper pages built by this plugin (search results,
+    -- featured-article lists, category listings): there is no single
+    -- article behind them to refetch, so leave nav_current unset for them.
+    if filename:match("^__search__") or filename:match("^__featured__")
+        or filename:match("^__category__") then
+        return
+    end
+
+    -- Cache filenames are "<lang> - <title>.epub"; use them as fallback
+    -- for the (rarer) cases where the EPUB metadata is missing a field.
+    local fn_lang, fn_title = filename:match("^(.-) %- (.+)%.epub$")
+    local props = self.ui.document:getProps() or {}
+    local title = props.title
+    if not title or title == "" then
+        title = fn_title
+    end
+    local lang = props.language
+    if not lang or lang == "" then
+        lang = fn_lang
+    end
+
+    if title and title ~= "" then
+        nav_current = { title = title, lang = lang or self.lang, path = file }
+    end
+end
+
 function WikiReader:addToMainMenu(menu_items)
     menu_items.wikireader = {
         text = _("WikiReader"),
