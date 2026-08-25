@@ -385,14 +385,14 @@ function WikiReader:addToMainMenu(menu_items)
                 keep_menu_open = true,
                 callback = function()
                     UIManager:show(ConfirmBox:new{
-                        text = _("Delete all cached WikiReader articles?"),
+                        text = _("Delete all cached WikiReader articles?\nIf an article is currently open, it will be closed."),
                         ok_text = _("Delete"),
                         ok_callback = function()
                             self:clearCache()
                         end,
                     })
                 end,
-                help_text = _("Remove all cached WikiReader EPUB files and their reading progress."),
+                help_text = _("Remove all cached WikiReader EPUB files and their reading progress. Closes the current article if one is open, so no leftover files remain."),
             },
             {
                 text = _("Save current article"),
@@ -1030,6 +1030,51 @@ end
 function WikiReader:clearCache()
     local dir = cache.getCacheDir()
     local count = 0
+    local deleted_epubs = {}
+
+    -- If one of our own articles is currently open, close it first.
+    -- KOReader flushes the .sdr sidecar to disk when a book is closed
+    -- (ReaderUI:onClose -> saveSettings -> doc_settings:flush), so deleting
+    -- everything while the article was still open would leave behind a
+    -- freshly regenerated orphaned sidecar folder once the user closed it.
+    -- Closing here means the sidecar exists and gets deleted along with
+    -- everything else; the user is returned to the FileManager with a clean
+    -- cache. Only do this for articles living in our cache dir -- never
+    -- close a regular book the user might be reading.
+    if self.ui and self.ui.document and self.ui.document.file then
+        local file = self.ui.document.file
+        if file == dir or file:sub(1, #dir + 1) == dir .. "/" then
+            nav_history = {}
+            nav_current = nil
+            -- Close any open menu first: it lives on the UIManager window
+            -- stack independently of the reader, so closing the reader
+            -- alone would leave a stale menu behind whose callbacks point
+            -- at a torn-down ReaderUI -- tapping it crashes KOReader.
+            -- This mirrors what stock KOReader does before ui:onClose()
+            -- (e.g. ReaderMenu's own "File manager" item).
+            if self.ui.menu and self.ui.menu.onCloseReaderMenu then
+                self.ui.menu:onCloseReaderMenu()
+            end
+            self.ui:onClose()
+            -- Make sure something is left on screen: if KOReader was started
+            -- directly into the document (no FileManager underneath), closing
+            -- the reader empties the UIManager window stack entirely, and
+            -- KOReader exits instead of "returning" anywhere. Opening the
+            -- FileManager explicitly avoids that -- it creates a fresh
+            -- instance if none exists.
+            --
+            -- Open it on the user's home folder rather than our cache dir:
+            -- the cache dir's (stale, unrefreshed) listing would still show
+            -- the just-deleted article until something forces a rescan.
+            local FileManager = require("apps/filemanager/filemanager")
+            local home_dir = require("apps/filemanager/filemanagerutil").getHomeFolder()
+            if not FileManager.instance then
+                FileManager:showFiles(home_dir)
+            else
+                FileManager.instance.file_chooser:changeToPath(home_dir)
+            end
+        end
+    end
 
     -- First pass: remove all files (use removeCachedFile for epubs so
     -- DocSettings.updateLocation can clean up the associated .sdr dir).
@@ -1040,6 +1085,7 @@ function WikiReader:clearCache()
             if attr and attr.mode == "file" then
                 if name:match("%.epub$") then
                     cache.removeCachedFile(path)
+                    deleted_epubs[path] = true
                 else
                     os.remove(path)
                 end
@@ -1069,6 +1115,22 @@ function WikiReader:clearCache()
                 lfs.rmdir(path)
             end
         end
+    end
+
+    -- Drop the deleted articles from KOReader's reading history, exactly
+    -- like deleting the files from the FileManager would. Without this,
+    -- history entries (and "lastfile") keep pointing at now-deleted epubs:
+    -- KOReader would then show a "Cannot open last file" popup on every
+    -- startup when it tries to restore the last-read book. removeItems()
+    -- dims/removes the entries per the user's history settings, and
+    -- ensureLastFile() recomputes "lastfile" from the remaining existing
+    -- books (or nils it if there are none), which suppresses the popup.
+    if next(deleted_epubs) then
+        local ReadHistory = require("readhistory")
+        ReadHistory:removeItems(deleted_epubs)
+        -- removeItems only calls this in some settings configurations;
+        -- call it unconditionally so "lastfile" is always fixed up.
+        ReadHistory:ensureLastFile()
     end
 
     UIManager:show(InfoMessage:new{
