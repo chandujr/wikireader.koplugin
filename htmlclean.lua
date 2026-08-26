@@ -245,6 +245,28 @@ Media removal inside kept infobox tables and inline flags
 --      span, even one with a `mw-file-description` link -- is removed and
 --      the text is kept.
 --
+--   3. Conservation-status badge banners (Speciesbox/Taxobox "Conservation
+--      status" rows): the wide colored Status_*.svg bars (IUCN/NatureServe
+--      risk levels) rendered by {{Conservation status}}. Each carries the
+--      same information as the plain text link directly beneath it
+--      ("Endangered (IUCN 3.1)", "Vulnerable (NatureServe)", ...), so the
+--      badge image is removed and the text row is rescued -- without this,
+--      the whole row would fall to the media-cell rule above and only
+--      text-only systems (CITES) would remain.
+--
+--   4. Orphaned standalone captions (Speciesbox/Autotaxobox image rows):
+--      unlike war/battle infoboxes, which render an image and its caption
+--      *inside one cell*, Module:Taxobox emits them as separate full-width
+--      rows -- an unclassed media <td> followed by an unclassed caption
+--      <td> styled "text-align: center; font-size: 88%" (e.g. Blue whale:
+--      "Adult blue whale", "Size compared to an average human"). Dropping
+--      the media cell strands such a caption as ordinary-looking text, so
+--      a text-only cell that directly follows a dropped media cell and
+--      matches that caption styling is dropped with it. See
+--      isCaptionOnlyCell (the signature appears in no non-biology kept
+--      infobox, and the follower check keeps any other use of centered
+--      small-text cells intact).
+--
 -- Nesting is handled the same way as stripElementsByAttr: a nested table
 -- inside a cell contributes its own <td> opens/closes, and the depth walk
 -- over <td>/</td> still finds the matching close of the outer cell, so
@@ -318,6 +340,8 @@ end
 -- Icon bubbles never nest another flagicon, but their inner markup can
 -- contain other spans (mw-image-border / mw:File) and an optional <a>, so
 -- the matching close span is found by the same depth walk used elsewhere.
+-- Conservation-status badge banners (see isStatusBadgeImg) are removed by
+-- the same machinery even though they render large.
 -- Exposed for testing.
 function M.removeInlineIcons(content)
     local out = {}
@@ -348,7 +372,8 @@ function M.removeInlineIcons(content)
             if close_end then
                 local inner = content:sub(open_end + 1, close_end - 1)
                 local imgw = M.imgDisplayWidth(inner)
-                iconish = imgw ~= nil and imgw <= 24
+                iconish = (imgw ~= nil and imgw <= 24)
+                    or M.isStatusBadgeImg(inner)
             else
                 -- Unclosed mw:File span: safest to treat as an icon and drop
                 -- just its open tag, never swallowing following text.
@@ -402,6 +427,71 @@ function M.imgDisplayWidth(s)
     return tonumber(w)
 end
 
+-- Returns true if `s` holds a conservation-status badge banner: one of the
+-- wide colored "Status_*.svg" bars (IUCN / NatureServe risk levels, e.g.
+-- Status_iucn3.1_EN.svg, Status_TNC_G3.svg) that {{Conservation status}}
+-- puts above each status' text line in Speciesbox/Taxobox rows. Unlike
+-- ordinary figure media these carry no unique data -- the plain text link
+-- directly below them states the same status word-for-word -- so they can
+-- be dropped like inline icons while the text row is kept. Matched by the
+-- image path (all such badges live under .../wikipedia/commons/... with a
+-- "Status_" file name), not by size: they render wide (250px), so the
+-- <=24px inline-icon heuristic cannot catch them. Exposed for testing.
+function M.isStatusBadgeImg(s)
+    local src = s:lower():match('src%s*=%s*"([^"]*)"')
+    return src ~= nil and src:find("/status_", 1, true) ~= nil
+end
+
+-- True when the raw HTML `gap` between the previous cell's close and the
+-- next cell's open tag holds nothing but whitespace and row/table-section
+-- boundaries (<tr>, </tr>, <tbody>, </tbody>, <thead>/<tfoot>), i.e. the
+-- two cells are adjacent -- only a row border separates them. An opening
+-- or closing <th> is deliberately NOT crossed: a section-header row
+-- between the dropped image and a candidate cell breaks the caption
+-- relationship. Exposed for testing.
+function M.directlyFollowsCell(gap)
+    local bare = gap:gsub("</?t[rb][a-z]*[^<>]*>", ""):gsub("%s", "")
+    return bare == ""
+end
+
+-- Returns true if `open_tag` / `content` describe a Speciesbox-style
+-- standalone caption cell: the unclassed (or image-section-classed) <td>
+-- that Module:Taxobox puts in its own full-width row directly below an
+-- image row, e.g.
+--   <td colspan="2" style="text-align: center; font-size: 88%">…</td>
+--   <td colspan="2" class="image-section">…</td>   (newer rendering:
+--   same centered/88% look, moved from an inline style into TemplateStyles
+--   CSS -- see .biota-infobox td.image-section in Beringian wolf)
+-- All four conditions must hold:
+--   * full width: a colspan attribute (never fires on label/value cells),
+--   * caption styling: either the inline "centered text at a reduced font
+--     size (<100%)" style, or the class-based image-section variant,
+--   * no nested table inside (war infoboxes follow their image cell with
+--     a full-width cell wrapping the data table -- those must stay),
+--   * no media element left (a real image cell keeps its own caption).
+-- Matched by style/class, not by infobox-image/-caption classes, because
+-- Taxobox gives the caption cell none of those. This signature appears in
+-- no non-biology kept infobox. Exposed for testing.
+function M.isCaptionOnlyCell(open_tag, content)
+    open_tag = open_tag:lower()
+    if not open_tag:find("colspan") then
+        return false
+    end
+    local style = open_tag:match([[style%s*=%s*"([^"]*)"]]) or ""
+    local size = style:match("font%-size%s*:%s*(%d+)%%")
+    local styled_caption = size ~= nil
+        and tonumber(size) < 100
+        and style:find("text%-align%s*:%s*center") ~= nil
+    if not styled_caption and not open_tag:find("image%-section") then
+        return false
+    end
+    content = content:lower()
+    if content:find("<table", 1, true) or M.cellHasMedia(content) then
+        return false
+    end
+    return true
+end
+
 -- Returns true if a cell's content still holds a *genuine* media element
 -- once the small inline icons have been removed: a real large image (its
 -- <img> is rendered at more than 24px, i.e. a lead painting / header
@@ -445,6 +535,10 @@ end
 function M.stripImageCellsInBlock(block)
     local out = {}
     local pos = 1
+    -- Set when a genuine media cell has just been dropped (rule 1 above):
+    -- a Speciesbox-style standalone caption cell directly following it
+    -- describes exactly that lost image, so it is dropped with it.
+    local media_dropped = false
     while true do
         local open_start, open_end = block:find("<td[^>]*>", pos)
         if not open_start then
@@ -461,9 +555,38 @@ function M.stripImageCellsInBlock(block)
         local content = block:sub(open_end + 1, close_start - 1)
 
         -- Remove any inline icon bubbles first (flags, surrender/WIA glyphs,
-        -- ranking arrows): this drops the icons next to a name / number but
-        -- keeps the surrounding text, unlike genuine media cells below.
+        -- ranking arrows, conservation-status badges): this drops the icons
+        -- next to a name / number / status text but keeps the surrounding
+        -- text, unlike genuine media cells below.
         local stripped = M.removeInlineIcons(content)
+        -- Removing a leading icon bubble can strand the <br /> that separated
+        -- it from the following text (e.g. "<br />" left above "Endangered"
+        -- by a dropped conservation-status badge), possibly behind the bare
+        -- open wrapper tag (<div>/<span>/<p>/<center>) the cell begins with.
+        -- Drop ONLY those stranded breaks: bare wrapper tags are crossed but
+        -- kept, any other tag (media elements especially) stops the scan, so
+        -- genuine media cells are untouched.
+        if stripped ~= content then
+            local pos = 1
+            while true do
+                local _, ws_end = stripped:find("^%s*", pos)
+                pos = ws_end + 1
+                -- The () position capture is the second (and last) value
+                -- returned, right behind the captured tag text.
+                local inner, after_tag = stripped:match("^<([^<>]*)>()", pos)
+                if not inner then break end
+                local name = inner:lower():match("^%s*(%a+)")
+                if name == "br" then
+                    -- Drop just this break; rescan from the same position.
+                    stripped = stripped:sub(1, pos - 1) .. stripped:sub(after_tag)
+                elseif name == "div" or name == "span" or name == "p"
+                    or name == "center" then
+                    pos = after_tag -- cross the bare wrapper tag, keep it
+                else
+                    break -- anything else (media, close tags, text): stop
+                end
+            end
+        end
 
         -- A cell that (still) holds a genuine image element, or that is an
         -- explicit infobox-image/infobox-caption cell, is a real media
@@ -475,7 +598,16 @@ function M.stripImageCellsInBlock(block)
         if drop_cell then
             -- Media-bearing cell (image + any caption): drop the whole cell.
             table.insert(out, block:sub(pos, open_start - 1))
+            media_dropped = true
+        elseif media_dropped
+            and M.directlyFollowsCell(block:sub(pos, open_start - 1))
+            and M.isCaptionOnlyCell(open_tag, stripped) then
+            -- Orphaned standalone caption of the image cell just dropped
+            -- (Speciesbox/Autotaxobox image rows): gone with its image.
+            table.insert(out, block:sub(pos, open_start - 1))
+            media_dropped = false
         else
+            media_dropped = false
             -- The cell now holds only text (the flag icons are gone). If
             -- that left just a gap (an icon-only row), drop it too; keep
             -- the cell with its text otherwise.

@@ -149,6 +149,23 @@ function M.buildEpub(epub_path, title, lang, callback)
                 return style .. ';width:100%%'
             end
 
+            -- Kept infoboxes: like forceFullWidthStyle, but also drops any
+            -- inline font-size on the <table> itself. Speciesbox/Taxobox
+            -- tables carry "font-size: 100%" (they opt out of the live
+            -- site's 88% infobox shrink), which makes biology boxes render
+            -- at full body size while every other infobox sits at the base
+            -- stylesheet's table size (80%). Removing the override lets the
+            -- same table rule apply to them. This works even when the user
+            -- disables "Embedded Style" (the injected stylesheet.css and
+            -- its table.infobox !important rule are ignored then, while
+            -- inline styles may still apply). Runs BEFORE the %-escaping in
+            -- forceFullWidthStyle, on the raw style text.
+            local function infoboxFullWidthStyle(style)
+                style = style:gsub('font%-size%s*:%s*[^;]+;%s*', '')
+                style = style:gsub('font%-size%s*:%s*[^;]+', '')
+                return forceFullWidthStyle(style)
+            end
+
             -- Strip clutter tables: chronology/nav/sidebar/route-map boxes
             -- are always dropped; infoboxes only while full-width mode is
             -- off (the default).
@@ -157,16 +174,32 @@ function M.buildEpub(epub_path, title, lang, callback)
                 table.insert(stripped_tables, "infobox")
             end
             html = htmlclean.stripElementsByClass(html, "table", stripped_tables)
+
+            -- The geologic time-scale bar ("Temporal range") that biology
+            -- infoboxes (Speciesbox etc.) render via {{Geological range}} is
+            -- pure absolute-positioned CSS art: a fixed 250px-wide row of
+            -- colored era boxes (PreꞒ Ꞓ O S D C P T J K Pg N) topped by the
+            -- species' range marker. It carries id="Timeline-row" and holds
+            -- the whole drawing, marker included. It wrecks the reflowable
+            -- infobox layout, while the text summary it decorates ("Temporal
+            -- range: Early Pleistocene – Recent … Ma") sits just before it,
+            -- so dropping the bar keeps exactly the useful text. Matched by
+            -- id, not class (MediaWiki emits it as id="Timeline-row").
+            html = htmlclean.stripElementsByAttr(html, "div", "id", { "timeline-row" })
+
             html = htmlclean.cleanElementClasses(html, "table", { "wikitable" }, { "floatleft", "floatright" }, forceFullWidthStyle)
             if infobox_full_width then
-                html = htmlclean.cleanElementClasses(html, "table", { "infobox" }, { "floatleft", "floatright" }, forceFullWidthStyle)
+                html = htmlclean.cleanElementClasses(html, "table", { "infobox" }, { "floatleft", "floatright" }, infoboxFullWidthStyle)
                 -- A kept infobox keeps its text data and drops images: genuine media
                 -- cells (lead portrait, maps, emblem/symbol stacks, ...)
                 -- are dropped along with their caption text, but the small
                 -- inline flags next to a combatant's / commander's name are
-                -- removed and the name/link/footnote text is kept, so battle
-                -- / war infoboxes keep the named entities they list. QR
-                -- codes would clutter the box -- see htmlclean.stripImageCells
+                -- removed and the name/link/footnote text is kept (and the
+                -- wide conservation-status badge banners are removed while
+                -- the status text beneath them is kept), so battle / war
+                -- infoboxes keep the named entities they list and biology
+                -- infoboxes keep every "Conservation status" row's text.
+                -- QR codes would clutter the box -- see htmlclean.stripImageCells
                 -- (must run before the QR pass so no placeholder is created).
                 html = htmlclean.stripImageCells(html)
                 -- Center the box's full-width rows (title, section headers,
@@ -328,6 +361,23 @@ li.gallerybox {
 .infobox .infobox-full-data,
 .infobox .infobox-below {
   text-align: center;
+}
+
+/* Normalize the box text size across all infobox kinds. On the live site
+   MediaWiki:Common.css shrinks every infobox to 88%, but Speciesbox/Taxobox
+   opt OUT of that with their own "font-size: 100%" -- carried either inline
+   on the table ("infobox biota") or in an embedded TemplateStyles block
+   ("biota-infobox"). In the EPUB there is no site-wide 88% shrink at all:
+   KOReader's base stylesheet renders every table at 80% of body size,
+   which is what normal kept infoboxes display at -- so biology boxes alone
+   ended up noticeably larger than every other infobox. Force the table
+   back onto that same footing; !important is required because the inline
+   "font-size: 100%" would otherwise outrank any plain stylesheet rule.
+   Per-cell sizes (e.g. the 85% "Temporal range" line) still scale
+   relative to this, and nested tables keep the base stylesheet's
+   font-size:100%, i.e. they render at this same size once. */
+table.infobox {
+  font-size: 80% !important;
 }
 ]]
             end
