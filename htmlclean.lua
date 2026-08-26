@@ -897,4 +897,253 @@ function M.wrapSectionNotices(html)
     return table.concat(out)
 end
 
+--[[-------------------------------------------------------------------------
+Template:Multiple image restructuring
+--]]
+
+-- Wikipedia's {{Multiple image}} renders its images side-by-side with CSS
+-- flexbox (.trow { display:flex; flex-direction:row } in a TemplateStyles
+-- <style> block). crengine (KOReader's EPUB engine) has no flexbox, so in
+-- the reflowed EPUB every .trow/.tsingle falls back to its default block
+-- layout and the images stack into a single left-aligned column -- even
+-- though the box itself is a fixed narrow width (e.g. 492px) with plenty
+-- of room to its right. Real <table> markup, by contrast, IS first-class
+-- in crengine, so we rewrite the multi-image box into a table: the
+-- .thumbinner container becomes the <table>, each .trow a <tr>, each
+-- .tsingle a <td>, and the optional .theader / overall .thumbcaption
+-- rows become full-width cells. See M.restructureMultiImages.
+
+-- True when the space-separated `class` attribute value contains the
+-- exact token `token`.
+local function tokenInClass(cls, token)
+    for w in cls:gmatch("[^%s]+") do
+        if w == token then
+            return true
+        end
+    end
+    return false
+end
+
+-- Lowercased value of the tag's class attribute, or "".
+local function openTagClass(open_tag)
+    return (open_tag:match([[class%s*=%s*"([^"]*)"]]) or ""):lower()
+end
+
+-- Appends `prop` (e.g. "vertical-align:top") to the tag's style attribute,
+-- creating one if the tag has none. Uses a function replacement so any %
+-- inside the existing style value is never re-parsed as a gsub pattern.
+local function addStyleProp(tag, prop)
+    local style_attr = tag:match('style%s*=%s*"[^"]*"')
+    if style_attr then
+        local out = tag:gsub('(style%s*=%s*")([^"]*)(")', function(prefix, value, suffix)
+            if value == "" then
+                return prefix .. prop .. suffix
+            end
+            return prefix .. value .. ";" .. prop .. suffix
+        end)
+        return out
+    end
+    local out = tag:gsub('^(<[^%s>]+)', "%1 style=\"" .. prop .. "\"")
+    return out
+end
+
+-- Counts the cells of the widest .trow inside a multi-image box: the
+-- number of columns the table needs, i.e. the colspan for full-width rows
+-- (the .theader heading, the optional overall .thumbcaption).
+local function multiImageColumnCount(inner)
+    local max_cols = 1
+    local pos = 1
+    while true do
+        local o_start, o_end = inner:find('<div[^>]*>', pos)
+        if not o_start then break end
+        local cls = openTagClass(inner:sub(o_start, o_end))
+        local c_start = wutil.findMatchingClose(inner, "div", o_end)
+        if tokenInClass(cls, "trow") and c_start then
+            local n = 0
+            for _ in inner:sub(o_start, c_start):gmatch('class%s*=%s*"[^"]*tsingle[^"]*"') do
+                n = n + 1
+            end
+            if n > max_cols then max_cols = n end
+            pos = c_start + 1
+        elseif c_start then
+            pos = c_start + 1
+        else
+            break
+        end
+    end
+    return max_cols
+end
+
+-- Rewrites the inside of one <tr> (the content of a .trow div): every
+-- tsingle div becomes <td> (keeping its inline width), every theader div a
+-- full-width centered <td colspan=N>. Everything else -- the
+-- thumbimage/thumbcaption divs nested inside a tsingle, QR markers, links,
+-- text -- passes through untouched.
+local function multiImageTransformRow(content, n_cols)
+    local out = {}
+    local pos = 1
+    while true do
+        local o_start, o_end = content:find("<div[^>]*>", pos)
+        if not o_start then
+            table.insert(out, content:sub(pos))
+            break
+        end
+        table.insert(out, content:sub(pos, o_start - 1))
+        local open_tag = content:sub(o_start, o_end)
+        local cls = openTagClass(open_tag)
+        local c_start, c_end = wutil.findMatchingClose(content, "div", o_end)
+        if not c_start then
+            table.insert(out, content:sub(o_start))
+            break
+        end
+        local inner = content:sub(o_end + 1, c_start - 1)
+        if tokenInClass(cls, "tsingle") then
+            local td = open_tag:gsub("^<div([ >])", "<td%1")
+            table.insert(out, addStyleProp(td, "vertical-align:top"))
+            table.insert(out, inner)
+            table.insert(out, "</td>")
+        elseif tokenInClass(cls, "theader") then
+            local td_open = '<td colspan="' .. n_cols .. '"'
+            local cell_style = open_tag:match('style%s*=%s*"([^"]*)"')
+            if cell_style and cell_style ~= "" then
+                td_open = td_open .. ' style="' .. cell_style .. ";text-align:center;font-weight:bold\""
+            else
+                td_open = td_open .. ' style="text-align:center;font-weight:bold"'
+            end
+            table.insert(out, td_open .. ">")
+            table.insert(out, inner)
+            table.insert(out, "</td>")
+        elseif tokenInClass(cls, "thumbcaption") then
+            -- The box's overall caption: Wikipedia emits it inside its own
+            -- .trow div (a row whose only child is the caption). Span the
+            -- whole row so it reads as one centered line under the images
+            -- (a bare <div> inside a <tr> would be invalid HTML).
+            local td_open = '<td colspan="' .. n_cols .. '"'
+            local cell_style = open_tag:match('style%s*=%s*"([^"]*)"')
+            if cell_style and cell_style ~= "" then
+                td_open = td_open .. ' style="' .. cell_style .. ";text-align:center\""
+            else
+                td_open = td_open .. ' style="text-align:center"'
+            end
+            table.insert(out, td_open .. ">")
+            table.insert(out, inner)
+            table.insert(out, "</td>")
+        else
+            -- Unknown div directly inside a row (shouldn't happen): keep intact.
+            table.insert(out, content:sub(o_start, c_end))
+        end
+        pos = c_end + 1
+    end
+    return table.concat(out)
+end
+
+-- Rewrites the content of a multi-image box's .thumbinner (now a <table>):
+-- each top-level .trow div becomes <tr>, the optional overall
+-- .thumbcaption becomes a full-width footer row, everything else passes
+-- through.
+local function multiImageTransformRows(inner, n_cols)
+    local out = {}
+    local pos = 1
+    while true do
+        local _, ws_end = inner:find("^%s*", pos)
+        pos = (ws_end or pos - 1) + 1
+        local o_start, o_end = inner:find("<div[^>]*>", pos)
+        if not o_start then
+            table.insert(out, inner:sub(pos))
+            break
+        end
+        table.insert(out, inner:sub(pos, o_start - 1))
+        local cls = openTagClass(inner:sub(o_start, o_end))
+        local c_start, c_end = wutil.findMatchingClose(inner, "div", o_end)
+        if not c_start then
+            table.insert(out, inner:sub(o_start))
+            break
+        end
+        local content = inner:sub(o_end + 1, c_start - 1)
+        if tokenInClass(cls, "trow") then
+            table.insert(out, "<tr>")
+            table.insert(out, multiImageTransformRow(content, n_cols))
+            table.insert(out, "</tr>")
+        elseif tokenInClass(cls, "thumbcaption") then
+            -- Overall caption of the whole box: a full-width footer row.
+            table.insert(out, '<tr><td colspan="' .. n_cols .. '">')
+            table.insert(out, content)
+            table.insert(out, "</td></tr>")
+        else
+            table.insert(out, inner:sub(o_start, c_end))
+        end
+        pos = c_end + 1
+    end
+    return table.concat(out)
+end
+
+-- Rewrites one <div class="thumb tmulti ...">...</div> block into the same
+-- wrapper div holding a <table> built from its .thumbinner content. Returns
+-- the block unchanged (but harmless) if the structure isn't what we expect.
+local function multiImageToTable(wrapper)
+    local o_start, o_end = wrapper:find("^<div[^>]*>")
+    if not o_start then
+        return wrapper
+    end
+    local wrapper_open = wrapper:sub(o_start, o_end)
+    -- The .thumbinner container div directly follows the wrapper open tag
+    -- (only whitespace in between).
+    local ti_start, ti_end = wrapper:find("<div[^>]*>", o_end)
+    if not ti_start
+        or not tokenInClass(openTagClass(wrapper:sub(ti_start, ti_end)), "thumbinner") then
+        return wrapper
+    end
+    local ti_close_start, ti_close_end = wutil.findMatchingClose(wrapper, "div", ti_end)
+    if not ti_close_start then
+        return wrapper
+    end
+    local ti_open = wrapper:sub(ti_start, ti_end)
+    local table_open = ti_open:gsub("^<div([ >])", "<table%1")
+        :gsub([[class%s*=%s*"[^"]*"]], 'class="wikireader-tmulti"', 1)
+    local inner = wrapper:sub(ti_end + 1, ti_close_start - 1)
+    local n_cols = multiImageColumnCount(inner)
+    local rows = multiImageTransformRows(inner, n_cols)
+    return wrapper_open
+        .. wrapper:sub(o_end + 1, ti_start - 1)
+        .. table_open
+        .. rows
+        .. "</table>"
+        .. wrapper:sub(ti_close_end + 1)
+end
+
+-- Rewrites every {{Multiple image}} box in the article HTML into a <table>
+-- (see the module comment above): crengine cannot do the template's flexbox
+-- layout, so its images would otherwise stack into a single left-aligned
+-- column regardless of how much screen width is available. Recognised by
+-- the container div's "tmulti" class token. Returns the HTML unchanged for
+-- any box with an unexpected structure, so it degrades gracefully.
+function M.restructureMultiImages(html)
+    local out = {}
+    local pos = 1
+    while true do
+        local o_start, o_end = html:find("<div[^>]*>", pos)
+        if not o_start then
+            table.insert(out, html:sub(pos))
+            break
+        end
+        local open_tag = html:sub(o_start, o_end)
+        local cls = openTagClass(open_tag)
+        if tokenInClass(cls, "tmulti") then
+            local c_start, c_end = wutil.findMatchingClose(html, "div", o_end)
+            if c_start then
+                table.insert(out, html:sub(pos, o_start - 1))
+                table.insert(out, multiImageToTable(html:sub(o_start, c_end)))
+                pos = c_end + 1
+            else
+                table.insert(out, html:sub(pos, o_end))
+                pos = o_end + 1
+            end
+        else
+            table.insert(out, html:sub(pos, o_end))
+            pos = o_end + 1
+        end
+    end
+    return table.concat(out)
+end
+
 return M

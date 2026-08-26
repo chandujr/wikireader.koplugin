@@ -249,6 +249,14 @@ function M.buildEpub(epub_path, title, lang, callback)
             -- Archiver hooks below.
             if qr_enabled then
                 html = qrimage.replaceImagesWithQr(html, qr_images, qr_size, lang)
+                -- {{Multiple image}} boxes: their layouts use CSS flexbox
+                -- (TemplateStyles .trow { display:flex }) which crengine
+                -- does not support, so their images would stack into one
+                -- left-aligned column despite plenty of free width beside
+                -- them. Rewrite each box into a native <table> (the same
+                -- side-by-side result crengine handles natively). No-op
+                -- when the box was already stripped (no-QR mode).
+                html = htmlclean.restructureMultiImages(html)
             end
 
             -- Extract hatnotes and wrap section notices
@@ -339,6 +347,23 @@ figure[typeof~='mw:File/Frame'] {
 }
 li.gallerybox {
     padding-top: 0.5em !important;
+}
+
+/* {{Multiple image}} boxes, rewritten into a native <table> by
+   htmlclean.restructureMultiImages (crengine cannot do the template's
+   flexbox layout). Mirror the figure-box styling of the base stylesheet:
+   dotted border, matching margins, no page split. The template's inline
+   width (e.g. 492px) is kept, but capped at the content width so very
+   wide boxes (e.g. 792px stamp sheets) never overflow the page -- the
+   cells then shrink proportionally. */
+table.wikireader-tmulti {
+    border: dotted 1px black;
+    margin: 0.5em 2.5em 0.5em 2.5em;
+    padding: 0 0.5em 0 0.5em;
+    text-align: center;
+    font-size: 90%;
+    page-break-inside: avoid;
+    max-width: 100% !important;
 }
 ]]
             end
