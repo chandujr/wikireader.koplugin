@@ -4,19 +4,19 @@
 
 local M = {}
 
--- Module-level lookup: section_index -> section_title, populated when the
--- category tree is built and used by the link handler to navigate the tree.
+-- section_index -> section_title, populated by fillLookup() and used by
+-- the link handler to navigate the tree.
 M.category_section_titles = {}
--- The full tree, stored so fetchFeaturedCategoryArticles can check whether
--- a section has children (and build a subcategory EPUB instead of fetching
+-- The full tree; fetchFeaturedCategoryArticles checks whether a section
+-- has children (and then builds a subcategory EPUB instead of fetching
 -- articles directly).
 M.category_tree = {}
--- Session cache for section links: section_index -> { titles = { "Article1", ... } }
+-- Session cache: section_index -> { titles = { "Article1", ... } }
 M.section_links_cache = {}
 
--- Fetch and build the category tree from the flat sections list returned
--- by the API. Each node has: title, section_index, children[].
--- The toplevel nodes are returned.
+-- Build the category tree from the flat sections list returned by the
+-- API; each node has title, section_index, children[]. Returns the
+-- toplevel nodes.
 function M.buildCategoryTree(sections)
     local root = { title = "root", toclevel = 0, children = {} }
     local stack = { root }
@@ -38,7 +38,6 @@ function M.buildCategoryTree(sections)
     return root.children
 end
 
--- Populate the module-level lookup table from a tree of nodes.
 function M.fillLookup(nodes)
     for _, node in ipairs(nodes) do
         M.category_section_titles[node.section_index] = node.title
@@ -46,7 +45,6 @@ function M.fillLookup(nodes)
     end
 end
 
--- Find a node in the tree by section index.
 function M.findNode(nodes, index)
     for _, node in ipairs(nodes) do
         if node.section_index == index then

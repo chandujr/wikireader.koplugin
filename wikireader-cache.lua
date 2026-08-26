@@ -10,8 +10,6 @@ local util = require("util")
 
 local M = {}
 
--- Article cache: up to CACHE_MAX_ENTRIES distinct articles, each valid
--- for CACHE_MAX_AGE_SECONDS.
 M.CACHE_MAX_ENTRIES = 10
 M.CACHE_MAX_AGE_SECONDS = 24 * 60 * 60 -- 1 day
 
@@ -53,7 +51,7 @@ function M.getFreshCachePath(title, lang)
         return nil
     end
     if os.time() - attr.modification > M.CACHE_MAX_AGE_SECONDS then
-        M.removeCachedFile(path) -- stale: clean it up
+        M.removeCachedFile(path)
         return nil
     end
     return path

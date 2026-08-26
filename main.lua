@@ -1,87 +1,30 @@
 --[[--
-WikiReader plugin for KOReader.
+WikiReader: read Wikipedia articles as formatted EPUBs inside KOReader.
 
-Adds a "WikiReader" entry to the main menu. From it you can search
-Wikipedia, open a featured article (today's, a date you pick, or a random
-one), set the Wikipedia language edition, and step back through articles
-you've read. Whatever you pick is fetched, converted to an EPUB (reusing
-the same conversion code KOReader's built-in Wikipedia lookup already
-uses), and opened straight into the reader -- headings and a table of
-contents all render normally, because it *is* a normal EPUB.
+Adds a "WikiReader" entry to the main menu and to the Search menu (right
+after the built-in Wikipedia history). From it you can search Wikipedia,
+open a featured article (today's, a picked date, or a random one), browse
+featured articles by category, set the Wikipedia language, and step back
+through articles you've read.
 
-Images are never downloaded -- an article can contain dozens of them,
-each several hundred KB, so fetching them all before reading would be
-slow. Instead, each media item (an image, or an audio/video figure) in
-the article is replaced by a small QR code pointing at that media's
-File: description page (generated on the fly and embedded in the EPUB):
-the box and its caption stay in the document, and scanning the QR code
-with a phone opens that page -- where the real media, its description
-and its attribution live. This can be turned off in the menu (Media
-boxes are then removed entirely, the old behaviour).
+Articles are fetched and converted to EPUBs with KOReader's own built-in
+Wikipedia conversion (ui/wikipedia.lua), so headings and the table of
+contents render normally. The last 10 distinct articles are cached on disk
+(for up to a day) as real EPUB files, which also backs the back-history.
 
-The last 10 distinct articles you've visited are kept as actual EPUB
-files (not re-downloaded every time you land on them again) for up to a
-day. Diving into an 11th distinct article evicts the oldest one; either
-way, anything older than a day is treated as stale and re-fetched. This
-cache is plain files on disk, tracked via their own timestamps rather
-than an in-memory list, so it survives closing and reopening KOReader --
-it's also what backs the back-history described below, so stepping back
-through articles you recently read is usually instant rather than a
-fresh download.
+Media (images, audio/video) is never downloaded. Instead each media box is
+replaced by a small QR code pointing at its File: description page, which
+you can scan with a phone (toggleable; off removes the boxes entirely).
 
-Tapping a Wikipedia link *inside* an already-open article is also hooked:
-it's added as a "Read as book" option on the reader's normal external-link
-dialog (replacing the stock "Read online" popup button), and follows the
-link the same way -- fetch (or serve from cache), open -- via
-switchDocument().
+Infoboxes, navboxes, sidebars, route-map tables, the short-description
+metadata, the category list, hatnotes/maintenance banners, and quote
+attribution are cleaned from the HTML before conversion. Cladograms and
+math formulas are rendered as text, since crengine can't draw their CSS/JS.
 
-Following links keeps a back-history too: each article you navigate away
-from (by tapping a link) is remembered, so "Wikipedia > Back to previous
-article" in the menu (or a gesture bound to the "Wikipedia: back to
-previous article" action in Settings > Gestures) steps back through
-ArticleC -> ArticleB -> ArticleA.
+Tapping a Wikipedia link inside an open article is hooked to "Read as book"
+(the plugin's link handler), and keeps a back-history.
 
-Infobox tables, campaignbox/navbox chronology boxes, route-map (RMbox)
-tables, sidebar boxes, side-boxes (this covers the
-{{listen}} audio-sample box among other supplementary side content --
-pointless in an epub regardless, since crengine has no audio playback
-capability at all), the shortdescription hidden metadata div, and the
-category list at the bottom of the page are stripped from the HTML
-before conversion -- they tend to make a mess of a single-column
-reflowable layout. Infoboxes specifically can be kept instead of
-stripped via the "Show infoboxes" option, which forces them to span
-the full page width (like wikitables) so they no longer crowd the
-body text; media inside them is then QR-coded like any other image
-box. Image boxes are kept but their images are replaced by
-QR codes of the image URLs (see above). The shortdescription is
-hidden metadata that would otherwise produce an empty bordered box when
-misidentified as a hatnote. This handles both of Wikipedia's current
-image markup conventions (it's mid-migration between the two as of
-2025-2026), not just one. Links to a specific section (...#Some_Section)
-are recognized the same as any other article link; the section anchor
-itself is dropped, though, so the article opens from the top rather than
-jumping straight to that heading.
-
-createEpub()'s own front matter is trimmed down to just the article
-title -- the "Wikipedia EN" subtitle and the "Saved on <date> / See
-online version for up-to-date content" paragraph are both dropped
-(meaningless here since nothing is kept around long enough to go stale).
-Any hatnotes (disambiguation/redirect notices) or maintenance banners
-sitting at the very start of the article are pulled into their own
-bordered box, with a divider right after them, so it's visually clear
-they're front matter rather than the article itself. Detecting these
-correctly, confirmed against real API responses from more than one
-article, means accounting for several things MediaWiki interleaves
-between the actual notice elements: the whole article body is wrapped in
-<div class="mw-parser-output">, which has to be looked inside rather than
-treated as "not a notice, stop here"; <style>/<link> tags used for CSS
-deduplication; and empty <p class="mw-empty-elt"> spacing artifacts --
-any of these sitting between two notices, unhandled, makes the scan stop
-after the first one and treat everything past it (remaining notices
-included) as regular article text.
-
-Install: copy this whole wikireader.koplugin folder into your
-koreader/plugins/ directory (on Kindle: .../koreader/plugins/), then
+Install: copy this wikireader.koplugin folder into koreader/plugins/ and
 restart KOReader.
 --]]--
 
@@ -102,7 +45,6 @@ local T = require("ffi/util").template
 local BD = require("ui/bidi")
 local _ = require("gettext")
 
--- WikiReader modules
 local cache = require("wikireader-cache")
 local categories = require("categories")
 local epub = require("epub")
@@ -110,19 +52,14 @@ local wutil = require("wikiutil")
 
 local WikiReader = WidgetContainer:extend{
     name = "wikireader",
-    -- Change this if you want a different edition of Wikipedia.
     lang = "en",
 }
 
--- Back-navigation history, kept at module level rather than as a `self.`
--- instance field. KOReader loads this plugin file once (via dofile) and
--- reuses the same class table for every UI it creates -- a fresh
--- WidgetContainer instance gets built each time you enter the FileManager
--- or the Reader. A `self.history` field would reset right when it
--- mattered most: the moment you go from "opened Wikipedia from the menu"
--- to "tapped a link inside the article". Module-level locals survive
--- that jump because they belong to the one-time dofile(), not to any
--- particular instance.
+-- Back-navigation history, kept at module level rather than as a
+-- `self.` field: KOReader builds a fresh WidgetContainer instance per UI
+-- (FileManager, Reader), so instance fields reset right when it matters --
+-- going from "opened from the menu" to "tapped a link inside the article".
+-- Module-level locals survive that jump.
 local nav_history = {}  -- stack of {title=.., lang=..}, oldest first
 local nav_current = nil -- {title=.., lang=..} of the article now open
 
@@ -138,18 +75,16 @@ function WikiReader:onDispatcherRegisterActions()
 end
 
 function WikiReader:init()
-    -- Restore the persisted Wikipedia language, if any (defaults to English).
     self.lang = G_reader_settings:readSetting("wikireader_lang") or "en"
     self:onDispatcherRegisterActions()
     self.ui.menu:registerToMainMenu(self)
-    -- Self-heal the cache directory on every plugin load
     cache.pruneCache()
 
     -- Hook the reader's "what do you want to do with this link" dialog so
     -- tapping a Wikipedia link inside an article reads the linked article
     -- the same way, instead of KOReader's small built-in lookup popup.
     if self.ui and self.ui.link then
-        -- Replace the stock "Read online" button (the clunky popup)
+        -- Replace the stock "Read online" button
         self.ui.link:removeFromExternalLinkDialog("40_wiki_lookup")
 
         self.ui.link:addToExternalLinkDialog("40_wikireader", function(this, link_url)
@@ -177,7 +112,6 @@ function WikiReader:init()
         local wiki_reader_self = self
         local original_onGoToExternalLink = self.ui.link.onGoToExternalLink
         self.ui.link.onGoToExternalLink = function(link_self, link_url)
-            -- Check for category navigation links first
             local cat_section_index = wutil.parseCategoryLink(link_url)
             if cat_section_index then
                 local cat_title = categories.category_section_titles[cat_section_index]
@@ -187,7 +121,6 @@ function WikiReader:init()
                 return true
             end
 
-            -- Then check for regular Wikipedia article links
             local lang, escaped_title = wutil.parseWikiLink(link_url)
             if lang and escaped_title and G_reader_settings:nilOrTrue("wikireader_skip_link_dialog") then
                 local title = socket_url.unescape(escaped_title)
@@ -199,28 +132,18 @@ function WikiReader:init()
     end
 end
 
--- KOReader can open one of our cached article EPUBs directly -- most
--- commonly via the "open last document" restore at startup, but also when
--- the file is picked from the file manager or file history. In that case
--- no WikiReader code path ran to record what is being read, so nav_current
--- stays nil and menu actions like "Refetch current article" are greyed out.
---
--- ReaderReady fires after any document has been fully loaded, and our
--- cached EPUBs are self-describing: they only ever live in the plugin's
--- cache directory, and their metadata carries the exact Wikipedia title
--- (dc:title, written by createEpub()) and language edition (dc:language).
--- So we recognise our own files here and rebuild nav_current from that,
--- making refetch/save/share/back-history work as if the article had been
--- opened through the plugin in the first place. Reading position is not
--- touched: KOReader restores it from the .sdr sidecar on its own.
+-- KOReader can open a cached article EPUB directly (last-document restore,
+-- file manager, history) without any WikiReader code path running, leaving
+-- nav_current nil and menu actions like "Refetch current article" greyed
+-- out. Our EPUBs are self-describing (dc:title/dc:language written by
+-- createEpub()), so recognise them here and rebuild nav_current. Reading
+-- position is untouched: KOReader restores it from the .sdr sidecar.
 function WikiReader:onReaderReady()
     local file = self.ui.document and self.ui.document.file
     if not file then return end
 
-    -- Only react to documents inside our cache directory; for anything
-    -- else (a regular book opened after an article) drop the stale
-    -- reference so the menu doesn't offer actions on a book that isn't
-    -- a Wikipedia article.
+    -- Ignore documents outside our cache dir; also drop the stale
+    -- reference when a regular book is opened afterwards.
     local cache_dir = cache.getCacheDir()
     if file:sub(1, #cache_dir + 1) ~= cache_dir .. "/" then
         nav_current = nil
@@ -228,16 +151,14 @@ function WikiReader:onReaderReady()
     end
 
     local filename = file:match("([^/]+)$")
-    -- Non-article helper pages built by this plugin (search results,
-    -- featured-article lists, category listings): there is no single
-    -- article behind them to refetch, so leave nav_current unset for them.
+    -- Helper pages (search results, featured/category lists) have no
+    -- single article behind them to refetch.
     if filename:match("^__search__") or filename:match("^__featured__")
         or filename:match("^__category__") then
         return
     end
 
-    -- Cache filenames are "<lang> - <title>.epub"; use them as fallback
-    -- for the (rarer) cases where the EPUB metadata is missing a field.
+    -- Filename fallback ("<lang> - <title>.epub") for missing metadata.
     local fn_lang, fn_title = filename:match("^(.-) %- (.+)%.epub$")
     local props = self.ui.document:getProps() or {}
     local title = props.title
@@ -450,7 +371,6 @@ function WikiReader:addToMainMenu(menu_items)
     insertAfterWikipHistory(require("ui/elements/reader_menu_order"))
 end
 
--- Search box (landing page).
 function WikiReader:showLanding()
     local dialog
     dialog = InputDialog:new{
@@ -484,7 +404,6 @@ function WikiReader:showLanding()
     dialog:onShowKeyboard()
 end
 
--- Date picker for a specific day's featured article.
 function WikiReader:showDatePicker()
     local DateTimeWidget = require("ui/widget/datetimewidget")
     local today = os.date("*t")
@@ -504,7 +423,6 @@ function WikiReader:showDatePicker()
     UIManager:show(date_widget)
 end
 
--- Random featured article.
 function WikiReader:openRandomFeaturedArticle()
     local time = require("ffi/util").gettime
     math.randomseed(math.floor(time() * 1000) % 2147483647)
@@ -518,8 +436,6 @@ function WikiReader:openRandomFeaturedArticle()
     self:openFeaturedArticle(wutil.formatApiDate(t.year, t.month, t.day))
 end
 
--- Show an About dialog with the plugin's name, description and version
--- (read from this plugin's _meta.lua file).
 function WikiReader:showAbout()
     local version = self.version and (" " .. self.version) or ""
     UIManager:show(InfoMessage:new{
@@ -527,7 +443,6 @@ function WikiReader:showAbout()
     })
 end
 
--- Language code dialog.
 function WikiReader:showLanguageDialog()
     local dialog
     dialog = InputDialog:new{
@@ -564,7 +479,6 @@ function WikiReader:showLanguageDialog()
     dialog:onShowKeyboard()
 end
 
--- Open featured article for a given date (defaults to today).
 function WikiReader:openFeaturedArticle(date)
     NetworkMgr:runWhenOnline(function()
         local info = InfoMessage:new{ text = _("Fetching featured article…") }
@@ -609,19 +523,16 @@ function WikiReader:openFeaturedArticle(date)
     end)
 end
 
--- Shared plumbing: serve `title` from the cache if we have a fresh-enough
--- copy; otherwise fetch it, cache it, and hand the resulting path to
--- `open_fn`. `open_fn` is called with (path, resolved_title) where
--- resolved_title is the actual article title from the API response
--- (preserving correct casing), or nil if the title couldn't be resolved.
+-- Serve `title` from cache if fresh; otherwise fetch and cache it, then
+-- call open_fn(path, resolved_title) with the casing-correct title from
+-- the API response (or nil if it couldn't be resolved).
 function WikiReader:fetchAndOpen(title, lang, open_fn)
     lang = lang or self.lang
 
     local cached_path = cache.getFreshCachePath(title, lang)
     if cached_path then
-        -- Cache hit: the cached file was already renamed to the resolved
-        -- title (by buildEpub on first fetch), so `title` already has the
-        -- correct casing, otherwise the cache would have been missed.
+        -- Cache hit: buildEpub() renamed the file to the resolved title on
+        -- first fetch, so `title` is already casing-correct.
         open_fn(cached_path, title)
         return
     end
@@ -641,7 +552,6 @@ function WikiReader:fetchAndOpen(title, lang, open_fn)
     end)
 end
 
--- Open an article as a brand new reader session (from the main menu).
 function WikiReader:openArticle(title, lang)
     self:fetchAndOpen(title, lang, function(epub_path, resolved_title)
         nav_history = {}
@@ -684,7 +594,7 @@ function WikiReader:searchArticle(title, lang)
                 return
             end
 
-            -- No exact match: search Wikipedia for matching pages
+            -- No exact match: fall back to a search results page
             local search_url = string.format(
                 "https://%s.wikipedia.org/w/api.php?action=query&list=search&srsearch=%s&format=json&srlimit=20&srprop=snippet",
                 lang, socket_url.escape(title)
@@ -733,7 +643,6 @@ function WikiReader:searchArticle(title, lang)
     end)
 end
 
--- Open an article in place of the one currently being read (a tapped link).
 function WikiReader:openArticleInPlace(title, lang)
     local from_article = nav_current
     self:fetchAndOpen(title, lang, function(epub_path, resolved_title)
@@ -745,11 +654,9 @@ function WikiReader:openArticleInPlace(title, lang)
     end)
 end
 
--- Delete the cached copy of the article currently being read and download
--- it again with the settings as they are right now. Toggling "Show media as
--- QR codes", "Show infoboxes" or "Disable hyperlinks" only affects future
--- fetches -- the already-built EPUB keeps whatever it was built with -- so
--- this is how those toggles get applied to an article that's already open.
+-- Rebuild the currently open article with the current settings: toggling
+-- the media/infobox/hyperlink options only affects future fetches, so
+-- this is how they get applied to an already-built EPUB.
 function WikiReader:refetchCurrentArticle()
     if not nav_current or not nav_current.title then
         UIManager:show(InfoMessage:new{ text = _("No article is currently open.") })
@@ -759,12 +666,10 @@ function WikiReader:refetchCurrentArticle()
     local title = nav_current.title
     local lang = nav_current.lang or self.lang
 
-    -- Remove only the cached EPUB itself, deliberately keeping its
-    -- .sdr sidecar: the reading position stored there is restored by
-    -- percentage on reopen, so the user keeps their place in the
-    -- rebuilt article (bookmarks/highlights survive as well). A plain
-    -- os.remove() is enough to stop the rebuild below being
-    -- short-circuited by a cache hit.
+    -- Remove only the cached EPUB, keeping its .sdr sidecar so the
+    -- reading position (and bookmarks) survive the rebuild. A plain
+    -- os.remove() also stops the fetch below short-circuiting on a
+    -- cache hit.
     local cached_path = cache.getCachePath(title, lang)
     os.remove(cached_path)
     -- The file on disk may be keyed by the resolved title (different
@@ -801,7 +706,6 @@ function WikiReader:refetchCurrentArticle()
     end)
 end
 
--- Step back to the previous article in the back-history.
 function WikiReader:onWikiReaderGoBack()
     if #nav_history == 0 then
         UIManager:show(InfoMessage:new{ text = _("No previous Wikipedia article to go back to.") })
@@ -845,7 +749,6 @@ function WikiReader:getWikipediaSaveDir()
     return dir
 end
 
--- Save the currently reading article to the built-in Wikipedia save folder.
 function WikiReader:saveCurrentArticle()
     if not nav_current or not nav_current.path then
         UIManager:show(InfoMessage:new{
@@ -887,7 +790,6 @@ function WikiReader:saveCurrentArticle()
     self:doSaveArticle(src_path, dest_path, filename)
 end
 
--- Actually performs the file copy and sidecar relocation.
 function WikiReader:doSaveArticle(src_path, dest_path, display_filename)
     local ffiutil = require("ffi/util")
     local err = ffiutil.copyFile(src_path, dest_path)
@@ -905,8 +807,6 @@ function WikiReader:doSaveArticle(src_path, dest_path, display_filename)
     })
 end
 
--- Share the currently open article: copy its Wikipedia URL to the clipboard
--- and display a QR code of that URL for scanning from another device.
 function WikiReader:shareCurrentArticleLink()
     if not nav_current or not nav_current.title then
         UIManager:show(InfoMessage:new{
@@ -916,9 +816,7 @@ function WikiReader:shareCurrentArticleLink()
     end
 
     local lang = nav_current.lang or self.lang or "en"
-    -- Build the canonical Wikipedia URL for this article: spaces become
-    -- underscores, other special characters are percent-encoded (Wikipedia
-    -- accepts %-encoding in the path).
+    -- Canonical URL: escaped title with spaces as underscores.
     local article = socket_url.escape(nav_current.title):gsub("%%20", "_")
     local url = string.format("https://%s.wikipedia.org/wiki/%s", lang, article)
 
@@ -929,8 +827,6 @@ function WikiReader:shareCurrentArticleLink()
     self:showShareQR(url)
 end
 
--- Show a dismissable fullscreen QR code for `url`, with a caption noting the
--- link was copied to the clipboard. Dismisses on tap or any key press.
 function WikiReader:showShareQR(url)
     local Blitbuffer = require("ffi/blitbuffer")
     local CenterContainer = require("ui/widget/container/centercontainer")
@@ -1032,40 +928,26 @@ function WikiReader:clearCache()
     local count = 0
     local deleted_epubs = {}
 
-    -- If one of our own articles is currently open, close it first.
-    -- KOReader flushes the .sdr sidecar to disk when a book is closed
-    -- (ReaderUI:onClose -> saveSettings -> doc_settings:flush), so deleting
-    -- everything while the article was still open would leave behind a
-    -- freshly regenerated orphaned sidecar folder once the user closed it.
-    -- Closing here means the sidecar exists and gets deleted along with
-    -- everything else; the user is returned to the FileManager with a clean
-    -- cache. Only do this for articles living in our cache dir -- never
-    -- close a regular book the user might be reading.
+    -- Close one of our own open articles first: KOReader flushes the .sdr
+    -- sidecar when a book closes, so deleting while it is open would leave
+    -- a freshly regenerated orphaned sidecar behind. Never close a regular
+    -- book the user is reading.
     if self.ui and self.ui.document and self.ui.document.file then
         local file = self.ui.document.file
         if file == dir or file:sub(1, #dir + 1) == dir .. "/" then
             nav_history = {}
             nav_current = nil
             -- Close any open menu first: it lives on the UIManager window
-            -- stack independently of the reader, so closing the reader
-            -- alone would leave a stale menu behind whose callbacks point
-            -- at a torn-down ReaderUI -- tapping it crashes KOReader.
-            -- This mirrors what stock KOReader does before ui:onClose()
-            -- (e.g. ReaderMenu's own "File manager" item).
+            -- stack independently of the reader, and its callbacks would
+            -- point at a torn-down ReaderUI (crashes on tap).
             if self.ui.menu and self.ui.menu.onCloseReaderMenu then
                 self.ui.menu:onCloseReaderMenu()
             end
             self.ui:onClose()
-            -- Make sure something is left on screen: if KOReader was started
-            -- directly into the document (no FileManager underneath), closing
-            -- the reader empties the UIManager window stack entirely, and
-            -- KOReader exits instead of "returning" anywhere. Opening the
-            -- FileManager explicitly avoids that -- it creates a fresh
-            -- instance if none exists.
-            --
-            -- Open it on the user's home folder rather than our cache dir:
-            -- the cache dir's (stale, unrefreshed) listing would still show
-            -- the just-deleted article until something forces a rescan.
+            -- If KOReader started directly into the document, closing the
+            -- reader would empty the window stack and exit KOReader; open
+            -- the FileManager explicitly (on home, not the stale cache
+            -- listing) to avoid that.
             local FileManager = require("apps/filemanager/filemanager")
             local home_dir = require("apps/filemanager/filemanagerutil").getHomeFolder()
             if not FileManager.instance then
@@ -1094,14 +976,12 @@ function WikiReader:clearCache()
         end
     end
 
-    -- Second pass: remove any remaining directories (e.g., .sdr sidecars
-    -- that weren't cleaned up by the first pass, or orphaned dirs).
+    -- Second pass: remove remaining directories (.sdr sidecars, orphans).
     for name in lfs.dir(dir) do
         if name ~= "." and name ~= ".." then
             local path = dir .. "/" .. name
             local attr = lfs.attributes(path)
             if attr and attr.mode == "directory" then
-                -- Recursively delete everything inside the directory.
                 for f in lfs.dir(path) do
                     if f ~= "." and f ~= ".." then
                         local fpath = path .. "/" .. f
@@ -1117,19 +997,14 @@ function WikiReader:clearCache()
         end
     end
 
-    -- Drop the deleted articles from KOReader's reading history, exactly
-    -- like deleting the files from the FileManager would. Without this,
-    -- history entries (and "lastfile") keep pointing at now-deleted epubs:
-    -- KOReader would then show a "Cannot open last file" popup on every
-    -- startup when it tries to restore the last-read book. removeItems()
-    -- dims/removes the entries per the user's history settings, and
-    -- ensureLastFile() recomputes "lastfile" from the remaining existing
-    -- books (or nils it if there are none), which suppresses the popup.
+    -- Drop the deleted articles from KOReader's reading history, like
+    -- deleting the files in the FileManager would: otherwise stale entries
+    -- (and "lastfile") trigger a "Cannot open last file" popup on startup.
     if next(deleted_epubs) then
         local ReadHistory = require("readhistory")
         ReadHistory:removeItems(deleted_epubs)
-        -- removeItems only calls this in some settings configurations;
-        -- call it unconditionally so "lastfile" is always fixed up.
+        -- removeItems calls this only for some settings; do it
+        -- unconditionally so "lastfile" is always fixed up.
         ReadHistory:ensureLastFile()
     end
 
@@ -1138,7 +1013,6 @@ function WikiReader:clearCache()
     })
 end
 
--- Show the top-level featured-article categories.
 function WikiReader:showFeaturedCategories()
     NetworkMgr:runWhenOnline(function()
         local info = InfoMessage:new{ text = _("Loading categories…") }
@@ -1196,7 +1070,6 @@ function WikiReader:showFeaturedCategories()
     end)
 end
 
--- Fetch articles from a specific featured-article category section.
 function WikiReader:fetchFeaturedCategoryArticles(section_index, section_title)
     local node = categories.findNode(categories.category_tree, section_index)
 
@@ -1206,7 +1079,6 @@ function WikiReader:fetchFeaturedCategoryArticles(section_index, section_title)
         UIManager:forceRePaint()
 
         UIManager:scheduleIn(0, function()
-            -- Fetch links for a section, from cache if already fetched this session
             local function getCachedLinks(sindex)
                 if categories.section_links_cache[sindex] then
                     return categories.section_links_cache[sindex].titles

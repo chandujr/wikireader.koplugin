@@ -92,19 +92,13 @@ end
 -- {kind="leaf", text=..} or {kind="node", node={label=.., sublabel=..,
 -- children=<list>}}.
 --
--- Module:Clade (the engine behind {{clade}}) lays out each child i as its
+-- Module:Clade (the engine behind {{clade}}) lays out each child as its
 -- own pair of rows: row 1 holds that child's OWN clade-label cell
--- (built from that child's own |labelN= parameter) together with its
--- clade-leaf cell, the leaf cell carrying rowspan="2" so it also covers
--- row 2; row 2 holds only that child's clade-slabel cell. Crucially,
--- |label1=, |label2=, |label3=, ... are independent per-child parameters
--- -- ANY child can be named, not just the first -- so a label found in a
--- row names *that row's own child* and nothing else. (A previous version
--- of this parser collected every clade-label cell it found into one
--- shared field on the enclosing table, which happened to work when only
--- one child in a table was ever named, but silently mislabeled -- or
--- dropped -- names whenever two or more siblings were named at once,
--- e.g. two sister tribes each with their own label.)
+-- (built from its own |labelN= parameter) with its clade-leaf cell, the
+-- leaf carrying rowspan="2" so it also covers row 2; row 2 holds only
+-- that child's clade-slabel cell. Crucially, |label1=, |label2=, ... are
+-- independent per-child parameters -- ANY child can be named -- so a
+-- label found in a row names *that row's own child* and nothing else.
 local function parseCladeTable(inner)
     local children = {}
     local rows = findTopLevel(inner, "tr", 1, #inner + 1)
@@ -205,7 +199,6 @@ local function wrapText(text, width)
     return lines
 end
 
--- Escapes a string so it is safe to embed in the generated HTML.
 local function escapeHtml(text)
     text = text:gsub("&", "&amp;")
     text = text:gsub("<", "&lt;")
@@ -219,22 +212,11 @@ local function isTransparent(node)
     return node.label == "" and node.sublabel == ""
 end
 
--- Flattens a parsed clade tree. The only nodes ever folded into their
--- parent are unnamed *single-child* pass-throughs: wrapper tables that
--- MediaWiki sometimes emits around a lone child for layout reasons, which
--- carry no information of their own (no label, and nothing to branch to)
--- and can be dropped with zero ambiguity.
---
--- Earlier revisions of this function also tried to fold unnamed nodes with
--- two or more children, guessing whether they were a genuine (if unnamed)
--- fork or just a chained comb continuation. That guess is not decidable
--- from the HTML alone -- both cases produce an identical nested unnamed
--- <table class="clade">, e.g. an unnamed node whose two children are one
--- leaf and one further subtree is an everyday sister-group relationship,
--- not necessarily a comb -- and folding it lost real tree structure
--- (subtrees printed as if they were siblings of their own children).
--- So: any node with 2+ children, named or not, is always kept as a real
--- branch point; only the unambiguous 0- or 1-child wrappers are elided.
+-- Flattens a parsed clade tree. Only unnamed *single-child* pass-throughs
+-- are folded into their parent: wrapper tables MediaWiki sometimes emits
+-- around a lone child for layout reasons, which carry no information of
+-- their own (no label, nothing to branch to). Any node with 2+ children,
+-- named or not, is kept as a real branch point.
 -- Returns a new node with kind="leaf"/"node" children ready to draw.
 local function flattenNode(node)
     local kids = {}
@@ -271,15 +253,11 @@ end
 -- Renders a node's children as an indented tree. `prefix` is the already
 -- drawn "│  " run for ancestors; `out` accumulates the lines.
 --
--- A child is either a leaf, a named subtree, or an unnamed branch point
--- (a real fork left without a name by the source article). Named subtrees
--- get a normal "├─ Label" line. Unnamed branch points get a bare connector
--- line ("├─┬" / "└─┬", no text) instead, since there is nothing to write --
--- but critically, ALL of their children are then rendered one level deeper
--- via a single recursive call, exactly like a named node's children would
--- be. There is no "draw the first child inline, the rest below" special
--- case: that asymmetry was what caused a subtree's own descendants to be
--- printed at the same depth as that subtree's siblings.
+-- A child is a leaf, a named subtree, or an unnamed branch point (a real
+-- fork left unnamed by the source article). Unnamed branch points get a
+-- bare connector ("├─┬" / "└─┬") and, like named nodes, have ALL of their
+-- children rendered one level deeper via a single recursive call -- there
+-- is no "first child inline, rest below" special case.
 local function renderChildren(kids, prefix, out)
     local n = #kids
     for i, kid in ipairs(kids) do

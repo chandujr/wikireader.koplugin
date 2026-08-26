@@ -3,8 +3,8 @@ QR-code image generation for WikiReader.
 
 Articles are cached as EPUBs with images permanently disabled: the actual
 photographs/diagrams are never downloaded, because an article can contain
-dozens of them and each can be several hundred KB. Previously that meant
-dropping the whole image box -- image *and* caption -- from the EPUB.
+dozens of them and each can be several hundred KB, and without replacement
+the image box (image *and* caption) would be lost entirely.
 
 Instead, this module replaces each article image -- and each video/audio
 figure -- with a small QR code of the media's File: description page:
@@ -219,8 +219,6 @@ local VOID_TAGS = {
 -- image-box context either: their media is stripped entirely before this
 -- pass runs (see htmlclean.stripImageCells), so nothing inside them should
 -- become a QR code.
---
--- Does the space-separated class attribute contain the exact token `token`?
 local function hasClass(cls, token)
     for w in cls:gmatch("[^%s]+") do
         if w == token then
@@ -230,7 +228,6 @@ local function hasClass(cls, token)
     return false
 end
 
--- Returns the lowercased value of the tag's class attribute, or "".
 local function className(attrs)
     return (attrs:match([[class%s*=%s*"([^"]*)"]]) or ""):lower()
 end

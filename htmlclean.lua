@@ -11,12 +11,9 @@ Generic element stripping
 --]]
 
 -- Removes <tag ...>...</tag> blocks whose `attr_name` attribute matches
--- any of `attr_patterns`, correctly handling same-tag elements nested
--- inside them (an infobox table can contain a nested table; a div can
--- nest other divs). Lua's plain string patterns can't express "find the
--- matching close tag" on their own -- %b()-style balanced matching only
--- works for single-character delimiters -- so this walks the string by
--- hand instead, tracking nesting depth.
+-- any of `attr_patterns`, handling same-tag elements nested inside them
+-- (Lua patterns can't do balanced matching, so nesting depth is walked
+-- by hand).
 function M.stripElementsByAttr(html, tag, attr_name, attr_patterns)
     local open_pat = "<" .. tag .. "[^>]*>"
     local close_pat = "</" .. tag .. "%s*>"
@@ -175,7 +172,6 @@ function M.cleanElementClasses(html, tag, class_patterns, classes_to_remove, rem
         else
             local modified_tag = open_tag
 
-            -- Remove each specified class from the class attribute
             for _, cls in ipairs(classes_to_remove) do
                 -- class="... cls ..." (middle of class list)
                 modified_tag = modified_tag:gsub('(class%s*=%s*"[^"]*)%s' .. cls .. '(%s[^"]*")', '%1%2')
@@ -187,7 +183,7 @@ function M.cleanElementClasses(html, tag, class_patterns, classes_to_remove, rem
                 modified_tag = modified_tag:gsub('(class%s*=%s*")' .. cls .. '(")', '%1%2')
             end
 
-            -- Handle the style attribute: remove, transform, or leave as-is
+            -- Handle the style attribute
             if remove_style == true then
                 modified_tag = modified_tag:gsub('%s*style%s*=%s*"[^"]*"', '')
             elseif type(remove_style) == "function" then
@@ -195,9 +191,7 @@ function M.cleanElementClasses(html, tag, class_patterns, classes_to_remove, rem
                 local style_val = style_attr and style_attr:match('style%s*=%s*"([^"]*)"') or ""
                 local new_style = remove_style(style_val)
                 if new_style and new_style ~= "" then
-                    -- Distinguish "no style attribute" from an explicitly
-                    -- empty one (style=""): replace in place if present,
-                    -- otherwise insert a new attribute.
+                -- Replace an existing style attribute in place, otherwise insert one.
                     if style_attr then
                         modified_tag = modified_tag:gsub('style%s*=%s*"[^"]*"', 'style="' .. new_style .. '"')
                     else
@@ -206,7 +200,6 @@ function M.cleanElementClasses(html, tag, class_patterns, classes_to_remove, rem
                 end
             end
 
-            -- Tidy up any leftover double spaces
             modified_tag = modified_tag:gsub('%s+', ' ')
             modified_tag = modified_tag:gsub(' %s*>', '>')
 
@@ -222,61 +215,19 @@ end
 Media removal inside kept infobox tables and inline flags
 --]]
 
--- Cleans up the inside of a kept table (a kept full-width infobox). Two
--- distinct things are removed, because keeping raw media would break the
--- single-column reflowable layout:
---
---   1. Genuine media cells -- a cell whose content is basically an image
---      box (lead portrait, map, emblem/symbol stack, a <figure>, audio/
---      video, kartographer <mapframe>, ...). The caption/title text of
---      such a cell is a sibling or child of the image (e.g. a
---      "infobox-caption" div, or the ib-settlement-cols caption rows next
---      to each symbol image). The whole cell -- image and caption -- is
---      dropped, so the box keeps only its surrounding text data. This runs
---      before the QR pass, so no QR placeholder is ever generated here.
---
---   2. Small inline icons (flags) that sit *beside* real text in a cell --
---      the country flags next to combatants'/commanders' names in battle/
---      war infoboxes, or the flags next to the strength/casualties rows.
---      These are just the icon; the name/link/footnote it decorates is its
---      own text, so the cell must *not* be lost. Instead only the icon
---      bubble -- any <span> wrapping a tiny (<=24px) inline <img> flag or
---      status glyph, whether it is classed `flagicon` or an inline `mw:File`
---      span, even one with a `mw-file-description` link -- is removed and
---      the text is kept.
---
---   3. Conservation-status badge banners (Speciesbox/Taxobox "Conservation
---      status" rows): the wide colored Status_*.svg bars (IUCN/NatureServe
---      risk levels) rendered by {{Conservation status}}. Each carries the
---      same information as the plain text link directly beneath it
---      ("Endangered (IUCN 3.1)", "Vulnerable (NatureServe)", ...), so the
---      badge image is removed and the text row is rescued -- without this,
---      the whole row would fall to the media-cell rule above and only
---      text-only systems (CITES) would remain.
---
---   4. Orphaned standalone captions (Speciesbox/Autotaxobox image rows):
---      unlike war/battle infoboxes, which render an image and its caption
---      *inside one cell*, Module:Taxobox emits them as separate full-width
---      rows -- an unclassed media <td> followed by an unclassed caption
---      <td> styled "text-align: center; font-size: 88%" (e.g. Blue whale:
---      "Adult blue whale", "Size compared to an average human"). Dropping
---      the media cell strands such a caption as ordinary-looking text, so
---      a text-only cell that directly follows a dropped media cell and
---      matches that caption styling is dropped with it. See
---      isCaptionOnlyCell (the signature appears in no non-biology kept
---      infobox, and the follower check keeps any other use of centered
---      small-text cells intact).
---
--- Nesting is handled the same way as stripElementsByAttr: a nested table
--- inside a cell contributes its own <td> opens/closes, and the depth walk
--- over <td>/</td> still finds the matching close of the outer cell, so
--- whole media-bearing sub-regions (nested maps, symbol stacks) go away as
--- one unit.
---
--- Cells with class "infobox-image" or "infobox-caption" are dropped even
--- without media content, for legacy layouts where the caption sits in its
--- own row.
---
+-- Cleans the inside of a kept infobox table so it shows text only,
+-- running before the QR pass. For each cell it:
+--   * drops genuine media cells (image/figure/audio/video/kartographer
+--     mapframe) along with their caption, so the box keeps only text data;
+--   * removes small inline icon bubbles (flagicon spans and tiny <=24px
+--     mw:File image icons, plus conservation-status badge banners) while
+--     keeping the name/link/footnote text they sit beside;
+--   * drops a standalone caption row that directly follows a dropped media
+--     cell (Speciesbox/Autotaxobox render the image and its caption as two
+--     separate full-width rows).
+-- Nested tables are handled by a depth walk, so whole media-bearing
+-- sub-regions (nested maps, symbol stacks) go away as one unit. Cells with
+-- class "infobox-image"/"infobox-caption" are dropped even without media.
 -- Only tables matching class_patterns are touched; everything else is
 -- returned unchanged.
 function M.stripImageCells(html, class_patterns)
@@ -317,32 +268,14 @@ function M.stripImageCells(html, class_patterns)
     return table.concat(out)
 end
 
--- Removes small inline icon bubbles from `content` while keeping the text
--- they sit beside them. In a war/battle infobox a tiny inline icon (the
--- 20-24px country flags / surrender / casualty / WIA / ranking-arrow
--- glyphs) is placed *beside* a named entity or a number: it wraps only the
--- small image and none of the surrounding name/link/footnote text, so
--- removing the whole bubble strips just the icon and keeps what it
--- decorated.
---
--- Genuine media (a lead painting, a header image collage, an emblem/coat
--- of arms, a map) is displayed *large*: its <img> is rendered at 60px or
--- more (typically 120-300px), or it is a <table>/<figure>/<mapframe>/<video>
--- /<audio> box. The discriminator is therefore the <img> display width:
--- images at 24px and under are inline icons, anything larger (or non-<img>
--- media) is genuine figure media that must be left in place so the caller
--- can drop the whole image cell. Relying on the anchor's CSS class does
--- not work: the tiny flags may be wrapped in either `class="flagicon"`
--- or a plain `<span typeof="mw:File">…</span>` *whose `<a class="mw-file-
--- description">` link is identical to a real thumbnail's*. Only the
--- rendered size tells them apart.
---
--- Icon bubbles never nest another flagicon, but their inner markup can
--- contain other spans (mw-image-border / mw:File) and an optional <a>, so
--- the matching close span is found by the same depth walk used elsewhere.
--- Conservation-status badge banners (see isStatusBadgeImg) are removed by
--- the same machinery even though they render large.
--- Exposed for testing.
+-- Removes small inline icon bubbles (flagicon spans, tiny mw:File images,
+-- conservation-status badges) from `content` while keeping the name/link/
+-- footnote text they sit beside. The discriminator is the <img> display
+-- width: icons render at <=24px while genuine media (lead images, maps,
+-- emblems) renders much larger or is a <table>/<figure>/<mapframe>/<video>
+-- /<audio> box. CSS classes can't tell them apart: a flag's
+-- <span typeof="mw:File"> wraps the same mw-file-description link as a
+-- real thumbnail. Exposed for testing.
 function M.removeInlineIcons(content)
     local out = {}
     local pos = 1
@@ -359,11 +292,9 @@ function M.removeInlineIcons(content)
         end
         local lower = content:sub(open_start, open_end):lower()
 
-        -- A <span class="...flagicon..."> is always a small inline icon.
-        -- A <span typeof="mw:File"> is a small inline icon when its inner
-        -- <img> is rendered small (<=24px); genuine figure boxes carry a
-        -- large <img> or a <table>/<figure>/<mapframe>/<video>/<audio> and
-        -- are left intact for cellHasMedia to see.
+        -- flagicon spans are always icons; mw:File spans are icons only
+        -- when their <img> renders small (<=24px); genuine figure boxes are
+        -- left intact for cellHasMedia to see.
         local iconish = false
         if lower:find("flagicon", 1, true) then
             iconish = true
@@ -375,18 +306,15 @@ function M.removeInlineIcons(content)
                 iconish = (imgw ~= nil and imgw <= 24)
                     or M.isStatusBadgeImg(inner)
             else
-                -- Unclosed mw:File span: safest to treat as an icon and drop
-                -- just its open tag, never swallowing following text.
+                -- Unclosed: treat as an icon, drop just the open tag.
                 iconish = true
             end
         end
 
         if iconish then
-            -- Inline icon bubble: drop it and keep the surrounding text.
             local _, close_end = wutil.findMatchingClose(content, "span", open_end)
             if not close_end then
-                -- Unclosed bubble: drop just the open tag; never swallow
-                -- the text that may follow it.
+                -- Unclosed: drop just the open tag.
                 table.insert(out, content:sub(pos, open_end))
                 pos = open_end + 1
             else
@@ -394,11 +322,9 @@ function M.removeInlineIcons(content)
                 pos = close_end + 1
             end
         else
-            -- Not an icon bubble (a text-only span or a genuine figure
-            -- container): keep it, then ADVANCE ONLY past its open tag.
-            -- This lets us still dig into nested spans (e.g. a flagicon
-            -- lurking inside a <span class="nowrap">) and remove them,
-            -- unlike skipping to the matching close.
+            -- Not an icon: keep it, advancing only past the open tag so
+            -- nested icons (e.g. a flagicon inside <span class="nowrap">)
+            -- are still found.
             table.insert(out, content:sub(pos, open_end))
             pos = open_end + 1
         end
@@ -406,72 +332,54 @@ function M.removeInlineIcons(content)
     return table.concat(out)
 end
 
--- Returns the rendered display width of the first <img ...> box inside
--- `s`, or nil if there is no <img> (or no width= attribute on it). Only the
--- *display* width (the `width="N"` attribute MediaWiki sets on the rendered
--- image) is meaningful; `data-file-width`/`srcset` carry the source pixel
--- size and must be ignored.
+-- Rendered display width of the first <img ...> box in `s`, or nil if
+-- there is no <img> or no width= attribute on it. Only the width=
+-- attribute (set by MediaWiki on the rendered image) counts;
+-- data-file-width/srcset carry the source pixel size.
 function M.imgDisplayWidth(s)
     local img = s:find("<img", 1, true)
     if not img then return nil end
     local close = s:find(">", img, true)
     if not close then return nil end
-    -- limit to the tag; skip any data-file-width/ srcset embedded number by
-    -- anchoring on a standalone width= before class="mw-file-element".
     local tag = s:sub(img, close)
     local _, _, w = tag:find('width%s*=%s*"(%d+)"%s+height')
     if not w then
-        -- some images omit height; fall back to the first width attribute.
+        -- some images omit height
         _, _, w = tag:find('width%s*=%s*"(%d+)"')
     end
     return tonumber(w)
 end
 
--- Returns true if `s` holds a conservation-status badge banner: one of the
--- wide colored "Status_*.svg" bars (IUCN / NatureServe risk levels, e.g.
--- Status_iucn3.1_EN.svg, Status_TNC_G3.svg) that {{Conservation status}}
--- puts above each status' text line in Speciesbox/Taxobox rows. Unlike
--- ordinary figure media these carry no unique data -- the plain text link
--- directly below them states the same status word-for-word -- so they can
--- be dropped like inline icons while the text row is kept. Matched by the
--- image path (all such badges live under .../wikipedia/commons/... with a
--- "Status_" file name), not by size: they render wide (250px), so the
--- <=24px inline-icon heuristic cannot catch them. Exposed for testing.
+-- True when `s` holds a conservation-status badge banner (a wide colored
+-- "Status_*.svg" bar that {{Conservation status}} puts above each status
+-- line in Speciesbox/Taxobox rows). It duplicates the status text link
+-- right below it, so it is dropped like an inline icon; matched by image
+-- path, not size (it renders at 250px, beyond the <=24px heuristic).
+-- Exposed for testing.
 function M.isStatusBadgeImg(s)
     local src = s:lower():match('src%s*=%s*"([^"]*)"')
     return src ~= nil and src:find("/status_", 1, true) ~= nil
 end
 
--- True when the raw HTML `gap` between the previous cell's close and the
--- next cell's open tag holds nothing but whitespace and row/table-section
--- boundaries (<tr>, </tr>, <tbody>, </tbody>, <thead>/<tfoot>), i.e. the
--- two cells are adjacent -- only a row border separates them. An opening
--- or closing <th> is deliberately NOT crossed: a section-header row
--- between the dropped image and a candidate cell breaks the caption
--- relationship. Exposed for testing.
+-- True when the HTML `gap` between two cells holds only whitespace and
+-- row/table-section boundaries, i.e. the cells are adjacent. A <th> is
+-- never crossed: a section-header row breaks the caption relationship.
+-- Exposed for testing.
 function M.directlyFollowsCell(gap)
     local bare = gap:gsub("</?t[rb][a-z]*[^<>]*>", ""):gsub("%s", "")
     return bare == ""
 end
 
--- Returns true if `open_tag` / `content` describe a Speciesbox-style
--- standalone caption cell: the unclassed (or image-section-classed) <td>
--- that Module:Taxobox puts in its own full-width row directly below an
--- image row, e.g.
---   <td colspan="2" style="text-align: center; font-size: 88%">…</td>
---   <td colspan="2" class="image-section">…</td>   (newer rendering:
---   same centered/88% look, moved from an inline style into TemplateStyles
---   CSS -- see .biota-infobox td.image-section in Beringian wolf)
--- All four conditions must hold:
---   * full width: a colspan attribute (never fires on label/value cells),
---   * caption styling: either the inline "centered text at a reduced font
---     size (<100%)" style, or the class-based image-section variant,
---   * no nested table inside (war infoboxes follow their image cell with
---     a full-width cell wrapping the data table -- those must stay),
---   * no media element left (a real image cell keeps its own caption).
--- Matched by style/class, not by infobox-image/-caption classes, because
--- Taxobox gives the caption cell none of those. This signature appears in
--- no non-biology kept infobox. Exposed for testing.
+-- True when `open_tag` / `content` describe a Speciesbox/Taxobox-style
+-- standalone caption cell: the full-width <td> that Module:Taxobox puts in
+-- its own row directly below an image row, styled either inline
+-- ("text-align:center" at a reduced font size) or, in newer renderings,
+-- via class="image-section". Requires: colspan (never fires on label/value
+-- cells), that caption styling, no nested table inside (war infoboxes wrap
+-- their data table in such a full-width cell -- those must stay), and no
+-- media left (a real image cell keeps its own caption). Matched by
+-- style/class because Taxobox gives the cell no infobox-image/-caption
+-- class. Exposed for testing.
 function M.isCaptionOnlyCell(open_tag, content)
     open_tag = open_tag:lower()
     if not open_tag:find("colspan") then
@@ -492,13 +400,10 @@ function M.isCaptionOnlyCell(open_tag, content)
     return true
 end
 
--- Returns true if a cell's content still holds a *genuine* media element
--- once the small inline icons have been removed: a real large image (its
--- <img> is rendered at more than 24px, i.e. a lead painting / header
--- collage / emblem / map), a <table> image box, a <figure>, a kartographer
--- <mapframe>, or <video>/<audio>. A cell still carrying one of these is a
--- real image cell and is dropped wholly; anything left is only
--- inline-icon-free text and is kept.
+-- True when a cell (after inline icons were removed) still holds genuine
+-- media: a large (>24px) <img>, a <table> image box, <figure>, a
+-- kartographer <mapframe>, or <video>/<audio>. Such cells are dropped
+-- whole; anything else is inline-icon-free text and is kept.
 function M.cellHasMedia(content)
     if content:find("<video", 1, true)
         or content:find("<audio", 1, true)
@@ -506,8 +411,6 @@ function M.cellHasMedia(content)
         or content:find("<mapframe", 1, true) then
         return true
     end
-    -- otherwise a real image box / large <img>: only when an <img> box is
-    -- rendered larger than an inline icon (i.e. >24px).
     local pos = 1
     while true do
         local img = content:find("<img", pos, true)
@@ -535,9 +438,9 @@ end
 function M.stripImageCellsInBlock(block)
     local out = {}
     local pos = 1
-    -- Set when a genuine media cell has just been dropped (rule 1 above):
-    -- a Speciesbox-style standalone caption cell directly following it
-    -- describes exactly that lost image, so it is dropped with it.
+    -- Set when a genuine media cell has just been dropped: a Speciesbox-style
+    -- standalone caption cell directly following it describes that lost
+    -- image, so it is dropped with it.
     local media_dropped = false
     while true do
         local open_start, open_end = block:find("<td[^>]*>", pos)
@@ -554,17 +457,13 @@ function M.stripImageCellsInBlock(block)
         local cell_class = (open_tag:match([[class%s*=%s*"([^"]*)"]]) or ""):lower()
         local content = block:sub(open_end + 1, close_start - 1)
 
-        -- Remove any inline icon bubbles first (flags, surrender/WIA glyphs,
-        -- ranking arrows, conservation-status badges): this drops the icons
-        -- next to a name / number / status text but keeps the surrounding
-        -- text, unlike genuine media cells below.
+        -- Remove inline icon bubbles first (flags, status badges, ...):
+        -- the surrounding name/number/status text stays.
         local stripped = M.removeInlineIcons(content)
-        -- Removing a leading icon bubble can strand the <br /> that separated
-        -- it from the following text (e.g. "<br />" left above "Endangered"
-        -- by a dropped conservation-status badge), possibly behind the bare
-        -- open wrapper tag (<div>/<span>/<p>/<center>) the cell begins with.
-        -- Drop ONLY those stranded breaks: bare wrapper tags are crossed but
-        -- kept, any other tag (media elements especially) stops the scan, so
+        -- Removing a leading icon can strand the <br /> that separated it
+        -- from the following text. Drop ONLY those stranded breaks: bare
+        -- wrapper tags (<div>/<span>/<p>/<center>) are crossed but kept,
+        -- any other tag (media elements especially) stops the scan, so
         -- genuine media cells are untouched.
         if stripped ~= content then
             local pos = 1
@@ -588,15 +487,11 @@ function M.stripImageCellsInBlock(block)
             end
         end
 
-        -- A cell that (still) holds a genuine image element, or that is an
-        -- explicit infobox-image/infobox-caption cell, is a real media
-        -- cell: drop it whole (image and its caption together, as before).
         local drop_cell = cell_class:find("infobox-image", 1, true)
             or cell_class:find("infobox-caption", 1, true)
             or M.cellHasMedia(stripped:lower())
 
         if drop_cell then
-            -- Media-bearing cell (image + any caption): drop the whole cell.
             table.insert(out, block:sub(pos, open_start - 1))
             media_dropped = true
         elseif media_dropped
@@ -608,9 +503,7 @@ function M.stripImageCellsInBlock(block)
             media_dropped = false
         else
             media_dropped = false
-            -- The cell now holds only text (the flag icons are gone). If
-            -- that left just a gap (an icon-only row), drop it too; keep
-            -- the cell with its text otherwise.
+            -- Icon-only row: drop the empty cell; keep the text cell otherwise.
             local plain = stripped:gsub("<[^>]*>", ""):gsub("&[^;]+;", ""):gsub("%s", "")
             if plain == "" then
                 table.insert(out, block:sub(pos, open_start - 1))
@@ -634,22 +527,12 @@ Infobox cell alignment
 --]]
 
 -- Centers the full-width cells of kept infoboxes (.infobox-title/above/
--- header/subheader/image/full-data/below) by putting text-align:center
--- directly on each cell as an inline style, mirroring Wikipedia's own
--- stylesheet (MediaWiki:Common.css centers exactly these classes).
---
--- This is done as an inline style -- not (only) a stylesheet rule --
--- because Wikipedia itself emits style="text-align:left" inline on the
--- .infobox-label/.infobox-data pairs, and the same inline mechanism is
--- what reliably applies in crengine: the base EPUB stylesheet has no
--- .infobox rules at all, so those full-width rows would otherwise fall
--- back to the cell's default left alignment.
---
--- Cells already carrying an explicit text-align declaration are left
--- alone; everything else gets the alignment appended to its existing
--- style attribute (or a new one). Only cells inside infobox tables are
--- touched -- the class names are distinctive enough that scoping is done
--- by matching them directly.
+-- header/subheader/image/full-data/below), mirroring Wikipedia's own
+-- stylesheet. Done as an inline style because that reliably applies in
+-- crengine: the base EPUB stylesheet has no .infobox rules at all, and
+-- Wikipedia emits the label/data alignment inline too, so those full-width
+-- rows would otherwise fall back to default left alignment. Cells already
+-- carrying an explicit text-align declaration are left alone.
 function M.centerInfoboxCells(html)
     return (html:gsub('(<t[dh][^>]*class%s*=%s*"([^"]*)"[^>]*>)', function(tag, classes)
         if not (classes:find("infobox%-title", 1)
@@ -690,13 +573,10 @@ Quote attribution (Template:Quote) merging
 
 -- MediaWiki renders Template:Quote / Template:Blockquote as a <blockquote>
 -- immediately followed by a sibling <div class="templatequotecite"> holding
--- the attribution line (the name / source of the person who said it). Left
--- outside the blockquote, that line dangles below the styled quote box as an
--- unstyled, disconnected afterthought, which looks bad in the reflowed EPUB.
--- This moves the attribution *inside* the blockquote -- as a trailing
--- <div class="wikireader-cite"> that the stylesheet styles as a
--- right-aligned attribution line -- so each quote renders as a single,
--- self-contained box.
+-- the attribution line. Left outside the blockquote, that line dangles
+-- unstyled below the quote box in the reflowed EPUB, so this moves it
+-- *inside* the blockquote as a trailing <div class="wikireader-cite">
+-- (right-aligned attribution line, styled by the EPUB stylesheet).
 --
 -- MediaWiki output handled here looks like:
 --   <blockquote class="templatequote"><p>...</p></blockquote>
@@ -721,8 +601,8 @@ function M.mergeQuoteCites(html)
             break
         end
 
-        -- The attribution div must directly follow </blockquote> (only
-        -- whitespace in between) for it to belong to this quote.
+        -- The attribution div must directly follow </blockquote> for it to
+        -- belong to this quote.
         local after_close = skipWs(bq_close_end + 1)
         local cite_open_start, cite_open_end = html:find('<div class="templatequotecite">', after_close)
         if cite_open_start ~= after_close then
@@ -735,13 +615,12 @@ function M.mergeQuoteCites(html)
                 pos = bq_close_end + 1
             else
                 local cite_content = html:sub(cite_open_end + 1, cite_close_start - 1)
-                -- Drop the inline style on the inner <p> (a fixed left padding
-                -- and display override meant for the web layout).
+                -- Drop the web-layout inline style on the inner <p>.
                 cite_content = cite_content:gsub('(<p[^>]*%s)style%s*=%s*"[^"]*"', '%1')
                 cite_content = cite_content:gsub('<p style="[^"]*">', '<p>')
                 cite_content = cite_content:gsub('<p%s+>', '<p>')
 
-                table.insert(out, html:sub(pos, bq_start - 1))  -- text before this quote
+                table.insert(out, html:sub(pos, bq_start - 1))
                 table.insert(out, html:sub(bq_start, bq_open_end))
                 table.insert(out, html:sub(bq_open_end + 1, bq_close_start - 1))
                 table.insert(out, '<div class="wikireader-cite">' .. cite_content .. '</div>')
@@ -769,12 +648,11 @@ local function elementIsLeadingNotice(open_tag)
     return false
 end
 
--- Skips whitespace, HTML comments, <style>...</style> blocks,
--- self-closing <link .../> / <meta .../> tags, and empty <p></p>
--- elements sitting at `pos`. Real Wikipedia HTML interleaves
--- <style>/<link> between sibling elements for CSS deduplication (one
--- per hatnote/banner, in between them), and MediaWiki emits empty
--- <p class="mw-empty-elt"> tags as spacing artifacts around templates.
+-- Skips whitespace, HTML comments, <style>/<link>/<meta> tags and empty
+-- <p></p> elements sitting at `pos`: real Wikipedia HTML interleaves
+-- <style>/<link> between sibling hatnotes for CSS deduplication, and
+-- MediaWiki emits empty <p class="mw-empty-elt"> spacing artifacts
+-- around templates.
 local function skipLeadingCruft(html, pos)
     while true do
         local start_pos = pos
@@ -826,14 +704,10 @@ end
 -- everything from the genuine first paragraph/heading onward in a
 -- second string. Only looks at the front of the document.
 --
--- MediaWiki -- both the legacy parser and Parsoid -- wraps the entire
--- rendered article body in <div class="mw-parser-output">...</div>.
--- That wrapper is the actual first element in the HTML, and its own
--- class matches none of our notice patterns, so without accounting for
--- it the scan above finds nothing at all and gives up immediately --
--- looking inside it instead (while leaving its own opening/closing tags
--- exactly where they are in the final output) is what makes detection
--- work in practice.
+-- Both MediaWiki parsers wrap the entire article body in
+-- <div class="mw-parser-output">, whose class matches none of our notice
+-- patterns -- so the scan must look inside that wrapper (leaving its
+-- opening/closing tags in the output) to find anything at all.
 function M.extractLeadingNotices(html)
     local wrap_open_start, wrap_open_end = html:find('^<div[^>]-class="[^"]*mw%-parser%-output[^"]*"[^>]*>')
     if not wrap_open_start then
@@ -850,15 +724,10 @@ function M.extractLeadingNotices(html)
     return notices, prefix .. rest .. suffix
 end
 
--- Scans the full HTML for any notice elements (hatnotes, maintenance banners
--- such as ambox/tmbox/cmbox/ombox/dmbox/fmbox) that were NOT caught by
--- extractLeadingNotices() -- i.e. section-level notices like "This section
--- has multiple issues...", "This section needs more citations..." -- and
--- wraps each one in a <div class="wikireader-notices"> box.
---
--- This is deliberately a second pass applied to the "rest" HTML after
--- extractLeadingNotices() has already handled the front-of-article notices,
--- to avoid double-wrapping them.
+-- Wraps section-level notices (hatnotes, maintenance banners) not caught
+-- by extractLeadingNotices() -- e.g. "This section needs more citations..."
+-- in <div class="wikireader-notices"> boxes. Deliberately a second pass
+-- on the "rest" HTML, so front-of-article notices aren't double-wrapped.
 function M.wrapSectionNotices(html)
     local pos = 1
     local out = {}
@@ -901,20 +770,17 @@ end
 Template:Multiple image restructuring
 --]]
 
--- Wikipedia's {{Multiple image}} renders its images side-by-side with CSS
+-- Wikipedia's {{Multiple image}} lays its images out side-by-side with CSS
 -- flexbox (.trow { display:flex; flex-direction:row } in a TemplateStyles
 -- <style> block). crengine (KOReader's EPUB engine) has no flexbox, so in
--- the reflowed EPUB every .trow/.tsingle falls back to its default block
--- layout and the images stack into a single left-aligned column -- even
--- though the box itself is a fixed narrow width (e.g. 492px) with plenty
--- of room to its right. Real <table> markup, by contrast, IS first-class
--- in crengine, so we rewrite the multi-image box into a table: the
--- .thumbinner container becomes the <table>, each .trow a <tr>, each
--- .tsingle a <td>, and the optional .theader / overall .thumbcaption
--- rows become full-width cells. See M.restructureMultiImages.
+-- the reflowed EPUB the images stack into a single left-aligned column --
+-- even though the box is a fixed narrow width (e.g. 492px) with plenty of
+-- room to its right. Real <table> markup IS first-class in crengine, so we
+-- rewrite the box into a table: the .thumbinner container becomes the
+-- <table>, each .trow a <tr>, each .tsingle a <td>, and the optional
+-- .theader / overall .thumbcaption rows become full-width cells.
+-- See M.restructureMultiImages.
 
--- True when the space-separated `class` attribute value contains the
--- exact token `token`.
 local function tokenInClass(cls, token)
     for w in cls:gmatch("[^%s]+") do
         if w == token then
@@ -947,9 +813,8 @@ local function addStyleProp(tag, prop)
     return out
 end
 
--- Counts the cells of the widest .trow inside a multi-image box: the
--- number of columns the table needs, i.e. the colspan for full-width rows
--- (the .theader heading, the optional overall .thumbcaption).
+-- Column count of the widest .trow inside a multi-image box: the colspan
+-- the full-width rows (.theader, optional overall .thumbcaption) need.
 local function multiImageColumnCount(inner)
     local max_cols = 1
     local pos = 1
@@ -1014,10 +879,8 @@ local function multiImageTransformRow(content, n_cols)
             table.insert(out, inner)
             table.insert(out, "</td>")
         elseif tokenInClass(cls, "thumbcaption") then
-            -- The box's overall caption: Wikipedia emits it inside its own
-            -- .trow div (a row whose only child is the caption). Span the
-            -- whole row so it reads as one centered line under the images
-            -- (a bare <div> inside a <tr> would be invalid HTML).
+            -- The box's overall caption, emitted in its own .trow div:
+            -- span the whole row (a bare <div> in a <tr> is invalid HTML).
             local td_open = '<td colspan="' .. n_cols .. '"'
             local cell_style = open_tag:match('style%s*=%s*"([^"]*)"')
             if cell_style and cell_style ~= "" then
@@ -1086,8 +949,6 @@ local function multiImageToTable(wrapper)
         return wrapper
     end
     local wrapper_open = wrapper:sub(o_start, o_end)
-    -- The .thumbinner container div directly follows the wrapper open tag
-    -- (only whitespace in between).
     local ti_start, ti_end = wrapper:find("<div[^>]*>", o_end)
     if not ti_start
         or not tokenInClass(openTagClass(wrapper:sub(ti_start, ti_end)), "thumbinner") then
@@ -1111,12 +972,10 @@ local function multiImageToTable(wrapper)
         .. wrapper:sub(ti_close_end + 1)
 end
 
--- Rewrites every {{Multiple image}} box in the article HTML into a <table>
--- (see the module comment above): crengine cannot do the template's flexbox
--- layout, so its images would otherwise stack into a single left-aligned
--- column regardless of how much screen width is available. Recognised by
--- the container div's "tmulti" class token. Returns the HTML unchanged for
--- any box with an unexpected structure, so it degrades gracefully.
+-- Rewrites every {{Multiple image}} box (recognised by the container
+-- div's "tmulti" class token) into a <table> (see the section comment
+-- above). Unexpected structures are returned unchanged, so it degrades
+-- gracefully.
 function M.restructureMultiImages(html)
     local out = {}
     local pos = 1
