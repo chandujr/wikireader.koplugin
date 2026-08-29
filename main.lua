@@ -920,13 +920,11 @@ function WikiReader:showShareQR(url)
     UIManager:show(ShareBox:new{})
 end
 
--- Delete every cached article from the cache directory.
--- Walks the entire cache dir and removes everything: epub files, leftover
--- sidecar (.sdr) directories, and any orphaned files.
+-- Delete every cached article; the file walking and history cleanup live
+-- in cache.wipeAll(). What remains here is closing our own open article
+-- first, so KOReader can't flush its .sdr sidecar back after deletion.
 function WikiReader:clearCache()
     local dir = cache.getCacheDir()
-    local count = 0
-    local deleted_epubs = {}
 
     -- Close one of our own open articles first: KOReader flushes the .sdr
     -- sidecar when a book closes, so deleting while it is open would leave
@@ -958,55 +956,7 @@ function WikiReader:clearCache()
         end
     end
 
-    -- First pass: remove all files (use removeCachedFile for epubs so
-    -- DocSettings.updateLocation can clean up the associated .sdr dir).
-    for name in lfs.dir(dir) do
-        if name ~= "." and name ~= ".." then
-            local path = dir .. "/" .. name
-            local attr = lfs.attributes(path)
-            if attr and attr.mode == "file" then
-                if name:match("%.epub$") then
-                    cache.removeCachedFile(path)
-                    deleted_epubs[path] = true
-                else
-                    os.remove(path)
-                end
-                count = count + 1
-            end
-        end
-    end
-
-    -- Second pass: remove remaining directories (.sdr sidecars, orphans).
-    for name in lfs.dir(dir) do
-        if name ~= "." and name ~= ".." then
-            local path = dir .. "/" .. name
-            local attr = lfs.attributes(path)
-            if attr and attr.mode == "directory" then
-                for f in lfs.dir(path) do
-                    if f ~= "." and f ~= ".." then
-                        local fpath = path .. "/" .. f
-                        local fattr = lfs.attributes(fpath)
-                        if fattr and fattr.mode == "file" then
-                            os.remove(fpath)
-                            count = count + 1
-                        end
-                    end
-                end
-                lfs.rmdir(path)
-            end
-        end
-    end
-
-    -- Drop the deleted articles from KOReader's reading history, like
-    -- deleting the files in the FileManager would: otherwise stale entries
-    -- (and "lastfile") trigger a "Cannot open last file" popup on startup.
-    if next(deleted_epubs) then
-        local ReadHistory = require("readhistory")
-        ReadHistory:removeItems(deleted_epubs)
-        -- removeItems calls this only for some settings; do it
-        -- unconditionally so "lastfile" is always fixed up.
-        ReadHistory:ensureLastFile()
-    end
+    local count = cache.wipeAll()
 
     UIManager:show(InfoMessage:new{
         text = T(_("Cache cleared (%1 file(s) deleted)."), count),
@@ -1019,31 +969,19 @@ function WikiReader:showFeaturedCategories()
         UIManager:show(info)
 
         UIManager:scheduleIn(0, function()
-            local sections_url = string.format(
-                "https://%s.wikipedia.org/w/api.php?action=parse&page=Wikipedia:Featured_articles&prop=sections&format=json",
-                self.lang
-            )
-            local ok, code, sink = wutil.httpGetJSON(sections_url)
+            local sections, err = categories.fetchSections(self.lang)
             UIManager:close(info)
 
-            if not ok or code ~= 200 then
+            if not sections then
                 UIManager:show(InfoMessage:new{
-                    text = _("Couldn't load featured article categories."),
+                    text = err == "parse"
+                        and _("Couldn't parse featured article categories.")
+                        or _("Couldn't load featured article categories."),
                 })
                 return
             end
 
-            local JSON = require("json")
-            local body = table.concat(sink)
-            local parse_ok, data = pcall(JSON.decode, body)
-            if not parse_ok or not data or not data.parse or not data.parse.sections then
-                UIManager:show(InfoMessage:new{
-                    text = _("Couldn't parse featured article categories."),
-                })
-                return
-            end
-
-            local tree = categories.buildCategoryTree(data.parse.sections)
+            local tree = categories.buildCategoryTree(sections)
             if #tree == 0 then
                 UIManager:show(InfoMessage:new{
                     text = _("No categories found."),
@@ -1080,27 +1018,7 @@ function WikiReader:fetchFeaturedCategoryArticles(section_index, section_title)
 
         UIManager:scheduleIn(0, function()
             local function getCachedLinks(sindex)
-                if categories.section_links_cache[sindex] then
-                    return categories.section_links_cache[sindex].titles
-                end
-                local url = string.format(
-                    "https://%s.wikipedia.org/w/api.php?action=parse&page=Wikipedia:Featured_articles&section=%s&prop=links&format=json",
-                    self.lang, sindex
-                )
-                local ok, code, sink = wutil.httpGetJSON(url)
-                if not ok or code ~= 200 then return nil end
-                local JSON = require("json")
-                local body = table.concat(sink)
-                local parse_ok, data = pcall(JSON.decode, body)
-                if not parse_ok or not data or not data.parse or not data.parse.links then return nil end
-                local titles = {}
-                for _, link in ipairs(data.parse.links) do
-                    if link.ns == 0 then
-                        table.insert(titles, link["*"])
-                    end
-                end
-                categories.section_links_cache[sindex] = { titles = titles }
-                return titles
+                return categories.fetchSectionLinks(self.lang, sindex)
             end
 
             local all_links = getCachedLinks(section_index)

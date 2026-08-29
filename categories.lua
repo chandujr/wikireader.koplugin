@@ -1,6 +1,9 @@
--- Category tree building for WikiReader's featured-article browser.
--- Builds a tree from Wikipedia's flat section list and provides the
--- lookup tables used by the link handler to navigate the tree.
+-- Featured-article category handling for WikiReader: fetches the section
+-- list and per-section article links from Wikipedia:Featured_articles,
+-- builds the tree from the flat section list, and provides the lookup
+-- tables used by the link handler to navigate the tree.
+
+local wutil = require("wikiutil")
 
 local M = {}
 
@@ -54,6 +57,51 @@ function M.findNode(nodes, index)
         if found then return found end
     end
     return nil
+end
+
+-- Fetch the section list of Wikipedia:Featured_articles (the raw input
+-- for buildCategoryTree). Returns the sections, or nil plus an error
+-- kind ("network" or "parse") so the caller can pick a message.
+function M.fetchSections(lang)
+    local url = string.format(
+        "https://%s.wikipedia.org/w/api.php?action=parse&page=Wikipedia:Featured_articles&prop=sections&format=json",
+        lang
+    )
+    local ok, code, sink = wutil.httpGetJSON(url)
+    if not ok or code ~= 200 then return nil, "network" end
+    local JSON = require("json")
+    local parse_ok, data = pcall(JSON.decode, table.concat(sink))
+    if not parse_ok or not data or not data.parse or not data.parse.sections then
+        return nil, "parse"
+    end
+    return data.parse.sections
+end
+
+-- Article titles linked from one section of Wikipedia:Featured_articles,
+-- served from the session cache when possible. Returns the titles, or
+-- nil on network/parse failure (not cached, so a retry refetches).
+function M.fetchSectionLinks(lang, section_index)
+    local cached = M.section_links_cache[section_index]
+    if cached then
+        return cached.titles
+    end
+    local url = string.format(
+        "https://%s.wikipedia.org/w/api.php?action=parse&page=Wikipedia:Featured_articles&section=%s&prop=links&format=json",
+        lang, section_index
+    )
+    local ok, code, sink = wutil.httpGetJSON(url)
+    if not ok or code ~= 200 then return nil end
+    local JSON = require("json")
+    local parse_ok, data = pcall(JSON.decode, table.concat(sink))
+    if not parse_ok or not data or not data.parse or not data.parse.links then return nil end
+    local titles = {}
+    for _, link in ipairs(data.parse.links) do
+        if link.ns == 0 then
+            table.insert(titles, link["*"])
+        end
+    end
+    M.section_links_cache[section_index] = { titles = titles }
+    return titles
 end
 
 return M

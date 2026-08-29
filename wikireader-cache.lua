@@ -1,6 +1,7 @@
 -- Cache management for WikiReader.
--- Handles deterministic file paths, expiry, and FIFO eviction for cached
--- Wikipedia article EPUBs. All state is on-disk (filesystem timestamps),
+-- Handles deterministic file paths, expiry, FIFO eviction, and full-cache
+-- wipes for cached Wikipedia article EPUBs. All state is on-disk
+-- (filesystem timestamps),
 -- so it survives KOReader restarts and the FileManager↔Reader instance jump.
 
 local DataStorage = require("datastorage")
@@ -97,6 +98,67 @@ function M.pruneCache()
         local oldest = table.remove(entries, 1)
         M.removeCachedFile(oldest.path)
     end
+end
+
+-- Delete every cached article: epub files (via removeCachedFile so their
+-- .sdr sidecars go too), any other leftover files, and then the remaining
+-- directories (sidecars/orphans). Also drops the deleted epubs from
+-- KOReader's reading history, like deleting the files in the FileManager
+-- would: otherwise stale entries (and "lastfile") trigger a "Cannot open
+-- last file" popup on startup. Returns the number of files deleted.
+-- Two separate listing/deleting passes, for the same reason as
+-- pruneCache(): mutating a directory while iterating it can silently
+-- skip entries on some filesystems.
+function M.wipeAll()
+    local dir = M.getCacheDir()
+    local count = 0
+    local deleted_epubs = {}
+
+    for name in lfs.dir(dir) do
+        if name ~= "." and name ~= ".." then
+            local path = dir .. "/" .. name
+            local attr = lfs.attributes(path)
+            if attr and attr.mode == "file" then
+                if name:match("%.epub$") then
+                    M.removeCachedFile(path)
+                    deleted_epubs[path] = true
+                else
+                    os.remove(path)
+                end
+                count = count + 1
+            end
+        end
+    end
+
+    for name in lfs.dir(dir) do
+        if name ~= "." and name ~= ".." then
+            local path = dir .. "/" .. name
+            local attr = lfs.attributes(path)
+            if attr and attr.mode == "directory" then
+                for f in lfs.dir(path) do
+                    if f ~= "." and f ~= ".." then
+                        local fpath = path .. "/" .. f
+                        local fattr = lfs.attributes(fpath)
+                        if fattr and fattr.mode == "file" then
+                            os.remove(fpath)
+                            count = count + 1
+                        end
+                    end
+                end
+                lfs.rmdir(path)
+            end
+        end
+    end
+
+    if next(deleted_epubs) then
+        local ReadHistory = require("readhistory")
+        ReadHistory:removeItems(deleted_epubs)
+        -- removeItems calls this only for some settings; do it
+        -- unconditionally so "lastfile" is always fixed up.
+        ReadHistory:ensureLastFile()
+    end
+
+    return count
 end
 
 return M
