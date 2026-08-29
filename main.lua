@@ -242,10 +242,10 @@ function WikiReader:addToMainMenu(menu_items)
                         text = _("Show media as QR codes"),
                         keep_menu_open = true,
                         checked_func = function()
-                            return G_reader_settings:nilOrTrue("wikireader_qr_media")
+                            return G_reader_settings:isTrue("wikireader_qr_media")
                         end,
                         callback = function()
-                            G_reader_settings:flipNilOrTrue("wikireader_qr_media")
+                            G_reader_settings:flipNilOrFalse("wikireader_qr_media")
                         end,
                         help_text = _("Replace images and other media in an article with small QR codes you can scan with your phone. Turn this off to remove the media boxes entirely."),
                     },
