@@ -35,8 +35,9 @@ KOReader's `G_reader_settings` under `wikireader_*`.
    QR PNGs, stylesheet, metadata.
 5. Result cached as `<lang> - <Title>.epub`; opened via ReaderUI.
 
-## Commenting strategy (required)
+## Commenting strategy (important)
 
+- Add comment **only if necessary**.
 - Comments explain **why**, never **what**. No comment should restate the
   function name, narrate the next line, or label a section the code already
   shows.
