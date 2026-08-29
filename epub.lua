@@ -137,7 +137,10 @@ function M.buildEpub(epub_path, title, lang, callback)
             -- disables "Embedded Style" (the injected stylesheet.css and
             -- its table.infobox !important rule are ignored then, while
             -- inline styles may still apply). Runs BEFORE the %-escaping in
-            -- forceFullWidthStyle, on the raw style text.
+            -- forceFullWidthStyle, on the raw style text. Table borders are
+            -- not handled here: htmlclean.borderTableCells applies them
+            -- inline to infoboxes and wikitables alike (crengine ignores
+            -- descendant selectors, so stylesheet rules can't reach cells).
             local function infoboxFullWidthStyle(style)
                 style = style:gsub('font%-size%s*:%s*[^;]+;%s*', '')
                 style = style:gsub('font%-size%s*:%s*[^;]+', '')
@@ -172,6 +175,10 @@ function M.buildEpub(epub_path, title, lang, callback)
                 -- selectors), mirroring Wikipedia's own alignment.
                 html = htmlclean.centerInfoboxCells(html)
             end
+            -- Border infoboxes and wikitables as grids, inline (see
+            -- borderTableCells: crengine ignores descendant selectors, so
+            -- stylesheet rules can't reach the cells).
+            html = htmlclean.borderTableCells(html)
             if qr_enabled then
                 -- Keep media boxes intact so their images can be QR-coded.
                 html = htmlclean.stripElementsByClass(html, "div", { "catlinks", "navbox", "vertical-navbox", "side-box", "spoken-wikipedia", "shortdescription" })

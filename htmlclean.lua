@@ -526,13 +526,31 @@ end
 Infobox cell alignment
 --]]
 
+-- Appends a CSS declaration to a tag's inline style attribute, inserting
+-- the attribute when missing. Returns the modified tag. Function-based
+-- gsub replacement on purpose: the existing style text may contain %
+-- (e.g. font-size:80%) and gsub function results are never %-re-parsed.
+function M.addInlineStyle(tag, decl)
+    if tag:match('style%s*=%s*"[^"]*"') then
+        return (tag:gsub('(style%s*=%s*")([^"]*)(")', function(prefix, value, suffix)
+            if value == "" or value:match(';%s*$') then
+                return prefix .. value .. decl .. suffix
+            end
+            return prefix .. value .. ";" .. decl .. suffix
+        end))
+    end
+    -- No style attribute: insert one right after the tag name. decl must
+    -- not contain % (plain gsub replacement would eat % escapes).
+    return (tag:gsub('^(<[^%s>]+)', '%1 style="' .. decl .. '"'))
+end
+
 -- Centers the full-width cells of kept infoboxes (.infobox-title/above/
 -- header/subheader/image/full-data/below), mirroring Wikipedia's own
 -- stylesheet. Done as an inline style because that reliably applies in
 -- crengine: the base EPUB stylesheet has no .infobox rules at all, and
--- Wikipedia emits the label/data alignment inline too, so those full-width
--- rows would otherwise fall back to default left alignment. Cells already
--- carrying an explicit text-align declaration are left alone.
+-- crengine ignores descendant selectors in the EPUB stylesheet, so a
+-- ".infobox .infobox-title" rule never matches. Cells already carrying
+-- an explicit text-align declaration are left alone.
 function M.centerInfoboxCells(html)
     return (html:gsub('(<t[dh][^>]*class%s*=%s*"([^"]*)"[^>]*>)', function(tag, classes)
         if not (classes:find("infobox%-title", 1)
@@ -545,26 +563,61 @@ function M.centerInfoboxCells(html)
             return tag
         end
         local style_attr = tag:match('style%s*=%s*"[^"]*"')
-        if style_attr then
-            if style_attr:find('text%-align%s*:') then
-                return tag -- explicit alignment wins
-            end
-            -- Append inside the existing style="..." (function replacement:
-            -- the style text may contain % (e.g. font-size:80%) and gsub
-            -- function replacements never re-parse % in their result).
-            return (tag:gsub('(style%s*=%s*")([^"]*)(")', function(prefix, value, suffix)
-                if value == "" then
-                    return prefix .. "text-align:center" .. suffix
-                end
-                if value:match(';%s*$') then
-                    return prefix .. value .. "text-align:center" .. suffix
-                end
-                return prefix .. value .. ";text-align:center" .. suffix
-            end))
+        if style_attr and style_attr:find('text%-align%s*:') then
+            return tag -- explicit alignment wins
         end
-        -- No style attribute: insert one right after the tag name.
-        return (tag:gsub('^(<[^%s>]+)', '%1 style="text-align:center"'))
+        return M.addInlineStyle(tag, "text-align:center")
     end))
+end
+
+-- Tables that render as bordered grids: kept infoboxes and wikitables
+-- (Wikipedia's own bordered data tables). Other tables in article HTML are
+-- layout or message boxes and are left alone.
+local function isBorderedTableClass(class_attr)
+    local lower = class_attr:lower()
+    return lower:find("infobox", 1, true) ~= nil
+        or lower:find("wikitable", 1, true) ~= nil
+end
+
+-- Borders kept infobox and wikitable tables as grids: outer edge
+-- (#a2a9b1, Wikipedia's infobox/table gray) + border-collapse on the
+-- <table>, thin #ccc separators on every cell. All inline, because
+-- crengine ignores descendant selectors in the EPUB stylesheet (the same
+-- reason centerInfoboxCells works inline): a CSS ".wikitable td" rule
+-- never matches, and injected stylesheet rules vanish entirely when the
+-- user disables "Embedded Style". Nested-table cells are included:
+-- embedded layout/data tables read as part of the grid. Exposed for testing.
+function M.borderTableCells(html)
+    local out = {}
+    local pos = 1
+    while true do
+        local t_start, t_open_end = html:find("<table[^>]*>", pos)
+        if not t_start then
+            table.insert(out, html:sub(pos))
+            break
+        end
+        local open_tag = html:sub(t_start, t_open_end)
+        local class_attr = open_tag:match([[class%s*=%s*"([^"]*)"]]) or ""
+        local close_start, close_end
+        if isBorderedTableClass(class_attr) then
+            close_start, close_end = wutil.findMatchingClose(html, "table", t_open_end)
+        end
+        if not close_start then
+            table.insert(out, html:sub(pos, t_open_end))
+            pos = t_open_end + 1
+        else
+            table.insert(out, html:sub(pos, t_start - 1))
+            table.insert(out, M.addInlineStyle(open_tag,
+                "border:1px solid #a2a9b1;border-collapse:collapse"))
+            table.insert(out, (html:sub(t_open_end + 1, close_start - 1):gsub(
+                '(<t[dh][^>]*>)', function(tag)
+                    return M.addInlineStyle(tag, "border:1px solid #ccc")
+                end)))
+            table.insert(out, html:sub(close_start, close_end))
+            pos = close_end + 1
+        end
+    end
+    return table.concat(out)
 end
 
 --[[-------------------------------------------------------------------------
