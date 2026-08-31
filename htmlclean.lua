@@ -523,6 +523,73 @@ function M.stripImageCellsInBlock(block)
 end
 
 --[[-------------------------------------------------------------------------
+Element infobox periodic-table diagram
+--]]
+
+-- The {{Infobox element}} "X in the periodic table" block is a
+-- TemplateStyles-styled diagram: a 32-column "micro" table of 6px-wide
+-- colored cells plus symbol/neighbor divs, laid out entirely with CSS
+-- (border-spacing, empty-cells, floats) that crengine ignores. In the
+-- reflowed EPUB it collapses into ~120 unstyled cells in an overflowing
+-- row. Removed together with the infobox-header row introducing it, so no
+-- dangling "X in the periodic table" header stays behind. Header detection
+-- is structural (the single .infobox-header row directly above), never
+-- textual, so it works on non-English wikis too.
+function M.stripElementPeriodicTable(html)
+    local out = {}
+    local pos = 1
+    while true do
+        local d_start, d_end = html:find("<div[^>]*>", pos)
+        if not d_start then
+            table.insert(out, html:sub(pos))
+            break
+        end
+        local class_attr = html:sub(d_start, d_end):match([[class%s*=%s*"([^"]*)"]]) or ""
+        local d_close_start, d_close_end
+        if class_attr:lower():find("ib-element-periodic-table", 1, true) then
+            d_close_start, d_close_end = wutil.findMatchingClose(html, "div", d_end)
+        end
+        if not d_close_start then
+            table.insert(out, html:sub(pos, d_end))
+            pos = d_end + 1
+        else
+            local remove_start, remove_end = d_start, d_close_end
+            -- Row holding the diagram: the last <tr> opened before the div.
+            -- Requiring a <td> (and no </tr>) in that span rules out stray
+            -- "<tr..."-prefixed tags and ensures the div sits in that row.
+            local before = html:sub(pos, d_start - 1)
+            local row_rel = before:match(".*()<tr[^>]*>")
+            local row_text = row_rel and before:sub(row_rel)
+            if row_text and row_text:find("<td", 1, true)
+                and not row_text:find("</tr", 1, true) then
+                -- Header row introducing the diagram: must close right
+                -- before this row (only whitespace between) and hold a
+                -- single .infobox-header <th>.
+                local prev_close_rel = before:sub(1, row_rel - 1):match(".*()</tr%s*>%s*$")
+                local prev_open_rel = prev_close_rel
+                    and before:sub(1, prev_close_rel):match(".*()<tr[^>]*>")
+                local th_open = prev_open_rel
+                    and before:sub(prev_open_rel):match("^<tr[^>]*>%s*(<th[^>]*>)")
+                local prev_row = prev_open_rel
+                    and before:sub(prev_open_rel, prev_close_rel - 1)
+                if th_open and th_open:lower():find("infobox-header", 1, true)
+                    and prev_row and not prev_row:find("<td", 1, true) then
+                    remove_start = pos + prev_open_rel - 1
+                end
+            end
+            -- Removal ends at the </tr> closing the diagram's row.
+            local row_close_start, row_close_end = html:find("</tr%s*>", d_close_end + 1)
+            if row_close_start then
+                remove_end = row_close_end
+            end
+            table.insert(out, html:sub(pos, remove_start - 1))
+            pos = remove_end + 1
+        end
+    end
+    return table.concat(out)
+end
+
+--[[-------------------------------------------------------------------------
 Infobox cell alignment
 --]]
 

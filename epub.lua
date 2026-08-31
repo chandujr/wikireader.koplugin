@@ -167,6 +167,10 @@ function M.buildEpub(epub_path, title, lang, callback)
             html = htmlclean.cleanElementClasses(html, "table", { "wikitable" }, { "floatleft", "floatright" }, forceFullWidthStyle)
             if infobox_full_width then
                 html = htmlclean.cleanElementClasses(html, "table", { "infobox" }, { "floatleft", "floatright" }, infoboxFullWidthStyle)
+                -- {{Infobox element}}'s periodic-table diagram is
+                -- TemplateStyles/CSS art crengine can't render; drop it
+                -- (with its header row) before the other infobox passes.
+                html = htmlclean.stripElementPeriodicTable(html)
                 -- Kept infobox: drop media cells, keep text data and inline
                 -- names. Must run before the QR pass.
                 html = htmlclean.stripImageCells(html)
