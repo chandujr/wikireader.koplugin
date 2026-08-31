@@ -35,9 +35,8 @@ KOReader's `G_reader_settings` under `wikireader_*`.
    QR PNGs, stylesheet, metadata.
 5. Result cached as `<lang> - <Title>.epub`; opened via ReaderUI.
 
-## Commenting strategy (important)
+## Commenting strategy
 
-- Add comment **only if necessary**.
 - Comments explain **why**, never **what**. No comment should restate the
   function name, narrate the next line, or label a section the code already
   shows.
@@ -49,6 +48,7 @@ KOReader's `G_reader_settings` under `wikireader_*`.
 - When adding code, add a `why`-comment only where the code alone can't be
   understood. When editing, condense verbose comments rather than growing
   them — but never delete rationale-bearing content.
+- Add comment **only if necessary** (important).
 
 ## Notes for LLMs
 
