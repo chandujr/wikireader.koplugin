@@ -402,7 +402,7 @@ table.infobox {
             content = content .. [[
 
 .wikireader-notices {
-  border: 1px solid #888;
+  border: 1px solid #aaa;
   padding: 0.6em 0.8em;
   margin: 0 0 1em 0;
   font-style: italic;
