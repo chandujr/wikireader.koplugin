@@ -984,6 +984,12 @@ local function multiImageTransformRow(content, n_cols)
         local inner = content:sub(o_end + 1, c_start - 1)
         if tokenInClass(cls, "tsingle") then
             local td = open_tag:gsub("^<div([ >])", "<td%1")
+                -- The template's embedded TemplateStyles (which crengine
+                -- applies) floats .tsingle boxes left and, in its small-
+                -- screen media query, left-aligns their .thumbcaption --
+                -- the rewrite already provides the alignment via the
+                -- table's text-align:center, so the class must not survive.
+                :gsub('%s*class%s*=%s*"[^"]*"', '')
             table.insert(out, addStyleProp(td, "vertical-align:top"))
             table.insert(out, inner)
             table.insert(out, "</td>")
@@ -1096,6 +1102,19 @@ end
 -- div's "tmulti" class token) into a <table> (see the section comment
 -- above). Unexpected structures are returned unchanged, so it degrades
 -- gracefully.
+-- Removes the mw-halign-left/right/center alignment classes from <figure>
+-- elements. The base stylesheet targets left/right-aligned figures with
+-- class-carrying selectors that float them (web render mode) and gives
+-- centered ones wide margins -- rules that outrank the injected
+-- attribute-only selectors in the cascade, so the full-width figure box
+-- (which makes the article's own alignment meaningless in a single-column
+-- reflowable layout) could not be styled reliably.
+function M.stripFigureHalign(html)
+    return html:gsub('(<figure[^>]-class%s*=%s*")([^"]*)(")', function(prefix, cls, suffix)
+        return prefix .. cls:gsub('%s*mw%-halign%-%a+', '') .. suffix
+    end)
+end
+
 function M.restructureMultiImages(html)
     local out = {}
     local pos = 1

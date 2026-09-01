@@ -213,6 +213,11 @@ function M.buildEpub(epub_path, title, lang, callback)
             -- stitched in from the Archiver hooks below.
             if qr_enabled then
                 html = qrimage.replaceImagesWithQr(html, qr_images, qr_size, lang)
+                -- Figures' mw-halign-* classes select base-stylesheet rules
+                -- (floats, wide margins) that outrank the injected
+                -- attribute-only selectors; drop them so the full-width
+                -- figure rules below always win (see htmlclean.lua).
+                html = htmlclean.stripFigureHalign(html)
                 -- {{Multiple image}} uses flexbox, unsupported by crengine;
                 -- rewrite the box into a native <table>.
                 html = htmlclean.restructureMultiImages(html)
@@ -290,11 +295,8 @@ function M.buildEpub(epub_path, title, lang, callback)
             -- QR-code images (see qrimage.lua): KOReader's base stylesheet
             -- zeroes the top padding of figure/gallery boxes when NO images
             -- are included (real thumbnails would get padding-top: 0.5em).
-            -- A QR code is a flat rectangle with no strut, so without this
-            -- it would sit flush against the top dotted border. Restore the
-            -- same top padding the base rule gives real images. (A margin-top
-            -- on the <img> would be ignored: the figure is display: table,
-            -- so the image becomes an anonymous table-cell.)
+            -- A QR PNG is a flat rectangle with no strut, so without this
+            -- it would sit flush against the top dotted border.
             if qr_enabled then
                 content = content .. [[
 
@@ -309,18 +311,52 @@ li.gallerybox {
 /* {{Multiple image}} boxes, rewritten into a native <table> by
    htmlclean.restructureMultiImages (crengine cannot do the template's
    flexbox layout). Mirror the figure-box styling of the base stylesheet:
-   dotted border, matching margins, no page split. The template's inline
-   width (e.g. 492px) is kept, but capped at the content width so very
-   wide boxes (e.g. 792px stamp sheets) never overflow the page -- the
-   cells then shrink proportionally. */
+   dotted border, no page split, and -- unlike the floated article layout
+   -- full width. The template's inline width (e.g. 492px) is overridden
+   below so very wide boxes never overflow the page; the cells then
+   shrink proportionally. */
 table.wikireader-tmulti {
     border: dotted 1px black;
-    margin: 0.5em 2.5em 0.5em 2.5em;
+    margin: 0.5em 0 0.5em 0;
     padding: 0 0.5em 0 0.5em;
     text-align: center;
     font-size: 90%;
     page-break-inside: avoid;
+}
+
+/* Image boxes span the full text width instead of keeping the article's
+   own float, width and alignment (base stylesheet's float: right,
+   33%/25% shares, Parsoid's inline style="width: NNNpx"). Selectors
+   mirror the base stylesheet's (including its :dir(rtl) variant) so
+   these later !important rules win the cascade; the base rules for
+   .mw-halign-* figures never come into play because htmlclean strips
+   those classes. */
+figure[typeof~='mw:File/Thumb'],
+figure[typeof~='mw:File/Frame'] {
+    width: 100% !important;
     max-width: 100% !important;
+    margin: 0.5em 0 0.5em 0 !important;
+}
+body > div > figure[typeof~='mw:File/Thumb'],
+body > div > figure[typeof~='mw:File/Frame'],
+body > div:dir(rtl) > figure[typeof~='mw:File/Thumb'],
+body > div:dir(rtl) > figure[typeof~='mw:File/Frame'] {
+    float: none !important;
+    clear: none !important;
+    margin: 0.5em 0 0.5em 0 !important;
+}
+li.gallerybox {
+    width: 100% !important;
+    margin: 0.5em 0 0.5em 0 !important;
+}
+/* The thumbinner's inline "width:NNNpx;max-width:NNNpx" lands on the
+   rewritten table; max-width is what actually shrinks the box (width
+   alone loses to nothing but the cap still applies), so it must be
+   overridden too. */
+table.wikireader-tmulti {
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0.5em 0 0.5em 0 !important;
 }
 ]]
             end
