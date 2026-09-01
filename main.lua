@@ -189,6 +189,7 @@ function WikiReader:addToMainMenu(menu_items)
             {
                 text = _("Featured Articles"),
                 keep_menu_open = true,
+                separator = true,
                 sub_item_table = {
                     {
                         text = _("Today's Featured Article"),
@@ -263,6 +264,7 @@ function WikiReader:addToMainMenu(menu_items)
                     {
                         text = _("Disable hyperlinks"),
                         keep_menu_open = true,
+                        separator = true,
                         checked_func = function()
                             return G_reader_settings:isTrue("wikireader_disable_hyperlinks")
                         end,
@@ -270,6 +272,21 @@ function WikiReader:addToMainMenu(menu_items)
                             G_reader_settings:flipNilOrFalse("wikireader_disable_hyperlinks")
                         end,
                         help_text = _("Remove links to other Wikipedia articles from downloaded EPUBs, keeping their text. Links to references, footnotes and external sites are kept."),
+                    },
+                    {
+                        text = _("Clear cache"),
+                        keep_menu_open = true,
+                        separator = true,
+                        callback = function()
+                            UIManager:show(ConfirmBox:new{
+                                text = _("Delete all cached WikiReader articles?\nIf an article is currently open, it will be closed."),
+                                ok_text = _("Delete"),
+                                ok_callback = function()
+                                    self:clearCache()
+                                end,
+                            })
+                        end,
+                        help_text = _("Remove all cached WikiReader EPUB files and their reading progress. Closes the current article if one is open, so no leftover files remain."),
                     },
                     {
                         text = _("Gestures"),
@@ -289,6 +306,7 @@ function WikiReader:addToMainMenu(menu_items)
                         help_text = _("Show plugin name, description and version."),
                     },
                 },
+                separator = true,
             },
             {
                 text = _("Refetch current article"),
@@ -301,20 +319,7 @@ function WikiReader:addToMainMenu(menu_items)
                 end,
                 help_text = _("Delete the cached copy of the article you are reading and download it again, so the media, infobox and hyperlink settings in \"Settings\" also apply to it. Your reading position is kept."),
             },
-            {
-                text = _("Clear cache"),
-                keep_menu_open = true,
-                callback = function()
-                    UIManager:show(ConfirmBox:new{
-                        text = _("Delete all cached WikiReader articles?\nIf an article is currently open, it will be closed."),
-                        ok_text = _("Delete"),
-                        ok_callback = function()
-                            self:clearCache()
-                        end,
-                    })
-                end,
-                help_text = _("Remove all cached WikiReader EPUB files and their reading progress. Closes the current article if one is open, so no leftover files remain."),
-            },
+
             {
                 text = _("Save current article"),
                 keep_menu_open = true,
