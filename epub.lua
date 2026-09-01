@@ -296,7 +296,9 @@ function M.buildEpub(epub_path, title, lang, callback)
             -- zeroes the top padding of figure/gallery boxes when NO images
             -- are included (real thumbnails would get padding-top: 0.5em).
             -- A QR PNG is a flat rectangle with no strut, so without this
-            -- it would sit flush against the top dotted border.
+            -- it would sit flush against the top border. The base stylesheet
+            -- also boxes thumbnails with "border: dotted 1px black"; restyle
+            -- all QR boxes to a lighter dashed border to match the notices.
             if qr_enabled then
                 content = content .. [[
 
@@ -310,13 +312,13 @@ li.gallerybox {
 
 /* {{Multiple image}} boxes, rewritten into a native <table> by
    htmlclean.restructureMultiImages (crengine cannot do the template's
-   flexbox layout). Mirror the figure-box styling of the base stylesheet:
-   dotted border, no page split, and -- unlike the floated article layout
-   -- full width. The template's inline width (e.g. 492px) is overridden
-   below so very wide boxes never overflow the page; the cells then
-   shrink proportionally. */
+   flexbox layout). Mirror the figure-box styling of the base stylesheet
+   (no page split, and -- unlike the floated article layout -- full width),
+   but with the dashed QR-box border. The template's inline width
+   (e.g. 492px) is overridden below so very wide boxes never overflow the
+   page; the cells then shrink proportionally. */
 table.wikireader-tmulti {
-    border: dotted 1px black;
+    border: 1px dashed #aaa;
     margin: 0.5em 0 0.5em 0;
     padding: 0 0.5em 0 0.5em;
     text-align: center;
@@ -333,6 +335,7 @@ table.wikireader-tmulti {
    those classes. */
 figure[typeof~='mw:File/Thumb'],
 figure[typeof~='mw:File/Frame'] {
+    border: 1px dashed #aaa;
     width: 100% !important;
     max-width: 100% !important;
     margin: 0.5em 0 0.5em 0 !important;
@@ -346,6 +349,7 @@ body > div:dir(rtl) > figure[typeof~='mw:File/Frame'] {
     margin: 0.5em 0 0.5em 0 !important;
 }
 li.gallerybox {
+    border: 1px dashed #aaa;
     width: 100% !important;
     margin: 0.5em 0 0.5em 0 !important;
 }
