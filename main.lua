@@ -702,7 +702,7 @@ function WikiReader:showLinkPreview(title, lang)
             title_multilines = true,
             show_menu = false,
             width = math.floor(Screen:getWidth() * 0.8),
-            height = math.floor(Screen:getHeight() * 0.45),
+            height = math.floor(Screen:getHeight() * 0.6),
             text = extract,
             lang = lang,
             buttons_table = {
