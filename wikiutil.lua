@@ -21,23 +21,46 @@ HTTP helpers
 
 -- Minimal GET helper for small JSON API calls.
 -- Mirrors the request pattern KOReader's own frontend/ui/wikipedia.lua uses
--- internally for its Wikipedia API calls.
+-- internally for its Wikipedia API calls, including socketutil-based
+-- timeouts (10 s per block / 30 s total, same as getUrlContent defaults)
+-- so a stalled connection fails instead of blocking the UI forever.
+-- Callers already treat `not ok or code ~= 200` as a network failure, so a
+-- timeout flows through that same path — no caller changes needed.
 function M.httpGetJSON(url)
     local http = require("socket.http")
     local ltn12 = require("ltn12")
+    local socketutil = require("socketutil")
 
     local sink = {}
-    local ok, _, code = pcall(function()
-        local _, response_code = http.request{
+    local ok, code
+    socketutil:set_timeout(10, 30)
+    -- socketutil's table_sink also enforces the total timeout across chunks,
+    -- which a plain ltn12.sink.table would not.
+    local pcall_ok = pcall(function()
+        local request_ok, request_code_or_err = http.request{
             url = url,
             method = "GET",
-            sink = ltn12.sink.table(sink),
+            sink = socketutil.table_sink(sink),
             headers = {
                 ["User-Agent"] = "KOReader-WikiReader-plugin/0.1 (personal use)",
             },
         }
-        return true, response_code
+        if not request_ok then
+            -- Timeouts surface here as socketutil.TIMEOUT_CODE /
+            -- SINK_TIMEOUT_CODE / SSL_HANDSHAKE_CODE, never as raises.
+            ok = false
+            logger.warn("WikiReader API request failed:", request_code_or_err, url)
+        else
+            ok = true
+            code = request_code_or_err
+        end
     end)
+    -- Must run even after a pcall'd error, or all later LuaSocket traffic in
+    -- KOReader keeps the patched (tight) timeouts.
+    socketutil:reset_timeout()
+    if not pcall_ok then
+        ok = false
+    end
     return ok, code, sink
 end
 
