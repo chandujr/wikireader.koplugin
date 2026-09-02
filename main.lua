@@ -107,8 +107,8 @@ function WikiReader:init()
         end)
 
         -- Also patch onGoToExternalLink so that, when the "skip link dialog"
-        -- setting is enabled, Wikipedia links open directly without showing
-        -- the external-link dialog.
+        -- setting is enabled, Wikipedia links show a short preview popup
+        -- (instead of the external-link dialog or a full download right away).
         local wiki_reader_self = self
         local original_onGoToExternalLink = self.ui.link.onGoToExternalLink
         self.ui.link.onGoToExternalLink = function(link_self, link_url)
@@ -124,7 +124,7 @@ function WikiReader:init()
             local lang, escaped_title = wutil.parseWikiLink(link_url)
             if lang and escaped_title and G_reader_settings:nilOrTrue("wikireader_skip_link_dialog") then
                 local title = socket_url.unescape(escaped_title)
-                wiki_reader_self:openArticleInPlace(title, lang)
+                wiki_reader_self:showLinkPreview(title, lang)
                 return true
             end
             return original_onGoToExternalLink(link_self, link_url)
@@ -237,7 +237,7 @@ function WikiReader:addToMainMenu(menu_items)
                         callback = function()
                             G_reader_settings:flipNilOrTrue("wikireader_skip_link_dialog")
                         end,
-                        help_text = _("Whenever you tap a Wikipedia link inside an article, jump straight to that article without the intermediate dialog box."),
+                        help_text = _("Whenever you tap a Wikipedia link inside an article, show a short preview of that article instead of the intermediate dialog box, with a button to open it fully."),
                     },
                     {
                         text = _("Show media as QR codes"),
@@ -656,6 +656,74 @@ function WikiReader:openArticleInPlace(title, lang)
         end
         nav_current = { title = resolved_title or title, lang = lang or self.lang, path = epub_path }
         self.ui:switchDocument(epub_path)
+    end)
+end
+
+-- Lightweight alternative to opening the full article: fetch the linked
+-- page's lead extract (TextExtracts API) and offer it in a scrollable
+-- preview box, so a stray tap doesn't cost a full article download.
+function WikiReader:showLinkPreview(title, lang)
+    NetworkMgr:runWhenOnline(function()
+        local info = InfoMessage:new{ text = _("Fetching preview…") }
+        UIManager:show(info)
+        UIManager:forceRePaint()
+        UIManager:yieldToEPDC()
+
+        local url = string.format(
+            "https://%s.wikipedia.org/w/api.php?action=query&prop=extracts&exintro&explaintext&format=json&formatversion=2&redirects=1&titles=%s",
+            lang, socket_url.escape(title)
+        )
+        local ok, code, sink = wutil.httpGetJSON(url)
+        UIManager:close(info)
+
+        -- TextExtracts can come back empty (e.g. pages whose lead is just
+        -- an infobox), and the response carries the redirect-resolved title.
+        local extract, resolved_title
+        if ok and code == 200 then
+            local JSON = require("json")
+            local parse_ok, data = pcall(JSON.decode, table.concat(sink))
+            if parse_ok and data and data.query and data.query.pages then
+                local page = data.query.pages[1]
+                if page and not page.missing then
+                    extract = page.extract
+                    resolved_title = page.title
+                end
+            end
+        end
+        if not extract or extract == "" then
+            extract = _("No preview available for this article.")
+        end
+
+        local Screen = require("device").screen
+        local TextViewer = require("ui/widget/textviewer")
+        local preview
+        preview = TextViewer:new{
+            title = (resolved_title or title):gsub("_", " "),
+            title_multilines = true,
+            show_menu = false,
+            width = math.floor(Screen:getWidth() * 0.8),
+            height = math.floor(Screen:getHeight() * 0.45),
+            text = extract,
+            lang = lang,
+            buttons_table = {
+                {
+                    {
+                        text = _("Read more"),
+                        callback = function()
+                            preview:onClose()
+                            self:openArticleInPlace(resolved_title or title, lang)
+                        end,
+                    },
+                    {
+                        text = _("Close"),
+                        callback = function()
+                            preview:onClose()
+                        end,
+                    },
+                },
+            },
+        }
+        UIManager:show(preview)
     end)
 end
 
