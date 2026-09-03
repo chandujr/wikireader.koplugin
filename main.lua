@@ -295,7 +295,6 @@ function WikiReader:addToMainMenu(menu_items)
                     },
                     {
                         text = _("Clear cache"),
-                        keep_menu_open = true,
                         separator = true,
                         callback = function()
                             UIManager:show(ConfirmBox:new{
