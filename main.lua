@@ -296,6 +296,9 @@ function WikiReader:addToMainMenu(menu_items)
                     {
                         text = _("Clear cache"),
                         separator = true,
+                        enabled_func = function()
+                            return not cache.isEmpty()
+                        end,
                         callback = function()
                             UIManager:show(ConfirmBox:new{
                                 text = _("Delete all cached WikiReader articles?\nIf an article is currently open, it will be closed."),

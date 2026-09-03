@@ -100,6 +100,18 @@ function M.pruneCache()
     end
 end
 
+-- Any .epub counts, even an expired one: it is still visible in the
+-- FileManager and still deleted by wipeAll(), so it should keep the
+-- "Clear cache" menu entry enabled.
+function M.isEmpty()
+    for name in lfs.dir(M.getCacheDir()) do
+        if name:match("%.epub$") then
+            return false
+        end
+    end
+    return true
+end
+
 -- Delete every cached article: epub files (via removeCachedFile so their
 -- .sdr sidecars go too), any other leftover files, and then the remaining
 -- directories (sidecars/orphans). Also drops the deleted epubs from
