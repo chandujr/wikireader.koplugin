@@ -4,8 +4,8 @@ WikiReader: read Wikipedia articles as formatted EPUBs inside KOReader.
 Adds a "WikiReader" entry to the main menu and to the Search menu (right
 after the built-in Wikipedia history). From it you can search Wikipedia,
 open a featured article (today's, a picked date, or a random one), browse
-featured articles by category, set the Wikipedia language, and step back
-through articles you've read.
+featured articles by category, view history, set the Wikipedia language,
+and step back through articles you've read.
 
 Articles are fetched and converted to EPUBs with KOReader's own built-in
 Wikipedia conversion (ui/wikipedia.lua), so headings and the table of
@@ -48,6 +48,7 @@ local _ = require("gettext")
 local cache = require("wikireader-cache")
 local categories = require("categories")
 local epub = require("epub")
+local history = require("wikireader-history")
 local wutil = require("wikiutil")
 
 local WikiReader = WidgetContainer:extend{
@@ -274,6 +275,25 @@ function WikiReader:addToMainMenu(menu_items)
                         help_text = _("Remove links to other Wikipedia articles from downloaded EPUBs, keeping their text. Links to references, footnotes and external sites are kept."),
                     },
                     {
+                        text = _("Clear history"),
+                        enabled_func = function()
+                            return #history.getList() > 0
+                        end,
+                        callback = function()
+                            UIManager:show(ConfirmBox:new{
+                                text = _("Forget all articles in the WikiReader history?"),
+                                ok_text = _("Clear"),
+                                ok_callback = function()
+                                    history.clear()
+                                    UIManager:show(InfoMessage:new{
+                                        text = T("History cleared."),
+                                    })
+                                end,
+                            })
+                        end,
+                        help_text = _("Forget the list of the last 10 articles shown in the History menu. Cached EPUB files are not deleted."),
+                    },
+                    {
                         text = _("Clear cache"),
                         keep_menu_open = true,
                         separator = true,
@@ -343,6 +363,17 @@ function WikiReader:addToMainMenu(menu_items)
                 help_text = _("Copies the current article's Wikipedia link to the clipboard and shows a QR code of it that you can scan from another device."),
             },
             {
+                text = _("History"),
+                enabled_func = function()
+                    return #history.getList() > 0
+                end,
+                sub_item_table_func = function()
+                    -- Built when the menu is opened, so it reflects opens
+                    -- that happened after the main menu was registered.
+                    return self:buildHistoryMenu()
+                end,
+            },
+            {
                 text_func = function()
                     if #nav_history > 0 then
                         return T(_("Back to previous article (%1)"), #nav_history)
@@ -374,6 +405,39 @@ function WikiReader:addToMainMenu(menu_items)
     end
     insertAfterWikipHistory(require("ui/elements/filemanager_menu_order"))
     insertAfterWikipHistory(require("ui/elements/reader_menu_order"))
+end
+
+-- Opens a history entry in the current reader (switching, and keeping
+-- back-history continuity) when one is open, otherwise starts a fresh
+-- article nav, which also works from the FileManager.
+function WikiReader:openHistoryEntry(entry)
+    if self.ui and self.ui.switchDocument then
+        self:openArticleInPlace(entry.title, entry.lang)
+    else
+        self:openArticle(entry.title, entry.lang)
+    end
+end
+
+-- The last 10 opened articles, newest first. Titles are shown with the
+-- language edition only when it differs from the current default, to keep
+-- the common (default-lang) entries readable.
+function WikiReader:buildHistoryMenu()
+    local list = history.getList()
+    local items = {}
+    for _, entry in ipairs(list) do
+        local text = entry.title
+        if entry.lang and entry.lang ~= self.lang then
+            text = T("%1 (%2)", text, entry.lang:upper())
+        end
+        table.insert(items, {
+            text = text,
+            callback = function()
+                self:openHistoryEntry(entry)
+            end,
+        })
+    end
+
+    return items
 end
 
 function WikiReader:showLanding()
@@ -561,6 +625,9 @@ function WikiReader:openArticle(title, lang)
     self:fetchAndOpen(title, lang, function(epub_path, resolved_title)
         nav_history = {}
         nav_current = { title = resolved_title or title, lang = lang or self.lang, path = epub_path }
+        -- Record with the resolved title: that's the one later fetches will
+        -- find in the cache without a redirect round-trip.
+        history.record(nav_current.title, nav_current.lang)
         local ReaderUI = require("apps/reader/readerui")
         ReaderUI:showReader(epub_path)
     end)
@@ -655,6 +722,7 @@ function WikiReader:openArticleInPlace(title, lang)
             table.insert(nav_history, from_article)
         end
         nav_current = { title = resolved_title or title, lang = lang or self.lang, path = epub_path }
+        history.record(nav_current.title, nav_current.lang)
         self.ui:switchDocument(epub_path)
     end)
 end

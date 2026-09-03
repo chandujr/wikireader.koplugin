@@ -22,6 +22,7 @@ KOReader's `G_reader_settings` under `wikireader_*`.
 | `cladogram.lua` | Clade tables → Unicode box-drawing `<pre>` diagrams. |
 | `wikiutil.lua` | Shared helpers: minimal HTTP JSON GET, Wikipedia URL parsing/encoding, HTML notice-tag constants, balanced-tag matching (`findMatchingClose`). |
 | `wikireader-cache.lua` | EPUB cache (10 entries / 24 h), stale-file removal, sidecar-aware delete, cache dir handling. |
+| `wikireader-history.lua` | Last-10-articles reading history (title/lang references persisted in `G_reader_settings`, no files). |
 | `categories.lua` | Featured-articles category tree built from the API's flat section list; module-level lookup used by the link handler. |
 | `_meta.lua` | Plugin name/version metadata shown in the About dialog. |
 
