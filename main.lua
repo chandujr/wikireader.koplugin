@@ -607,7 +607,7 @@ function WikiReader:openRandomFeaturedArticle()
 end
 
 function WikiReader:showAbout()
-    local version = self.version and (" " .. self.version) or ""
+    local version = self.version and (" v" .. self.version) or ""
     UIManager:show(InfoMessage:new{
         text = (self.fullname or _("WikiReader")) .. version .. "\n\n" .. (self.description or ""),
     })
