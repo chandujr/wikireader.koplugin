@@ -102,20 +102,28 @@ function M.buildEpub(epub_path, title, lang, callback)
             local infobox_full_width = G_reader_settings:isTrue("wikireader_show_infoboxes")
 
             -- Force a kept table to span the whole page width and drop any
-            -- inline float, so body text can never sit beside it in the
+            -- inline float or horizontal margin, so body text can never sit
+            -- beside it and it can never overflow the page margin in the
             -- single-column reflowable layout. (floatleft/floatright class
             -- removal is handled separately by cleanElementClasses.)
             --
             -- NOTE: cleanElementClasses splices this return value into the
             -- tag via a gsub replacement where % is special, so any literal
             -- percent must survive as %% (decoded back to % by that final
-            -- splice). The width/float declarations are therefore removed by
-            -- *deleting* with a gsub (replacement "") and the "width:100%%"
-            -- suffix is appended plain -- never pushed through a gsub
-            -- replacement -- to avoid double-decoding it to "width:100".
+            -- splice). The width/float/margin declarations are therefore
+            -- removed by *deleting* with a gsub (replacement "") and the
+            -- "width:100%%" suffix is appended plain -- never pushed
+            -- through a gsub replacement -- to avoid double-decoding it to
+            -- "width:100".
             local function forceFullWidthStyle(style)
                 style = style:gsub('width%s*:%s*[^;]+', '') -- existing fixed width
                 style = style:gsub('float%s*:%s*[^;]+', '') -- inline float
+                -- Horizontal margins sit on top of the width:100% box in
+                -- crengine, pushing the table past the right page margin.
+                -- The shorthand must go too, for its horizontal components.
+                style = style:gsub('margin%s*:%s*[^;]+', '')
+                style = style:gsub('margin%-left%s*:%s*[^;]+', '')
+                style = style:gsub('margin%-right%s*:%s*[^;]+', '')
                 style = style:gsub(';%s*;+', ';'):gsub('^%s*;?%s*', ''):gsub(';%s*$', '')
                 -- Any % left in the kept declarations must also be escaped
                 -- for the final splice (e.g. font-size: 80%): each % becomes
