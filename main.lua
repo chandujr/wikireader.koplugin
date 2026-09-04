@@ -206,6 +206,7 @@ function WikiReader:addToMainMenu(menu_items)
                 text = _("Featured Articles"),
                 keep_menu_open = true,
                 separator = true,
+                help_text = _("Read Wikipedia's featured article for today or a past date, or browse featured articles by category. This relies on the \"featured article of the day\" feed, which may be missing or unreliable for languages other than English."),
                 sub_item_table = {
                     {
                         text = _("Today's Featured Article"),
@@ -634,7 +635,13 @@ end
 
 function WikiReader:openFeaturedArticle(date)
     NetworkMgr:runWhenOnline(function()
-        local info = InfoMessage:new{ text = _("Fetching featured article…") }
+        -- The explicit date comes from the date picker or the random pick,
+        -- so showing it confirms what was actually chosen.
+        local info = InfoMessage:new{
+            text = date
+                and T(_("Fetching featured article for %1…"), date)
+                or _("Fetching featured article…"),
+        }
         UIManager:show(info)
 
         UIManager:scheduleIn(0, function()
