@@ -4,8 +4,9 @@ WikiReader: read Wikipedia articles as formatted EPUBs inside KOReader.
 Adds a "WikiReader" entry to the main menu and to the Search menu (right
 after the built-in Wikipedia history). From it you can search Wikipedia,
 open a featured article (today's, a picked date, or a random one), browse
-featured articles by category, view history, set the Wikipedia language,
-and step back through articles you've read.
+featured articles by category, read today's English Wikipedia main page
+("In the news", "Did you know", "On this day"), view history, set the
+Wikipedia language, and step back through articles you've read.
 
 Articles are fetched and converted to EPUBs with KOReader's own built-in
 Wikipedia conversion (ui/wikipedia.lua), so headings and the table of
@@ -49,6 +50,7 @@ local cache = require("wikireader-cache")
 local categories = require("categories")
 local epub = require("epub")
 local history = require("wikireader-history")
+local mainpage = require("mainpage")
 local wutil = require("wikiutil")
 
 local WikiReader = WidgetContainer:extend{
@@ -158,10 +160,10 @@ function WikiReader:onReaderReady()
     end
 
     local filename = file:match("([^/]+)$")
-    -- Helper pages (search results, featured/category lists) have no
-    -- single article behind them to refetch.
-    if filename:match("^__search__") or filename:match("^__featured__")
-        or filename:match("^__category__") then
+    -- The main page has no single article behind it to refetch. Its
+    -- "__mainpage__" sentinel survives verbatim into the filename
+    -- (see cache.getHelperCachePath), unlike the getCachePath() keys.
+    if filename:find("__mainpage__", 1, true) then
         return
     end
 
@@ -192,6 +194,13 @@ function WikiReader:addToMainMenu(menu_items)
                 callback = function()
                     self:showLanding()
                 end,
+            },
+            {
+                text = _("Wikipedia main page"),
+                callback = function()
+                    self:openMainPage()
+                end,
+                help_text = _("Today's English Wikipedia main page with its \"In the news\", \"Did you know\" and \"On this day\" sections, as a readable book. Tapping an article opens it like any other WikiReader article."),
             },
             {
                 text = _("Featured Articles"),
@@ -340,7 +349,7 @@ function WikiReader:addToMainMenu(menu_items)
                 text = _("Refetch current article"),
                 keep_menu_open = true,
                 enabled_func = function()
-                    return nav_current ~= nil and nav_current.title ~= nil
+                    return nav_current ~= nil and nav_current.title ~= nil and not nav_current.helper
                 end,
                 callback = function()
                     self:refetchCurrentArticle()
@@ -352,7 +361,7 @@ function WikiReader:addToMainMenu(menu_items)
                 text = _("Save current article"),
                 keep_menu_open = true,
                 enabled_func = function()
-                    return nav_current ~= nil and nav_current.path ~= nil
+                    return nav_current ~= nil and nav_current.path ~= nil and not nav_current.helper
                 end,
                 callback = function()
                     self:saveCurrentArticle()
@@ -363,7 +372,7 @@ function WikiReader:addToMainMenu(menu_items)
                 text = _("Share current article link"),
                 keep_menu_open = true,
                 enabled_func = function()
-                    return nav_current ~= nil and nav_current.title ~= nil
+                    return nav_current ~= nil and nav_current.title ~= nil and not nav_current.helper
                 end,
                 callback = function()
                     self:shareCurrentArticleLink()
@@ -663,6 +672,40 @@ function WikiReader:openFeaturedArticle(date)
             end
 
             self:openArticle(title)
+        end)
+    end)
+end
+
+function WikiReader:openMainPage()
+    NetworkMgr:runWhenOnline(function()
+        local info = InfoMessage:new{ text = _("Fetching Wikipedia main page…") }
+        UIManager:show(info)
+
+        UIManager:scheduleIn(0, function()
+            local sections, err = mainpage.fetchSections()
+            UIManager:close(info)
+
+            if not sections then
+                UIManager:show(InfoMessage:new{
+                    text = err == "layout"
+                        and _("Couldn't find the news sections on the Wikipedia main page (its layout may have changed).")
+                        or _("Couldn't fetch the Wikipedia main page. Check your connection and try again."),
+                })
+                return
+            end
+
+            local ok_build, epub_path = epub.buildMainPageEpub(os.date("%Y-%m-%d"), "en", sections)
+            if not ok_build then
+                UIManager:show(InfoMessage:new{
+                    text = _("Couldn't build the main page."),
+                })
+                return
+            end
+            cache.pruneCache()
+            nav_history = {}
+            nav_current = { title = _("Wikipedia main page"), lang = "en", path = epub_path, helper = true }
+            local ReaderUI = require("apps/reader/readerui")
+            ReaderUI:showReader(epub_path)
         end)
     end)
 end

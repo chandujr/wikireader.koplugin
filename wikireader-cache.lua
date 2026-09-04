@@ -43,6 +43,16 @@ function M.getCachePath(title, lang)
     return dir .. "/" .. filename
 end
 
+-- Path for internally-keyed helper pages (search results, category
+-- lists, main page). Unlike getCachePath(), the "__kind__" sentinel
+-- survives into the filename so onReaderReady() can recognise reopened
+-- helper pages (getCachePath()'s "_"→" " normalisation would erase it).
+function M.getHelperCachePath(kind, name, lang)
+    local dir = M.getCacheDir()
+    local filename = util.getSafeFilename(string.format("%s - %s%s.epub", lang or "en", kind, name), dir)
+    return dir .. "/" .. filename
+end
+
 -- Returns the path if a still-fresh (< 1 day old) cached copy exists;
 -- otherwise nil, deleting the file first if it exists but has expired.
 function M.getFreshCachePath(title, lang)

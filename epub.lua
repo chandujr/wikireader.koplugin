@@ -485,6 +485,88 @@ pre.wikireader-cladogram {
 end
 
 --[[-------------------------------------------------------------------------
+Single-page EPUB writer (shared by the standalone builders)
+--]]
+
+-- Writes one XHTML page plus stylesheet and package/NCX metadata for the
+-- standalone helper pages (search results, category lists, main page),
+-- which don't go through Wikipedia.createEpub(). Returns true on success.
+local function writeSinglePageEpub(epub_path, title, lang, bookid_prefix, html_content, css)
+    local mtime = os.time()
+
+    local epub = Archiver.Writer:new{}
+    local epub_path_tmp = epub_path .. ".tmp"
+    if not epub:open(epub_path_tmp, "epub") then
+        return false
+    end
+
+    epub:setZipCompression("store")
+    epub:addFileFromMemory("mimetype", "application/epub+zip", mtime)
+    epub:setZipCompression("deflate")
+
+    epub:addFileFromMemory("META-INF/container.xml", [[
+<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>]], mtime)
+
+    local safe_title = title:gsub("[^%w]", "_")
+    local bookid = string.format("%s_%s_%s_%d", bookid_prefix, lang, safe_title, mtime)
+    local opf = string.format([[<?xml version='1.0' encoding='utf-8'?>
+<package xmlns="http://www.idpf.org/2007/opf"
+        xmlns:dc="http://purl.org/dc/elements/1.1/"
+        unique-identifier="bookid" version="2.0">
+  <metadata>
+    <dc:title>%s</dc:title>
+    <dc:identifier id="bookid">%s</dc:identifier>
+    <dc:language>%s</dc:language>
+  </metadata>
+  <manifest>
+    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+    <item id="content" href="content.html" media-type="application/xhtml+xml"/>
+    <item id="css" href="stylesheet.css" media-type="text/css"/>
+  </manifest>
+  <spine toc="ncx">
+    <itemref idref="content"/>
+  </spine>
+</package>
+]], title, bookid, lang)
+    epub:addFileFromMemory("OEBPS/content.opf", opf, mtime)
+    epub:addFileFromMemory("OEBPS/content.html", html_content, mtime)
+    epub:addFileFromMemory("OEBPS/stylesheet.css", css, mtime)
+
+    local ncx = string.format([[
+<?xml version="1.0" encoding="UTF-8"?>
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+  <head>
+    <meta name="dtb:uid" content="%s"/>
+    <meta name="dtb:depth" content="1"/>
+    <meta name="dtb:totalPageCount" content="0"/>
+    <meta name="dtb:maxPageNumber" content="0"/>
+  </head>
+  <docTitle>
+    <text>%s</text>
+  </docTitle>
+  <navMap>
+    <navPoint id="navpoint-1" playOrder="1">
+      <navLabel>
+        <text>%s</text>
+      </navLabel>
+      <content src="content.html"/>
+    </navPoint>
+  </navMap>
+</ncx>
+]], bookid, title, title)
+    epub:addFileFromMemory("OEBPS/toc.ncx", ncx, mtime)
+    epub:close()
+
+    os.rename(epub_path_tmp, epub_path)
+    return true
+end
+
+--[[-------------------------------------------------------------------------
 Search results EPUB builder
 --]]
 
@@ -493,8 +575,6 @@ Search results EPUB builder
 -- If custom_title is provided, it's used as the page heading instead of
 -- "Search results for...".
 function M.buildSearchEpub(epub_path, query, lang, results, callback, custom_title)
-    local mtime = os.time()
-
     local display_title = custom_title or query
     local is_search = not custom_title
 
@@ -588,76 +668,10 @@ a {
 }
 ]]
 
-    local epub = Archiver.Writer:new{}
-    local epub_path_tmp = epub_path .. ".tmp"
-    if not epub:open(epub_path_tmp, "epub") then
+    if not writeSinglePageEpub(epub_path, display_title, lang, "search", html_content, css) then
         callback(false)
         return
     end
-
-    epub:setZipCompression("store")
-    epub:addFileFromMemory("mimetype", "application/epub+zip", mtime)
-    epub:setZipCompression("deflate")
-
-    epub:addFileFromMemory("META-INF/container.xml", [[
-<?xml version="1.0"?>
-<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
-  <rootfiles>
-    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
-  </rootfiles>
-</container>]], mtime)
-
-    local bookid = string.format("search_%s_%s_%d", lang, query:gsub("[^%w]", "_"), mtime)
-    local opf = string.format([[
-<?xml version='1.0' encoding='utf-8'?>
-<package xmlns="http://www.idpf.org/2007/opf"
-        xmlns:dc="http://purl.org/dc/elements/1.1/"
-        unique-identifier="bookid" version="2.0">
-  <metadata>
-    <dc:title>Search results for "%s"</dc:title>
-    <dc:identifier id="bookid">%s</dc:identifier>
-    <dc:language>%s</dc:language>
-  </metadata>
-  <manifest>
-    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
-    <item id="content" href="content.html" media-type="application/xhtml+xml"/>
-    <item id="css" href="stylesheet.css" media-type="text/css"/>
-  </manifest>
-  <spine toc="ncx">
-    <itemref idref="content"/>
-  </spine>
-</package>
-]], query, bookid, lang)
-    epub:addFileFromMemory("OEBPS/content.opf", opf, mtime)
-    epub:addFileFromMemory("OEBPS/content.html", html_content, mtime)
-    epub:addFileFromMemory("OEBPS/stylesheet.css", css, mtime)
-
-    local ncx = string.format([[
-<?xml version="1.0" encoding="UTF-8"?>
-<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
-  <head>
-    <meta name="dtb:uid" content="%s"/>
-    <meta name="dtb:depth" content="1"/>
-    <meta name="dtb:totalPageCount" content="0"/>
-    <meta name="dtb:maxPageNumber" content="0"/>
-  </head>
-  <docTitle>
-    <text>Search results for "%s"</text>
-  </docTitle>
-  <navMap>
-    <navPoint id="navpoint-1" playOrder="1">
-      <navLabel>
-        <text>Search results</text>
-      </navLabel>
-      <content src="content.html"/>
-    </navPoint>
-  </navMap>
-</ncx>
-]], bookid, query)
-    epub:addFileFromMemory("OEBPS/toc.ncx", ncx, mtime)
-    epub:close()
-
-    os.rename(epub_path_tmp, epub_path)
     callback(true, epub_path)
 end
 
@@ -742,77 +756,107 @@ a {
 ]]
 
     local epub_path = cache.getCachePath("__category__" .. title, lang)
-    local mtime = os.time()
-    local epub = Archiver.Writer:new{}
-    local epub_path_tmp = epub_path .. ".tmp"
-    if not epub:open(epub_path_tmp, "epub") then
+    if not writeSinglePageEpub(epub_path, title, lang, "category", html_content, css) then
         return false
     end
+    return true, epub_path
+end
 
-    epub:setZipCompression("store")
-    epub:addFileFromMemory("mimetype", "application/epub+zip", mtime)
-    epub:setZipCompression("deflate")
+--[[-------------------------------------------------------------------------
+Main page EPUB builder
+--]]
 
-    epub:addFileFromMemory("META-INF/container.xml", [[
-<?xml version="1.0"?>
-<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
-  <rootfiles>
-    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
-  </rootfiles>
-</container>]], mtime)
+-- Builds the "Wikipedia main page" EPUB from mainpage.fetchSections()
+-- output. The date is part of the cache key and title: each day is its
+-- own cache entry, so a cached copy never outlives the day's news.
+function M.buildMainPageEpub(date_str, lang, sections)
+    local year, month, day = date_str:match("^(%d+)%-(%d+)%-(%d+)$")
+    local display_date = date_str
+    if year then
+        -- hour=12 keeps the DST-sensitive %B conversion away from
+        -- midnight edges; the C locale gives English month names.
+        local t = os.time{ year = tonumber(year), month = tonumber(month), day = tonumber(day), hour = 12 }
+        display_date = string.format("%s %d, %d", os.date("%B", t), day, year)
+    end
 
-    local safe_title = title:gsub("[^%w]", "_")
-    local bookid = string.format("category_%s_%s_%d", lang, safe_title, mtime)
-    local opf = string.format([[
-<?xml version='1.0' encoding='utf-8'?>
-<package xmlns="http://www.idpf.org/2007/opf"
-        xmlns:dc="http://purl.org/dc/elements/1.1/"
-        unique-identifier="bookid" version="2.0">
-  <metadata>
-    <dc:title>%s</dc:title>
-    <dc:identifier id="bookid">%s</dc:identifier>
-    <dc:language>%s</dc:language>
-  </metadata>
-  <manifest>
-    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
-    <item id="content" href="content.html" media-type="application/xhtml+xml"/>
-    <item id="css" href="stylesheet.css" media-type="text/css"/>
-  </manifest>
-  <spine toc="ncx">
-    <itemref idref="content"/>
-  </spine>
-</package>
-]], title, bookid, lang)
-    epub:addFileFromMemory("OEBPS/content.opf", opf, mtime)
-    epub:addFileFromMemory("OEBPS/content.html", html_content, mtime)
-    epub:addFileFromMemory("OEBPS/stylesheet.css", css, mtime)
+    local page_title = _("Wikipedia main page")
+    local display_title = page_title .. " (" .. display_date .. ")"
 
-    local ncx = string.format([[
-<?xml version="1.0" encoding="UTF-8"?>
-<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
-  <head>
-    <meta name="dtb:uid" content="%s"/>
-    <meta name="dtb:depth" content="1"/>
-    <meta name="dtb:totalPageCount" content="0"/>
-    <meta name="dtb:maxPageNumber" content="0"/>
-  </head>
-  <docTitle>
-    <text>%s</text>
-  </docTitle>
-  <navMap>
-    <navPoint id="navpoint-1" playOrder="1">
-      <navLabel>
-        <text>%s</text>
-      </navLabel>
-      <content src="content.html"/>
-    </navPoint>
-  </navMap>
-</ncx>
-]], bookid, title, title)
-    epub:addFileFromMemory("OEBPS/toc.ncx", ncx, mtime)
-    epub:close()
+    local html_parts = {}
+    table.insert(html_parts, '<?xml version="1.0" encoding="utf-8"?>\n')
+    table.insert(html_parts, '<!DOCTYPE html>\n')
+    table.insert(html_parts, '<html xmlns="http://www.w3.org/1999/xhtml">\n')
+    table.insert(html_parts, '<head>\n')
+    table.insert(html_parts, '<meta charset="utf-8"/>\n')
+    table.insert(html_parts, '<link rel="stylesheet" type="text/css" href="stylesheet.css"/>\n')
+    table.insert(html_parts, '<title>')
+    table.insert(html_parts, display_title)
+    table.insert(html_parts, '</title>\n')
+    table.insert(html_parts, '</head>\n')
+    table.insert(html_parts, '<body>\n')
+    table.insert(html_parts, '<h1 class="koreaderwikifrontpage">')
+    table.insert(html_parts, page_title)
+    table.insert(html_parts, '</h1>\n')
+    table.insert(html_parts, '<p class="koreaderwikifrontpage">')
+    table.insert(html_parts, display_date)
+    table.insert(html_parts, '</p>\n')
+    table.insert(html_parts, '<hr class="koreaderwikifrontpage"/>\n')
 
-    os.rename(epub_path_tmp, epub_path)
+    local section_headings = {
+        itn = _("In the news"),
+        dyk = _("Did you know"),
+        otd = _("On this day"),
+    }
+    for _, key in ipairs({ "itn", "dyk", "otd" }) do
+        if sections[key] then
+            table.insert(html_parts, '<h2 class="wikireader-mainpage-section">')
+            table.insert(html_parts, section_headings[key])
+            table.insert(html_parts, '</h2>\n')
+            table.insert(html_parts, sections[key])
+            table.insert(html_parts, '\n')
+        end
+    end
+
+    table.insert(html_parts, '</body>\n')
+    table.insert(html_parts, '</html>\n')
+    local html_content = table.concat(html_parts)
+
+    local css = [[
+body {
+  text-align: justify;
+}
+h1.koreaderwikifrontpage {
+  text-align: center;
+  margin-top: 0;
+}
+p.koreaderwikifrontpage {
+  font-style: italic;
+  text-align: center;
+  margin-bottom: 1em;
+  text-indent: 0;
+}
+hr.koreaderwikifrontpage {
+  margin-left: 20%;
+  margin-right: 20%;
+  margin-bottom: 1.2em;
+}
+h2.wikireader-mainpage-section {
+  font-size: 120%;
+  border-bottom: 1px solid #aaa;
+  padding-bottom: 0.2em;
+  margin-top: 1em;
+}
+/* Match article EPUBs' link style; otherwise crengine's default blue shows */
+a {
+  text-decoration: underline;
+  color: inherit;
+}
+]]
+
+    local epub_path = cache.getHelperCachePath("__mainpage__", date_str, lang)
+    if not writeSinglePageEpub(epub_path, display_title, lang, "mainpage", html_content, css) then
+        return false
+    end
     return true, epub_path
 end
 

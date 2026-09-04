@@ -24,6 +24,7 @@ KOReader's `G_reader_settings` under `wikireader_*`.
 | `wikireader-cache.lua` | EPUB cache (10 entries / 24 h), stale-file removal, sidecar-aware delete, cache dir handling. |
 | `wikireader-history.lua` | Last-10-articles reading history (title/lang references persisted in `G_reader_settings`, no files). |
 | `categories.lua` | Featured-articles category tree built from the API's flat section list; module-level lookup used by the link handler. |
+| `mainpage.lua` | Scrapes today's English Wikipedia main page for its "In the news" / "Did you know" / "On this day" boxes (by their stable `mp-*` ids), cleans them, and absolutizes the article links. English-only: other wikis have different main-page titles and id-less markup. |
 | `_meta.lua` | Plugin name/version metadata shown in the About dialog. |
 
 ## Data flow (one pass each, order matters)
@@ -35,6 +36,13 @@ KOReader's `G_reader_settings` under `wikireader_*`.
 4. `Wikipedia.createEpub` builds the EPUB; patched `Archiver` hooks inject
    QR PNGs, stylesheet, metadata.
 5. Result cached as `<lang> - <Title>.epub`; opened via ReaderUI.
+
+The "Wikipedia main page" flow skips steps 2–4: `mainpage.fetchSections`
+scrapes and cleans the three main-page boxes itself, and
+`epub.buildMainPageEpub` writes the EPUB directly via the shared
+`writeSinglePageEpub` writer (also used by the search/category builders).
+Its cache key embeds the date (`__mainpage__<date>`), so a copy never
+outlives the day's news.
 
 ## Commenting strategy
 
