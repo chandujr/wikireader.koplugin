@@ -147,6 +147,9 @@ function M.buildEpub(epub_path, title, lang, callback)
                 return forceFullWidthStyle(style)
             end
 
+            -- Star icons must become text before any media pass can blank them.
+            html = htmlclean.ratingStarsToText(html)
+
             -- Strip clutter tables: chronology/nav/sidebar/route-map boxes
             -- are always dropped; infoboxes only while full-width mode is
             -- off (the default).

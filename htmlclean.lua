@@ -211,6 +211,30 @@ function M.cleanElementClasses(html, tag, class_patterns, classes_to_remove, rem
     return table.concat(out)
 end
 
+-- {{Rating}} stars (tiny Star full/half/empty.svg <img> icons) end up blank
+-- otherwise: removeInlineIcons() drops them in kept infoboxes and
+-- createEpub() strips unembeddable remote <img>s. Replacing just the <img>
+-- empties the mw:File wrapper, so the text survives later passes. Matched
+-- by filename anywhere in the tag: Parsoid REST output anchors it in
+-- resource=, the action=parse output we fetch only in the thumb src path.
+-- Half uses "½" because the exact glyph (U+2BE8) is missing from most
+-- device fonts.
+local STAR_ICONS = {
+    ["Star_full.svg"] = "★",
+    ["Star_half.svg"] = "½",
+    ["Star_empty.svg"] = "☆",
+}
+
+function M.ratingStarsToText(html)
+    return (html:gsub("<img[^>]->", function(tag)
+        for file, star in pairs(STAR_ICONS) do
+            if tag:find(file, 1, true) then
+                return star
+            end
+        end
+    end))
+end
+
 --[[-------------------------------------------------------------------------
 Media removal inside kept infobox tables and inline flags
 --]]
