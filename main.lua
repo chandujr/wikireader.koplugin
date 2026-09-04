@@ -519,9 +519,25 @@ function WikiReader:onShowWikiReaderMenu()
         logger.warn("wikireader: menu entry not found")
         return false
     end
-    -- openMenu() only highlights its final path element without entering it,
-    -- so the path is extended one level to step into the submenu itself.
-    touch_menu:openMenu(path .. ".1")
+    -- Walk to the entry by hand instead of TouchMenu:openMenu(): openMenu()
+    -- never un-highlights its final path element, and since the path has to
+    -- be extended one level (".1") to actually enter the submenu, that
+    -- stuck highlight would land on the first item ("Search Wikipedia")
+    -- when the menu is opened via a gesture. Switching tab and selecting
+    -- the entry directly is what openMenu()'s walk ends up doing anyway,
+    -- minus the highlight.
+    local tab, entry = path:match("^(%d+)%.(%d+)$")
+    if not tab then
+        touch_menu:openMenu(path .. ".1")
+        return true
+    end
+    tab, entry = tonumber(tab), tonumber(entry)
+    if touch_menu.not_shown then
+        UIManager:show(touch_menu.show_parent)
+    end
+    touch_menu:switchMenuTab(tab)
+    touch_menu.bar:switchToTab(tab)
+    touch_menu:onMenuSelect(touch_menu.item_table[entry])
     return true
 end
 
