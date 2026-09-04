@@ -771,6 +771,36 @@ local function elementIsLeadingNotice(open_tag)
     return false
 end
 
+-- True when a matched notice is addressed to editors (asking someone to
+-- fix, expand, move or delete the article) instead of informing readers.
+-- Module:Message box's type class is the language-independent
+-- discriminator; the box-* keep list spares the reader-relevant
+-- "current event"-family banners whose text also contains editor-facing
+-- sentences; English phrases catch the remaining ambox-notice leftovers
+-- ({{Under construction}}, {{In use}}, untyped protection tags).
+local function noticeInvitesEditing(open_tag, content)
+    local class_attr = (open_tag:match([[class%s*=%s*"([^"]*)"]]) or "")
+        :gsub("&#95;", "_"):lower()
+    for _, pat in ipairs(wutil.NOTICE_KEEP_BOX_CLASSES) do
+        if class_attr:find(pat, 1, true) then
+            return false
+        end
+    end
+    for _, pat in ipairs(wutil.EDITING_MBOX_CLASSES) do
+        if class_attr:find(pat, 1, true) then
+            return true
+        end
+    end
+    local text = content:gsub("<style[^>]*>.-</style%s*>", " ")
+        :gsub("<[^>]*>", " "):lower()
+    for _, phrase in ipairs(wutil.EDITING_NOTICE_PHRASES) do
+        if text:find(phrase, 1, true) then
+            return true
+        end
+    end
+    return false
+end
+
 -- Skips whitespace, HTML comments, <style>/<link>/<meta> tags and empty
 -- <p></p> elements sitting at `pos`: real Wikipedia HTML interleaves
 -- <style>/<link> between sibling hatnotes for CSS deduplication, and
@@ -816,7 +846,12 @@ local function extractLeadingNoticesInner(html)
         if not close_end then
             return table.concat(notices), html:sub(pos)
         end
-        table.insert(notices, html:sub(pos, close_end))
+        -- Editor-facing banners (expansion/citation/... requests) are
+        -- dropped, not extracted into the notices block.
+        if not noticeInvitesEditing(html:sub(open_start, open_end),
+                html:sub(open_end + 1, close_start - 1)) then
+            table.insert(notices, html:sub(pos, close_end))
+        end
         pos = skipLeadingCruft(html, close_end + 1)
     end
     return table.concat(notices), html:sub(pos)
@@ -849,8 +884,10 @@ end
 
 -- Wraps section-level notices (hatnotes, maintenance banners) not caught
 -- by extractLeadingNotices() -- e.g. "This section needs more citations..."
--- in <div class="wikireader-notices"> boxes. Deliberately a second pass
--- on the "rest" HTML, so front-of-article notices aren't double-wrapped.
+-- in <div class="wikireader-notices"> boxes. Editor-facing banners are
+-- dropped outright instead (see noticeInvitesEditing). Deliberately a
+-- second pass on the "rest" HTML, so front-of-article notices aren't
+-- double-wrapped.
 function M.wrapSectionNotices(html)
     local pos = 1
     local out = {}
@@ -875,11 +912,12 @@ function M.wrapSectionNotices(html)
                 table.insert(out, html:sub(open_start))
                 break
             end
-            local notice_content = html:sub(open_start, close_end)
-            table.insert(out, string.format(
-                [[<div class="wikireader-notices">%s</div>]],
-                notice_content
-            ))
+            if not noticeInvitesEditing(open_tag, html:sub(open_end + 1, close_start - 1)) then
+                table.insert(out, string.format(
+                    [[<div class="wikireader-notices">%s</div>]],
+                    html:sub(open_start, close_end)
+                ))
+            end
             pos = close_end + 1
         else
             table.insert(out, html:sub(pos, open_end))

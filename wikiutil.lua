@@ -15,6 +15,28 @@ M.LEADING_NOTICE_PATTERNS = {
     "mw:transclusion",
 }
 
+-- mbox type classes that mark a notice as editor-facing work (fix, expand,
+-- move, delete or protect the article) rather than reader information.
+-- Module:Message box emits these on every language edition that reuses it.
+M.EDITING_MBOX_CLASSES = {
+    "ambox-content", "ambox-style", "ambox-move", "ambox-deletion",
+    "ambox-speedy", "ambox-protection", "tmbox", "cmbox", "ombox", "fmbox",
+}
+-- box-* template-name class tokens (spaces render as &#95; entities in the
+-- class attribute) whose notices stay despite editor-facing sentences:
+-- they tell readers the article itself is in flux
+-- ({{Current}}: "may change rapidly" but also "Please update ...").
+-- Prefix tokens: box-current also matches {{Current related}} etc.
+M.NOTICE_KEEP_BOX_CLASSES = { "box-current", "box-recent_death" }
+-- English fallback phrases for editor-facing banners that carry no type
+-- class or are ambox-notice ({{Under construction}}, {{In use}}, untyped
+-- protection tags). Notices in other languages keep the old behaviour.
+M.EDITING_NOTICE_PHRASES = {
+    "you can help", "you are invited", "you are welcome",
+    "please help", "help improve", "edit request",
+    "remove this template", "actively being edited", "major edit",
+}
+
 --[[-------------------------------------------------------------------------
 HTTP helpers
 --]]
