@@ -73,6 +73,12 @@ function WikiReader:onDispatcherRegisterActions()
         title = _("WikiReader: back to previous article"),
         general = true,
     })
+    Dispatcher:registerAction("wikireader_open_menu", {
+        category = "none",
+        event = "ShowWikiReaderMenu",
+        title = _("WikiReader: open WikiReader menu"),
+        general = true,
+    })
 end
 
 function WikiReader:init()
@@ -315,7 +321,7 @@ function WikiReader:addToMainMenu(menu_items)
                         keep_menu_open = true,
                         callback = function()
                             UIManager:show(InfoMessage:new{
-                                text = _("You can bind a gesture to the \"Back to previous article\" action through the Gesture manager: \"General > WikiReader: back to previous article\"."),
+                                text = _("You can bind gestures to WikiReader actions through the Gesture manager:\n\n• Back to previous article\n  \"General > WikiReader: back to previous article\"\n\n• Open WikiReader menu\n  \"General > WikiReader: open WikiReader menu\""),
                             })
                         end,
                     },
@@ -440,6 +446,73 @@ function WikiReader:buildHistoryMenu()
     end
 
     return items
+end
+
+-- Resolve the path ("tab.item") of our top-level menu entry. Done by hand
+-- rather than TouchMenu:search because "WikiReader" is not a unique title (the
+-- same one exists under Plugin management > User plugins, and walking to that
+-- leaf would disable the plugin): match by menu id, or by title substring
+-- (orphaned plugins get a "NEW: " prefix) plus a "Search Wikipedia" child as
+-- signature. Tab items live in the tab table's array part, the only level
+-- scanned.
+local function findWikiReaderMenuPath(tab_item_table)
+    local title = _("WikiReader")
+    local signature = _("Search Wikipedia")
+
+    local function matchEntry(v, entry_path)
+        if type(v) ~= "table" or v.ignored_by_menu_search then
+            return nil
+        end
+        local sub = v.sub_item_table_func and v.sub_item_table_func() or v.sub_item_table
+        if type(sub) ~= "table" then
+            return nil
+        end
+        if v.id == "wikireader" then
+            return entry_path
+        end
+        local text = v.text_func and v.text_func() or v.text
+        if type(text) == "string" and text:find(title, 1, true) then
+            for _, child in ipairs(sub) do
+                local child_text = child.text_func and child.text_func() or child.text
+                if type(child_text) == "string" and child_text:find(signature, 1, true) then
+                    return entry_path
+                end
+            end
+        end
+        return nil
+    end
+
+    for tab_num, tab in ipairs(tab_item_table) do
+        if type(tab) == "table" then
+            for i, v in ipairs(tab) do
+                local found = matchEntry(v, tab_num .. "." .. i)
+                if found then
+                    return found
+                end
+            end
+        end
+    end
+end
+
+function WikiReader:onShowWikiReaderMenu()
+    local menu = self.ui.menu
+    if not menu or not menu.onShowMenu then
+        return false
+    end
+    menu:onShowMenu(nil, true)
+    local touch_menu = menu.menu_container and menu.menu_container[1]
+    if not touch_menu then
+        return false
+    end
+    local path = findWikiReaderMenuPath(touch_menu.tab_item_table)
+    if not path then
+        logger.warn("wikireader: menu entry not found")
+        return false
+    end
+    -- openMenu() only highlights its final path element without entering it,
+    -- so the path is extended one level to step into the submenu itself.
+    touch_menu:openMenu(path .. ".1")
+    return true
 end
 
 function WikiReader:showLanding()
