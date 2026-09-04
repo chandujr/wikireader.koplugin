@@ -57,7 +57,7 @@ outlives the day's news.
 - When adding code, add a `why`-comment only where the code alone can't be
   understood. When editing, condense verbose comments rather than growing
   them — but never delete rationale-bearing content.
-- Add comment **only if necessary** (important).
+- Add comments **only if necessary** (important). I repeat, do not add comments unnecessarily.
 
 ## Notes for LLMs
 
