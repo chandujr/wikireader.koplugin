@@ -466,6 +466,22 @@ pre.wikireader-cladogram {
   padding: 0.6em 0.8em;
   margin: 0 0 1em 0;
 }
+
+/* |title= row of a {{cladogram}} box, re-emitted above the diagram by
+   cladogram.lua. */
+.wikireader-cladogram-title {
+  font-weight: bold;
+  text-align: center;
+  font-size: 85%;
+  margin: 0 0 0.3em 0;
+}
+
+/* |caption= row of a {{cladogram}} box, re-emitted under the diagram by
+   cladogram.lua. */
+.wikireader-cladogram-caption {
+  font-size: 85%;
+  margin: 0 0 1em 0;
+}
 ]]
         end
         return original_addFileFromMemory(self, entry_path, content, mtime)

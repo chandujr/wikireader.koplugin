@@ -299,39 +299,125 @@ end
 Public API
 --]]
 
--- Replaces every top-level <table class="clade">...</table> (the clade
--- diagrams, each possibly nesting further clade tables) with a
--- <pre class="wikireader-cladogram"> box-drawing rendering of the tree.
--- Nested clade tables are consumed by their enclosing diagram, so scanning
--- from left to right naturally finds only whole diagrams.
+local function renderCladeText(inner)
+    -- A cladogram's root label, if any, is ordinary wikitext outside the
+    -- table, so the root always starts unnamed.
+    local root = { label = "", sublabel = "", children = parseCladeTable(inner) }
+    local rendered = renderTree(flattenNode(root))
+    if rendered == "" then return nil end
+    return rendered
+end
+
+local function preBlock(text, extra_style)
+    local style = extra_style and (' style="' .. extra_style .. '"') or ""
+    return '<pre class="wikireader-cladogram"' .. style .. '>' .. text .. '</pre>'
+end
+
+-- Splits a wrapper's text rows on whether a diagram row (class="clade"
+-- cells) has been seen: |title= renders BEFORE the diagram, |caption=
+-- AFTER it.
+local function wrapperTextRows(inner)
+    local pre, post = {}, {}
+    local seen_diagram = false
+    for _, row in ipairs(findTopLevel(inner, "tr", 1, #inner + 1)) do
+        local row_inner = inner:sub(row[2] + 1, row[3] - 1)
+        if row_inner:find('class%s*=%s*"[^"]*clade') then
+            seen_diagram = true
+        else
+            local cells = findTopLevel(row_inner, "td", 1, #row_inner + 1)
+            if cells[1] then
+                local text = row_inner:sub(cells[1][2] + 1, cells[1][3] - 1)
+                text = text:gsub("<style[^>]*>.-</style>", " ")
+                text = text:gsub("<link[^>]*/?>", " ")
+                text = text:match("^%s*(.-)%s*$") or ""
+                if text ~= "" then
+                    local list = seen_diagram and post or pre
+                    list[#list + 1] = text
+                end
+            end
+        end
+    end
+    return { pre = pre, post = post }
+end
+
+-- The wrapper table Template:Cladogram puts around the diagram must be
+-- replaced wholesale: keeping it would re-impose the article's narrow
+-- width (and float/centering) on the reflowed <pre>. Parsoid (REST API)
+-- marks it with the template name in data-mw; the action=parse output
+-- KOReader fetches emits a bare tag whose only trace of the template is
+-- its inline style: "width: NNNpx" with a float (|align=left/right) or
+-- auto margins (|align=center). Requiring no class keeps clades embedded
+-- in wikitables/infoboxes from matching.
+local function isCladogramWrapper(open_tag)
+    if open_tag:lower():find("cladogram", 1, true) then return true end
+    return open_tag:find("style%s*=") ~= nil
+        and open_tag:find("class%s*=") == nil
+        and open_tag:find("width%s*:%s*%d+%s*px") ~= nil
+        and (open_tag:find("float", 1, true) ~= nil
+            or open_tag:find("margin[^;]*auto") ~= nil)
+end
+
+-- Replaces every cladogram diagram with a <pre class="wikireader-cladogram">
+-- box-drawing rendering of the tree. Scanning top-level tables only is
+-- safe: clade tables nested in a diagram's leaf cells are consumed by
+-- parseCladeTable, and a wrapper is replaced wholesale. Bare {{clade}}
+-- tables are swapped directly; wrappers for diagram <pre>s plus title/
+-- caption rows; any other table embedding a clade is kept, with only the
+-- inner diagram swapped out.
 function M.replaceCladograms(html)
     local out = {}
     local pos = 1
     while true do
-        local os, oe = findCladeTable(html, pos)
-        if not os then
-            table.insert(out, html:sub(pos))
-            break
-        end
-        table.insert(out, html:sub(pos, os - 1))
+        local os, oe = html:find("<table[^>]*>", pos)
+        if not os then break end
         local cs, ce = wutil.findMatchingClose(html, "table", oe)
-        if not cs then
-            -- Malformed: keep the original block as-is rather than lose it.
-            table.insert(out, html:sub(os))
-            pos = #html + 1
-            break
+        if not cs then break end
+        local open_tag = html:sub(os, oe)
+        local inner = html:sub(oe + 1, cs - 1)
+        if open_tag:find('class="[^"]*clade[^"]*"') then
+            out[#out + 1] = html:sub(pos, os - 1)
+            local rendered = renderCladeText(inner)
+            if rendered then
+                out[#out + 1] = preBlock(rendered)
+            end
+            pos = ce + 1
+        elseif inner:find('class%s*=%s*"[^"]*clade') then
+            out[#out + 1] = html:sub(pos, os - 1)
+            if isCladogramWrapper(open_tag) then
+                local texts = {}
+                local cpos = 1
+                while true do
+                    local tos, toe = findCladeTable(inner, cpos)
+                    if not tos then break end
+                    local tcs, tce = wutil.findMatchingClose(inner, "table", toe)
+                    if not tcs then break end
+                    local rendered = renderCladeText(inner:sub(toe + 1, tcs - 1))
+                    if rendered then texts[#texts + 1] = rendered end
+                    cpos = tce + 1
+                end
+                local rows = wrapperTextRows(inner)
+                for _, title in ipairs(rows.pre) do
+                    out[#out + 1] = '<div class="wikireader-cladogram-title">' .. title .. '</div>'
+                end
+                for i, text in ipairs(texts) do
+                    -- Tighten the bottom margin so a trailing caption reads
+                    -- as part of the diagram.
+                    local style = (#rows.post > 0 and i == #texts) and "margin-bottom:0.3em" or nil
+                    out[#out + 1] = preBlock(text, style)
+                end
+                for _, cap in ipairs(rows.post) do
+                    out[#out + 1] = '<div class="wikireader-cladogram-caption">' .. cap .. '</div>'
+                end
+            else
+                out[#out + 1] = open_tag .. M.replaceCladograms(inner) .. "</table>"
+            end
+            pos = ce + 1
+        else
+            out[#out + 1] = html:sub(pos, ce)
+            pos = ce + 1
         end
-        -- The outermost table has no parent row to supply it a name (a
-        -- cladogram's root label, if any, is ordinary wikitext sitting
-        -- before the table, not part of it), so it starts unnamed.
-        local root = { label = "", sublabel = "", children = parseCladeTable(html:sub(oe + 1, cs - 1)) }
-        local tree = flattenNode(root)
-        local rendered = renderTree(tree)
-        if rendered ~= "" then
-            table.insert(out, '<pre class="wikireader-cladogram">' .. rendered .. '</pre>')
-        end
-        pos = ce + 1
     end
+    out[#out + 1] = html:sub(pos)
     return table.concat(out)
 end
 
