@@ -65,6 +65,11 @@ local WikiReader = WidgetContainer:extend{
 -- Module-level locals survive that jump.
 local nav_history = {}  -- stack of {title=.., lang=..}, oldest first
 local nav_current = nil -- {title=.., lang=..} of the article now open
+-- Menu "current/previous article" actions are gated on this: nav state is
+-- module-level and would otherwise still be offered in the FileManager
+-- after the Reader closed. Left false across our own switchDocument calls;
+-- onReaderReady re-arms it once the next wiki document is loaded.
+local nav_reader_alive = false
 
 local lfs = require("libs/libkoreader-lfs")
 
@@ -151,11 +156,13 @@ function WikiReader:onReaderReady()
     local file = self.ui.document and self.ui.document.file
     if not file then return end
 
-    -- Ignore documents outside our cache dir; also drop the stale
-    -- reference when a regular book is opened afterwards.
+    -- Ignore documents outside our cache dir; also drop the stale state
+    -- when a regular book is opened afterwards.
     local cache_dir = cache.getCacheDir()
     if file:sub(1, #cache_dir + 1) ~= cache_dir .. "/" then
         nav_current = nil
+        nav_history = {}
+        nav_reader_alive = false
         return
     end
 
@@ -164,6 +171,7 @@ function WikiReader:onReaderReady()
     -- "__mainpage__" sentinel survives verbatim into the filename
     -- (see cache.getHelperCachePath), unlike the getCachePath() keys.
     if filename:find("__mainpage__", 1, true) then
+        nav_reader_alive = true
         return
     end
 
@@ -182,6 +190,14 @@ function WikiReader:onReaderReady()
     if title and title ~= "" then
         nav_current = { title = title, lang = lang or self.lang, path = file }
     end
+    nav_reader_alive = true
+end
+
+-- Fires on exit to the FileManager as well as on our own document switches,
+-- so only drop the flag here; nav state itself is never reset (it was set
+-- before the switch, and onReaderReady re-arms for wiki documents).
+function WikiReader:onCloseDocument()
+    nav_reader_alive = false
 end
 
 function WikiReader:addToMainMenu(menu_items)
@@ -361,7 +377,7 @@ function WikiReader:addToMainMenu(menu_items)
                 text = _("Save current article"),
                 keep_menu_open = true,
                 enabled_func = function()
-                    return nav_current ~= nil and nav_current.path ~= nil and not nav_current.helper
+                    return nav_reader_alive and nav_current ~= nil and nav_current.path ~= nil and not nav_current.helper
                 end,
                 callback = function()
                     self:saveCurrentArticle()
@@ -372,7 +388,7 @@ function WikiReader:addToMainMenu(menu_items)
                 text = _("Share current article link"),
                 keep_menu_open = true,
                 enabled_func = function()
-                    return nav_current ~= nil and nav_current.title ~= nil and not nav_current.helper
+                    return nav_reader_alive and nav_current ~= nil and nav_current.title ~= nil and not nav_current.helper
                 end,
                 callback = function()
                     self:shareCurrentArticleLink()
@@ -383,7 +399,7 @@ function WikiReader:addToMainMenu(menu_items)
                 text = _("Refetch current article"),
                 keep_menu_open = true,
                 enabled_func = function()
-                    return nav_current ~= nil and nav_current.title ~= nil and not nav_current.helper
+                    return nav_reader_alive and nav_current ~= nil and nav_current.title ~= nil and not nav_current.helper
                 end,
                 callback = function()
                     self:refetchCurrentArticle()
@@ -398,7 +414,7 @@ function WikiReader:addToMainMenu(menu_items)
                     return _("Back to previous article")
                 end,
                 enabled_func = function()
-                    return #nav_history > 0
+                    return nav_reader_alive and #nav_history > 0
                 end,
                 callback = function()
                     self:onWikiReaderGoBack()
