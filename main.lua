@@ -347,17 +347,16 @@ function WikiReader:addToMainMenu(menu_items)
                 separator = true,
             },
             {
-                text = _("Refetch current article"),
-                keep_menu_open = true,
+                text = _("History"),
                 enabled_func = function()
-                    return nav_current ~= nil and nav_current.title ~= nil and not nav_current.helper
+                    return #history.getList() > 0
                 end,
-                callback = function()
-                    self:refetchCurrentArticle()
+                sub_item_table_func = function()
+                    -- Built when the menu is opened, so it reflects opens
+                    -- that happened after the main menu was registered.
+                    return self:buildHistoryMenu()
                 end,
-                help_text = _("Delete the cached copy of the article you are reading and download it again, so the media, infobox and hyperlink settings in \"Settings\" also apply to it. Your reading position is kept."),
             },
-
             {
                 text = _("Save current article"),
                 keep_menu_open = true,
@@ -381,15 +380,15 @@ function WikiReader:addToMainMenu(menu_items)
                 help_text = _("Copies the current article's Wikipedia link to the clipboard and shows a QR code of it that you can scan from another device."),
             },
             {
-                text = _("History"),
+                text = _("Refetch current article"),
+                keep_menu_open = true,
                 enabled_func = function()
-                    return #history.getList() > 0
+                    return nav_current ~= nil and nav_current.title ~= nil and not nav_current.helper
                 end,
-                sub_item_table_func = function()
-                    -- Built when the menu is opened, so it reflects opens
-                    -- that happened after the main menu was registered.
-                    return self:buildHistoryMenu()
+                callback = function()
+                    self:refetchCurrentArticle()
                 end,
+                help_text = _("Delete the cached copy of the article you are reading and download it again, so the media, infobox and hyperlink settings in \"Settings\" also apply to it. Your reading position is kept."),
             },
             {
                 text_func = function()
