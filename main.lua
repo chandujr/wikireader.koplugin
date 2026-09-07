@@ -5,8 +5,8 @@ Adds a "WikiReader" entry to the main menu and to the Search menu (right
 after the built-in Wikipedia history). From it you can search Wikipedia,
 open a featured article (today's, a picked date, or a random one), browse
 featured articles by category, read today's English Wikipedia main page
-("In the news", "Did you know", "On this day"), view history, set the
-Wikipedia language, and step back through articles you've read.
+("In the news", "Did you know", "On this day"), view history and bookmarks, set the Wikipedia language,
+and step back through articles you've read.
 
 Articles are fetched and converted to EPUBs with KOReader's own built-in
 Wikipedia conversion (ui/wikipedia.lua), so headings and the table of
@@ -24,6 +24,9 @@ math formulas are rendered as text, since crengine can't draw their CSS/JS.
 
 Tapping a Wikipedia link inside an open article is hooked to "Read as book"
 (the plugin's link handler), and keeps a back-history.
+
+Bookmarks are title references like history, but user-curated (add/remove
+toggle, no eviction) and never expire.
 
 Install: copy this wikireader.koplugin folder into koreader/plugins/ and
 restart KOReader.
@@ -46,6 +49,7 @@ local T = require("ffi/util").template
 local BD = require("ui/bidi")
 local _ = require("gettext")
 
+local bookmarks = require("wikireader-bookmarks")
 local cache = require("wikireader-cache")
 local categories = require("categories")
 local epub = require("epub")
@@ -214,6 +218,14 @@ function WikiReader:onCloseDocument()
     end
 end
 
+-- Whether the quick-add entry belongs in the Bookmarks menu: needs a real
+-- article (not a helper page) that isn't bookmarked yet.
+local function canBookmarkCurrentArticle()
+    return nav_reader_alive and nav_current ~= nil and nav_current.title ~= nil
+        and not nav_current.helper
+        and not bookmarks.has(nav_current.title, nav_current.lang)
+end
+
 function WikiReader:addToMainMenu(menu_items)
     menu_items.wikireader = {
         text = _("WikiReader"),
@@ -340,6 +352,25 @@ function WikiReader:addToMainMenu(menu_items)
                         help_text = _("Forget the list of the last 10 articles shown in the History menu. Cached EPUB files are not deleted."),
                     },
                     {
+                        text = _("Clear bookmarks"),
+                        enabled_func = function()
+                            return #bookmarks.getList() > 0
+                        end,
+                        callback = function()
+                            UIManager:show(ConfirmBox:new{
+                                text = _("Remove all WikiReader bookmarks?"),
+                                ok_text = _("Clear"),
+                                ok_callback = function()
+                                    bookmarks.clear()
+                                    UIManager:show(InfoMessage:new{
+                                        text = T("Bookmarks cleared."),
+                                    })
+                                end,
+                            })
+                        end,
+                        help_text = _("Remove all articles from the Bookmarks menu. Cached EPUB files are not deleted."),
+                    },
+                    {
                         text = _("Clear cache"),
                         separator = true,
                         enabled_func = function()
@@ -388,6 +419,18 @@ function WikiReader:addToMainMenu(menu_items)
                 end,
             },
             {
+                text = _("Bookmarks"),
+                enabled_func = function()
+                    -- Also enabled on an empty list: the quick-add for the
+                    -- current article lives inside this submenu.
+                    return #bookmarks.getList() > 0 or canBookmarkCurrentArticle()
+                end,
+                help_text = _("Articles you bookmarked for reading later. Tap to open; long-press to remove one."),
+                sub_item_table_func = function()
+                    return self:buildBookmarksMenu()
+                end,
+            },
+            {
                 text = _("Save current article"),
                 keep_menu_open = true,
                 enabled_func = function()
@@ -411,7 +454,6 @@ function WikiReader:addToMainMenu(menu_items)
             },
             {
                 text = _("Refetch current article"),
-                keep_menu_open = true,
                 enabled_func = function()
                     return nav_reader_alive and nav_current ~= nil and nav_current.title ~= nil and not nav_current.helper
                 end,
@@ -465,13 +507,31 @@ function WikiReader:openHistoryEntry(entry)
     end
 end
 
+-- TouchMenu renders the table returned by sub_item_table_func() as its
+-- live item_table and never re-invokes the func, so changed entries must
+-- be copied into that table before updateItems() can show them.
+local function refreshLiveMenuItems(touchmenu_instance, new_items)
+    if not touchmenu_instance then return end
+    if #new_items == 0 then
+        touchmenu_instance:backToUpperMenu()
+        return
+    end
+    local live = touchmenu_instance.item_table
+    for i = 1, math.max(#live, #new_items) do
+        live[i] = new_items[i]
+    end
+    touchmenu_instance:updateItems()
+end
+
 -- The last 10 opened articles, newest first. Titles are shown with the
 -- language edition only when it differs from the current default, to keep
--- the common (default-lang) entries readable.
+-- the common (default-lang) entries readable. Long-press forgets one entry.
 function WikiReader:buildHistoryMenu()
     local list = history.getList()
     local items = {}
-    for _, entry in ipairs(list) do
+    -- Not `for _, entry`: that would shadow gettext's `_` with a number,
+    -- breaking the translated string in the hold callback below.
+    for _i, entry in ipairs(list) do
         local text = entry.title
         if entry.lang and entry.lang ~= self.lang then
             text = T("%1 (%2)", text, entry.lang:upper())
@@ -481,10 +541,87 @@ function WikiReader:buildHistoryMenu()
             callback = function()
                 self:openHistoryEntry(entry)
             end,
+            hold_callback = function(touchmenu_instance)
+                UIManager:show(ConfirmBox:new{
+                    text = T(_("Forget \"%1\" in the WikiReader history?"), entry.title),
+                    ok_text = _("Forget"),
+                    ok_callback = function()
+                        history.remove(entry.title, entry.lang)
+                        refreshLiveMenuItems(touchmenu_instance, self:buildHistoryMenu())
+                    end,
+                })
+            end,
         })
     end
 
     return items
+end
+
+-- User-curated bookmarks, newest first, with a quick add of the article
+-- being read on top (hidden once it is bookmarked; removal is via
+-- long-press on the list entry). Long-press also removes list entries.
+function WikiReader:buildBookmarksMenu()
+    local items = {}
+    if canBookmarkCurrentArticle() then
+        table.insert(items, {
+            text = _("Bookmark current article"),
+            keep_menu_open = true,
+            callback = function(touchmenu_instance)
+                self:toggleCurrentArticleBookmark()
+                refreshLiveMenuItems(touchmenu_instance, self:buildBookmarksMenu())
+            end,
+            help_text = _("Add the article you are reading to this list."),
+            separator = true,
+        })
+    end
+    -- Not `for _, entry`: see buildHistoryMenu.
+    for _i, entry in ipairs(bookmarks.getList()) do
+        table.insert(items, {
+            text = entry.title,
+            callback = function()
+                self:openHistoryEntry(entry)
+            end,
+            hold_callback = function(touchmenu_instance)
+                UIManager:show(ConfirmBox:new{
+                    text = T(_("Remove \"%1\" from bookmarks?"), entry.title),
+                    ok_text = _("Remove"),
+                    ok_callback = function()
+                        bookmarks.remove(entry.title, entry.lang)
+                        refreshLiveMenuItems(touchmenu_instance, self:buildBookmarksMenu())
+                    end,
+                })
+            end,
+        })
+    end
+
+    return items
+end
+
+-- Add/remove toggle shared by the menu item and the link-preview button.
+-- Returns the new state, or nil when the add was refused (list full).
+function WikiReader:toggleBookmark(title, lang)
+    if bookmarks.has(title, lang) then
+        bookmarks.remove(title, lang)
+        return false
+    end
+    if not bookmarks.add(title, lang) then
+        UIManager:show(InfoMessage:new{
+            text = T(_("Bookmark list is full (%1). Remove some bookmarks first."), bookmarks.MAX_ENTRIES),
+        })
+        return nil
+    end
+    return true
+end
+
+function WikiReader:toggleCurrentArticleBookmark()
+    if not nav_current or not nav_current.title then return end
+    local state = self:toggleBookmark(nav_current.title, nav_current.lang or self.lang)
+    if state == nil then return end
+    UIManager:show(InfoMessage:new{
+        text = state
+            and T(_("Added \"%1\" to bookmarks."), nav_current.title)
+            or T(_("Removed \"%1\" from bookmarks."), nav_current.title),
+    })
 end
 
 -- Resolve the path ("tab.item") of our top-level menu entry. Done by hand
@@ -937,9 +1074,13 @@ function WikiReader:showLinkPreview(title, lang)
 
         local Screen = require("device").screen
         local TextViewer = require("ui/widget/textviewer")
+        local bookmark_title = resolved_title or title
+        local bookmarked_text = function()
+            return bookmarks.has(bookmark_title, lang) and _("Remove bookmark") or _("Add to bookmarks")
+        end
         local preview
         preview = TextViewer:new{
-            title = (resolved_title or title):gsub("_", " "),
+            title = bookmark_title:gsub("_", " "),
             title_multilines = true,
             show_menu = false,
             width = math.floor(Screen:getWidth() * 0.8),
@@ -953,6 +1094,22 @@ function WikiReader:showLinkPreview(title, lang)
                         callback = function()
                             preview:onClose()
                             self:openArticleInPlace(resolved_title or title, lang)
+                        end,
+                    },
+                },
+                {
+                    {
+                        text = bookmarked_text(),
+                        id = "bookmark",
+                        callback = function()
+                            local state = self:toggleBookmark(bookmark_title, lang)
+                            if state == nil then return end
+                            UIManager:show(InfoMessage:new{
+                                text = state
+                                    and T(_("Added \"%1\" to bookmarks."), bookmark_title)
+                                    or T(_("Removed \"%1\" from bookmarks."), bookmark_title),
+                            })
+                            preview:onClose()
                         end,
                     },
                     {

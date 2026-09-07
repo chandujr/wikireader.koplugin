@@ -25,20 +25,33 @@ local function normalizeTitle(title)
     return (title:gsub("_", " "))
 end
 
--- Move `title` to the front of the list (dropping any older duplicate
--- for the same lang), trim to MAX_ENTRIES and persist.
-function M.record(title, lang)
-    if not title or title == "" then return end
+-- Drop every entry matching title+lang and persist.
+function M.remove(title, lang)
+    if not title then return end
     lang = lang or "en"
 
     local list = M.getList()
     local norm = normalizeTitle(title)
+    local removed = false
     for i = #list, 1, -1 do
         if normalizeTitle(list[i].title) == norm and (list[i].lang or "en") == lang then
             table.remove(list, i)
+            removed = true
         end
     end
-    table.insert(list, 1, { title = norm, lang = lang })
+    if removed then
+        G_reader_settings:saveSetting(SETTING_NAME, list)
+    end
+end
+
+-- Move `title` to the front of the list, trim to MAX_ENTRIES and persist.
+function M.record(title, lang)
+    if not title or title == "" then return end
+    lang = lang or "en"
+
+    M.remove(title, lang)
+    local list = M.getList()
+    table.insert(list, 1, { title = normalizeTitle(title), lang = lang })
     while #list > M.MAX_ENTRIES do
         table.remove(list)
     end
