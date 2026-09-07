@@ -55,14 +55,19 @@ end
 
 -- Returns the path if a still-fresh (< 1 day old) cached copy exists;
 -- otherwise nil, deleting the file first if it exists but has expired.
-function M.getFreshCachePath(title, lang)
+-- keep_path (the file the open reader is displaying) is exempt: the
+-- refetch that follows the cache miss overwrites it in place, so it must
+-- survive -- with its .sdr sidecar and while crengine still has it open.
+function M.getFreshCachePath(title, lang, keep_path)
     local path = M.getCachePath(title, lang)
     local attr = lfs.attributes(path)
     if not attr then
         return nil
     end
     if os.time() - attr.modification > M.CACHE_MAX_AGE_SECONDS then
-        M.removeCachedFile(path)
+        if path ~= keep_path then
+            M.removeCachedFile(path)
+        end
         return nil
     end
     return path
@@ -74,12 +79,19 @@ end
 -- and the first article gets dropped" -- revisiting a cached article
 -- doesn't reset its place in line.
 --
+-- keep_path is never deleted or evicted. It is the file the active
+-- reader is displaying; during KOReader's last-file restore, plugins are
+-- initialised before the post-init callback that makes crengine parse
+-- the document, so deleting an expired last-file here used to make
+-- loadDocument() hit a vanished file and KOReader fatal-exit with
+-- "unsupported or invalid document".
+--
 -- Listing and deleting are kept as two fully separate passes on
 -- purpose: mutating a directory while still iterating it isn't
 -- guaranteed to visit every remaining entry on every filesystem,
 -- which could silently undercount files and let more than
 -- CACHE_MAX_ENTRIES pile up over time.
-function M.pruneCache()
+function M.pruneCache(keep_path)
     local dir = M.getCacheDir()
 
     local names = {}
@@ -95,7 +107,7 @@ function M.pruneCache()
         local path = dir .. "/" .. name
         local attr = lfs.attributes(path)
         if attr then
-            if now - attr.modification > M.CACHE_MAX_AGE_SECONDS then
+            if now - attr.modification > M.CACHE_MAX_AGE_SECONDS and path ~= keep_path then
                 M.removeCachedFile(path)
             else
                 table.insert(entries, { path = path, mtime = attr.modification })
@@ -106,7 +118,9 @@ function M.pruneCache()
     table.sort(entries, function(a, b) return a.mtime < b.mtime end)
     while #entries > M.CACHE_MAX_ENTRIES do
         local oldest = table.remove(entries, 1)
-        M.removeCachedFile(oldest.path)
+        if oldest.path ~= keep_path then
+            M.removeCachedFile(oldest.path)
+        end
     end
 end
 

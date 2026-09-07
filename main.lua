@@ -73,6 +73,12 @@ local nav_reader_alive = false
 
 local lfs = require("libs/libkoreader-lfs")
 
+-- The file the open reader is displaying, if any. Pruning must never
+-- delete it (see wikireader-cache.pruneCache).
+local function currentDocumentPath(self)
+    return self.ui and self.ui.document and self.ui.document.file or nil
+end
+
 function WikiReader:onDispatcherRegisterActions()
     Dispatcher:registerAction("wikireader_go_back", {
         category = "none",
@@ -92,7 +98,10 @@ function WikiReader:init()
     self.lang = G_reader_settings:readSetting("wikireader_lang") or "en"
     self:onDispatcherRegisterActions()
     self.ui.menu:registerToMainMenu(self)
-    cache.pruneCache()
+    -- Must not delete the file being restored as lastfile: crengine only
+    -- parses it after this init, and a vanished file is fatal (see
+    -- wikireader-cache.pruneCache).
+    cache.pruneCache(currentDocumentPath(self))
 
     -- Hook the reader's "what do you want to do with this link" dialog so
     -- tapping a Wikipedia link inside an article reads the linked article
@@ -739,7 +748,7 @@ function WikiReader:openMainPage()
                 })
                 return
             end
-            cache.pruneCache()
+            cache.pruneCache(currentDocumentPath(self))
             nav_history = {}
             nav_current = { title = _("Wikipedia main page"), lang = "en", path = epub_path, helper = true }
             local ReaderUI = require("apps/reader/readerui")
@@ -754,7 +763,10 @@ end
 function WikiReader:fetchAndOpen(title, lang, open_fn)
     lang = lang or self.lang
 
-    local cached_path = cache.getFreshCachePath(title, lang)
+    -- Never evict the file the open reader is displaying: on a cache
+    -- miss the refetch below overwrites it in place.
+    local keep_path = currentDocumentPath(self)
+    local cached_path = cache.getFreshCachePath(title, lang, keep_path)
     if cached_path then
         -- Cache hit: buildEpub() renamed the file to the resolved title on
         -- first fetch, so `title` is already casing-correct.
@@ -771,7 +783,7 @@ function WikiReader:fetchAndOpen(title, lang, open_fn)
                 })
                 return
             end
-            cache.pruneCache()
+            cache.pruneCache(keep_path)
             open_fn(used_path or epub_path, resolved_title)
         end)
     end)
@@ -861,7 +873,7 @@ function WikiReader:searchArticle(title, lang)
                     })
                     return
                 end
-                cache.pruneCache()
+                cache.pruneCache(currentDocumentPath(self))
                 nav_history = {}
                 nav_current = { title = title, lang = lang, path = used_path }
                 local ReaderUI = require("apps/reader/readerui")
@@ -989,7 +1001,7 @@ function WikiReader:refetchCurrentArticle()
                 })
                 return
             end
-            cache.pruneCache()
+            cache.pruneCache(currentDocumentPath(self))
 
             used_path = used_path or epub_path
             nav_current = { title = resolved_title or title, lang = lang, path = used_path }
@@ -1296,7 +1308,7 @@ function WikiReader:showFeaturedCategories()
                 })
                 return
             end
-            cache.pruneCache()
+            cache.pruneCache(currentDocumentPath(self))
             nav_history = {}
             nav_current = { title = _("Featured article categories"), lang = self.lang, path = cat_epub_path }
             local ReaderUI = require("apps/reader/readerui")
@@ -1355,7 +1367,7 @@ function WikiReader:fetchFeaturedCategoryArticles(section_index, section_title)
                     })
                     return
                 end
-                cache.pruneCache()
+                cache.pruneCache(currentDocumentPath(self))
                 local from_article = nav_current
                 if from_article then
                     table.insert(nav_history, from_article)
@@ -1391,7 +1403,7 @@ function WikiReader:fetchFeaturedCategoryArticles(section_index, section_title)
                         })
                         return
                     end
-                    cache.pruneCache()
+                    cache.pruneCache(currentDocumentPath(self))
                     local from_article = nav_current
                     if from_article then
                         table.insert(nav_history, from_article)
