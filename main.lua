@@ -576,8 +576,12 @@ function WikiReader:buildBookmarksMenu()
     end
     -- Not `for _, entry`: see buildHistoryMenu.
     for _i, entry in ipairs(bookmarks.getList()) do
+        local text = entry.title
+        if entry.lang and entry.lang ~= self.lang then
+            text = T("%1 (%2)", text, entry.lang:upper())
+        end
         table.insert(items, {
-            text = entry.title,
+            text = text,
             callback = function()
                 self:openHistoryEntry(entry)
             end,
