@@ -202,11 +202,16 @@ function WikiReader:onReaderReady()
     nav_reader_alive = true
 end
 
--- Fires on exit to the FileManager as well as on our own document switches,
--- so only drop the flag here; nav state itself is never reset (it was set
--- before the switch, and onReaderReady re-arms for wiki documents).
+-- tearing_down is set by KOReader before switching documents
+-- (switchDocument/showReader), so falsy means a real exit to the file
+-- manager: reset nav state there so the menu count vanishes immediately.
+-- During a switch the state must survive (onReaderReady re-arms/resets it).
 function WikiReader:onCloseDocument()
     nav_reader_alive = false
+    if not self.ui.tearing_down then
+        nav_history = {}
+        nav_current = nil
+    end
 end
 
 function WikiReader:addToMainMenu(menu_items)
