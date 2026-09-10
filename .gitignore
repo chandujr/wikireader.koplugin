@@ -1,0 +1,31 @@
+# Compiled Lua bytecode
+*.luac
+luac.out
+
+# Lua tooling
+lua_modules/
+.luarocks/
+*.rock
+luacov.*.out
+.luacov
+.luacheckcache
+
+# Packaged plugin
+*.koplugin
+*.zip
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS cruft
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Miscellaneous
+*~
+*.tmp
+*.bak
