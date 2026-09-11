@@ -11,7 +11,7 @@ A KOReader plugin for reading Wikipedia articles as formatted books, with a clea
 - Search Wikipedia articles
 - Access featured articles
 - Bookmark articles
-- Save articles as EPUBs permanently
+- Save current article as book in your library
 - Gesture support for quick access
 - and more...
 
