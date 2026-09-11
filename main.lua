@@ -83,6 +83,27 @@ local function currentDocumentPath(self)
     return self.ui and self.ui.document and self.ui.document.file or nil
 end
 
+local function isWikiEpubPath(path)
+    if not path then return false end
+    local cache_dir = cache.getCacheDir()
+    return path:sub(1, #cache_dir + 1) == cache_dir .. "/"
+end
+
+-- ReadHistory is a require() singleton shared by every ReaderUI, so one
+-- wrapper patch covers all of them, and also keeps "last file" from
+-- pointing at files our cache prunes away.
+local ReadHistory = require("readhistory")
+if not ReadHistory.wikireader_patched then
+    ReadHistory.wikireader_patched = true
+    local readhistory_addItem = ReadHistory.addItem
+    function ReadHistory:addItem(file, ts, no_flush)
+        if not G_reader_settings:isTrue("wikireader_count_in_stats") and isWikiEpubPath(file) then
+            return
+        end
+        return readhistory_addItem(self, file, ts, no_flush)
+    end
+end
+
 function WikiReader:onDispatcherRegisterActions()
     Dispatcher:registerAction("wikireader_go_back", {
         category = "none",
@@ -102,6 +123,27 @@ function WikiReader:init()
     self.lang = G_reader_settings:readSetting("wikireader_lang") or "en"
     self:onDispatcherRegisterActions()
     self.ui.menu:registerToMainMenu(self)
+
+    -- Statistics plugin classes are built via dofile (a fresh class table
+    -- each run), so the loader's list is the only way to reach the exact
+    -- table instances inherit onReaderReady from. Skipping it keeps
+    -- initData() from setting is_doc/id_curr_book, which guard every
+    -- statistics DB write.
+    local enabled_plugins = require("pluginloader"):loadPlugins()
+    for _, plugin in ipairs(enabled_plugins) do
+        if plugin.name == "statistics" and not plugin.wikireader_patched_onReaderReady then
+            plugin.wikireader_patched_onReaderReady = true
+            local statistics_onReaderReady = plugin.onReaderReady
+            plugin.onReaderReady = function(stats, config)
+                if not G_reader_settings:isTrue("wikireader_count_in_stats")
+                        and isWikiEpubPath(stats.ui and stats.ui.document and stats.ui.document.file) then
+                    return
+                end
+                return statistics_onReaderReady(stats, config)
+            end
+            break
+        end
+    end
     -- Must not delete the file being restored as lastfile: crengine only
     -- parses it after this init, and a vanished file is fatal (see
     -- wikireader-cache.pruneCache).
@@ -171,8 +213,7 @@ function WikiReader:onReaderReady()
 
     -- Ignore documents outside our cache dir; also drop the stale state
     -- when a regular book is opened afterwards.
-    local cache_dir = cache.getCacheDir()
-    if file:sub(1, #cache_dir + 1) ~= cache_dir .. "/" then
+    if not isWikiEpubPath(file) then
         nav_current = nil
         nav_history = {}
         nav_reader_alive = false
@@ -297,6 +338,17 @@ function WikiReader:addToMainMenu(menu_items)
                             G_reader_settings:flipNilOrTrue("wikireader_skip_link_dialog")
                         end,
                         help_text = _("Whenever you tap a Wikipedia link inside an article, show a short preview of that article instead of the intermediate dialog box, with a button to open it fully."),
+                    },
+                    {
+                        text = _("Exclude from KOReader statistics and history"),
+                        keep_menu_open = true,
+                        checked_func = function()
+                            return not G_reader_settings:isTrue("wikireader_count_in_stats")
+                        end,
+                        callback = function()
+                            G_reader_settings:flipNilOrFalse("wikireader_count_in_stats")
+                        end,
+                        help_text = _("Wikipedia reading don't pollute your normal book reading stats or history. Untick to count WikiReader articles like any other book."),
                     },
                     {
                         text = _("Show media as QR codes"),
