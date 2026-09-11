@@ -23,6 +23,7 @@ KOReader's `G_reader_settings` under `wikireader_*`.
 | `wikiutil.lua` | Shared helpers: minimal HTTP JSON GET, Wikipedia URL parsing/encoding, HTML notice-tag constants, balanced-tag matching (`findMatchingClose`). |
 | `wikireader-cache.lua` | EPUB cache (10 entries / 24 h), stale-file removal, sidecar-aware delete, cache dir handling. |
 | `wikireader-history.lua` | Last-10-articles reading history (title/lang references persisted in `G_reader_settings`, no files). |
+| `wikireader-bookmarks.lua` | User-bookmarked articles (max 50, newest first), stored as title/lang references in `G_reader_settings` (`wikireader_bookmarks`); never evicts automatically, only via explicit remove/clear. |
 | `categories.lua` | Featured-articles category tree built from the API's flat section list; module-level lookup used by the link handler. |
 | `mainpage.lua` | Scrapes today's English Wikipedia main page for its "In the news" / "Did you know" / "On this day" boxes (by their stable `mp-*` ids), cleans them, and absolutizes the article links. English-only: other wikis have different main-page titles and id-less markup. |
 | `_meta.lua` | Plugin name/version metadata shown in the About dialog. |
