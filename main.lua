@@ -104,6 +104,47 @@ if not ReadHistory.wikireader_patched then
     end
 end
 
+-- A user menu-order override file (written by menu customizer plugins such
+-- as Menu Disabler, which regenerates it from the pristine defaults and
+-- appends discovered entries at the section's end) replaces the base
+-- sections wholesale in mergeAndSort(), losing our runtime position. Patch
+-- the loader to re-apply it in memory.
+local MenuSorter = require("ui/menusorter")
+if not MenuSorter.wikireader_patched then
+    MenuSorter.wikireader_patched = true
+    local readMSSettings = MenuSorter.readMSSettings
+    function MenuSorter:readMSSettings(config_prefix)
+        local order = readMSSettings(self, config_prefix)
+        for _, items in pairs(order) do
+            if type(items) == "table" then
+                local pos
+                for i, id in ipairs(items) do
+                    if id == "wikireader" then
+                        pos = i
+                        break
+                    end
+                end
+                if pos and items[pos - 1] ~= "wikipedia_history" then
+                    table.remove(items, pos)
+                    local anchor
+                    for i, id in ipairs(items) do
+                        if id == "wikipedia_history" then
+                            anchor = i
+                            break
+                        end
+                    end
+                    if anchor then
+                        table.insert(items, anchor + 1, "wikireader")
+                    else
+                        table.insert(items, pos, "wikireader")
+                    end
+                end
+            end
+        end
+        return order
+    end
+end
+
 function WikiReader:onDispatcherRegisterActions()
     Dispatcher:registerAction("wikireader_go_back", {
         category = "none",
@@ -270,6 +311,7 @@ end
 function WikiReader:addToMainMenu(menu_items)
     menu_items.wikireader = {
         text = _("WikiReader"),
+        sorting_hint = "search",
         sub_item_table = {
             {
                 text = _("Search Wikipedia"),
@@ -530,6 +572,9 @@ function WikiReader:addToMainMenu(menu_items)
             },
         },
     }
+    -- For the gesture fallback when our entry is hidden via a menu
+    -- customizer (see onShowWikiReaderMenu).
+    self.menu_entry = menu_items.wikireader
 
     -- Insert ourselves into the Search menu right after the built-in
     -- Wikipedia history entry.
@@ -726,6 +771,40 @@ local function findWikiReaderMenuPath(tab_item_table)
     end
 end
 
+-- A menu customizer (via KOMenu:disabled) removes our entry from the built
+-- menu, so the tab to highlight can't be found in tab_item_table; resolve
+-- the section our id is sorted into from the effective menu order (base +
+-- user overrides) instead.
+local function findWikiReaderSection(ui)
+    local prefix = ui.document and "reader" or "filemanager"
+    local ok, order = pcall(require, "ui/elements/" .. prefix .. "_menu_order")
+    if not ok or type(order) ~= "table" then
+        return nil
+    end
+    -- User menu-order overrides live here; readMSSettings() merges them over
+    -- the base order.
+    local user_path = DataStorage:getSettingsDir() .. "/" .. prefix .. "_menu_order.lua"
+    local uf = io.open(user_path, "r")
+    if uf then
+        uf:close()
+        local uok, user_order = pcall(dofile, user_path)
+        if uok and type(user_order) == "table" then
+            for k, v in pairs(user_order) do
+                order[k] = v
+            end
+        end
+    end
+    for section_id, items in pairs(order) do
+        if type(items) == "table" and section_id:find("^KOMenu:") ~= 1 then
+            for _, id in ipairs(items) do
+                if id == "wikireader" then
+                    return section_id
+                end
+            end
+        end
+    end
+end
+
 function WikiReader:onShowWikiReaderMenu()
     local menu = self.ui.menu
     if not menu or not menu.onShowMenu then
@@ -738,8 +817,45 @@ function WikiReader:onShowWikiReaderMenu()
     end
     local path = findWikiReaderMenuPath(touch_menu.tab_item_table)
     if not path then
-        logger.warn("wikireader: menu entry not found")
-        return false
+        -- A menu customizer removes our top-level entry before the TouchMenu
+        -- is built, so the gesture has nothing to walk to; push our submenu
+        -- in directly, exactly like tapping the entry would have done.
+        logger.info("wikireader: menu entry not found (hidden by menu customizer?), opening submenu directly")
+        if not self.menu_entry then
+            return false
+        end
+        -- Switch to the tab our entry is sorted into first so the bar
+        -- highlights it, then push the submenu in like tapping would.
+        local tab_num
+        local section = findWikiReaderSection(self.ui)
+        if section then
+            for i, tab in ipairs(touch_menu.tab_item_table) do
+                -- The section may be a top-level tab or a submenu nested one
+                -- level deep (e.g. more_tools); both highlight the parent tab.
+                if tab.id == section then
+                    tab_num = i
+                    break
+                end
+                for _, item in ipairs(tab) do
+                    if type(item) == "table" and item.id == section then
+                        tab_num = i
+                        break
+                    end
+                end
+                if tab_num then
+                    break
+                end
+            end
+        end
+        if touch_menu.not_shown then
+            UIManager:show(touch_menu.show_parent)
+        end
+        if tab_num then
+            touch_menu:switchMenuTab(tab_num)
+            touch_menu.bar:switchToTab(tab_num)
+        end
+        touch_menu:onMenuSelect(self.menu_entry)
+        return true
     end
     -- Walk to the entry by hand instead of TouchMenu:openMenu(): openMenu()
     -- never un-highlights its final path element, and since the path has to
