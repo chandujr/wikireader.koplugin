@@ -851,7 +851,6 @@ function WikiReader:onShowWikiReaderMenu()
             UIManager:show(touch_menu.show_parent)
         end
         if tab_num then
-            touch_menu:switchMenuTab(tab_num)
             touch_menu.bar:switchToTab(tab_num)
         end
         touch_menu:onMenuSelect(self.menu_entry)
@@ -873,7 +872,6 @@ function WikiReader:onShowWikiReaderMenu()
     if touch_menu.not_shown then
         UIManager:show(touch_menu.show_parent)
     end
-    touch_menu:switchMenuTab(tab)
     touch_menu.bar:switchToTab(tab)
     touch_menu:onMenuSelect(touch_menu.item_table[entry])
     return true
