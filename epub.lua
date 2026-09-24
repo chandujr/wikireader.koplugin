@@ -289,6 +289,7 @@ function M.buildEpub(epub_path, title, lang, callback)
         elseif entry_path == "OEBPS/content.opf" then
             if resolved_title then
                 content = content:gsub('(<dc:title>).-(</dc:title>)', '%1' .. resolved_title .. '%2')
+                content = content:gsub('<dc:creator>.-</dc:creator>', '<dc:creator>Wikipedians</dc:creator>')
             end
             if next(qr_images) then
                 for idx, qr in ipairs(qr_images) do
@@ -300,7 +301,7 @@ function M.buildEpub(epub_path, title, lang, callback)
         elseif entry_path == "OEBPS/toc.ncx" then
             if resolved_title then
                 content = content:gsub('(<docTitle>%s*<text>).-(</text>%s*</docTitle>)', '%1' .. resolved_title .. '%2')
-                content = content:gsub('(<navPoint[^>]*>%s*<navLabel>%s*<text>).-(</text>%s*</navLabel>%s*<content src="content%.html"/>)', '%1' .. resolved_title .. '%2')
+                content = content:gsub('(<navPoint[^>]*>%s*<navLabel>%s*<text>).-(</text>%s*</navLabel>%s*<content src="content%.html"/>)', '%1Introduction%2')
             end
         elseif entry_path == "OEBPS/stylesheet.css" then
             -- QR-code images (see qrimage.lua): KOReader's base stylesheet
@@ -518,7 +519,9 @@ Single-page EPUB writer (shared by the standalone builders)
 -- Writes one XHTML page plus stylesheet and package/NCX metadata for the
 -- standalone helper pages (search results, category lists, main page),
 -- which don't go through Wikipedia.createEpub(). Returns true on success.
-local function writeSinglePageEpub(epub_path, title, lang, bookid_prefix, html_content, css)
+-- chapters (optional): { label=..., anchor=... } in display order; anchor
+-- must be an element id already present in html_content. Adds TOC entries.
+local function writeSinglePageEpub(epub_path, title, lang, bookid_prefix, html_content, css, chapters, toc_label)
     local mtime = os.time()
 
     local epub = Archiver.Writer:new{}
@@ -549,6 +552,7 @@ local function writeSinglePageEpub(epub_path, title, lang, bookid_prefix, html_c
     <dc:title>%s</dc:title>
     <dc:identifier id="bookid">%s</dc:identifier>
     <dc:language>%s</dc:language>
+    <dc:creator>Wikipedians</dc:creator>
   </metadata>
   <manifest>
     <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
@@ -564,6 +568,25 @@ local function writeSinglePageEpub(epub_path, title, lang, bookid_prefix, html_c
     epub:addFileFromMemory("OEBPS/content.html", html_content, mtime)
     epub:addFileFromMemory("OEBPS/stylesheet.css", css, mtime)
 
+    local escape = function(s)
+        return (s:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"):gsub('"', "&quot;"))
+    end
+    local nav_points
+    if chapters and #chapters > 0 then
+        -- Same one-line navPoint markup as Wikipedia.createEpub's NCX entries
+        nav_points = ""
+        for i, chapter in ipairs(chapters) do
+            local num = i
+            nav_points = nav_points .. string.format([[<navPoint id="navpoint-%s" playOrder="%s"><navLabel><text>%s</text></navLabel><content src="content.html#%s"/></navPoint>]], num, num, escape(chapter.label), chapter.anchor)
+        end
+    else
+        nav_points = string.format([[<navPoint id="navpoint-1" playOrder="1">
+      <navLabel>
+        <text>%s</text>
+      </navLabel>
+      <content src="content.html"/>
+    </navPoint>]], escape(toc_label or title))
+    end
     local ncx = string.format([[
 <?xml version="1.0" encoding="UTF-8"?>
 <ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
@@ -577,15 +600,10 @@ local function writeSinglePageEpub(epub_path, title, lang, bookid_prefix, html_c
     <text>%s</text>
   </docTitle>
   <navMap>
-    <navPoint id="navpoint-1" playOrder="1">
-      <navLabel>
-        <text>%s</text>
-      </navLabel>
-      <content src="content.html"/>
-    </navPoint>
+    %s
   </navMap>
 </ncx>
-]], bookid, title, title)
+]], bookid, escape(title), nav_points)
     epub:addFileFromMemory("OEBPS/toc.ncx", ncx, mtime)
     epub:close()
 
@@ -695,7 +713,10 @@ a {
 }
 ]]
 
-    if not writeSinglePageEpub(epub_path, display_title, lang, "search", html_content, css) then
+    -- Leaf-category pages come through here with custom_title; they list
+    -- only articles, so "Search results" would be wrong for them.
+    local toc_label = is_search and _("Search results") or _("Articles")
+    if not writeSinglePageEpub(epub_path, display_title, lang, "search", html_content, css, nil, toc_label) then
         callback(false)
         return
     end
@@ -783,7 +804,8 @@ a {
 ]]
 
     local epub_path = cache.getCachePath("__category__" .. title, lang)
-    if not writeSinglePageEpub(epub_path, title, lang, "category", html_content, css) then
+    local toc_label = direct_articles and _("Categories & Articles") or _("Categories")
+    if not writeSinglePageEpub(epub_path, title, lang, "category", html_content, css, nil, toc_label) then
         return false
     end
     return true, epub_path
@@ -834,13 +856,15 @@ function M.buildMainPageEpub(date_str, lang, sections)
         dyk = _("Did you know"),
         otd = _("On this day"),
     }
+    local chapters = {}
     for _, key in ipairs({ "itn", "dyk", "otd" }) do
         if sections[key] then
-            table.insert(html_parts, '<h2 class="wikireader-mainpage-section">')
+            table.insert(html_parts, string.format('<h2 class="wikireader-mainpage-section" id="%s">', key))
             table.insert(html_parts, section_headings[key])
             table.insert(html_parts, '</h2>\n')
             table.insert(html_parts, sections[key])
             table.insert(html_parts, '\n')
+            table.insert(chapters, { label = section_headings[key], anchor = key })
         end
     end
 
@@ -881,7 +905,7 @@ a {
 ]]
 
     local epub_path = cache.getHelperCachePath("__mainpage__", date_str, lang)
-    if not writeSinglePageEpub(epub_path, display_title, lang, "mainpage", html_content, css) then
+    if not writeSinglePageEpub(epub_path, display_title, lang, "mainpage", html_content, css, chapters) then
         return false
     end
     return true, epub_path

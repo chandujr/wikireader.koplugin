@@ -1123,7 +1123,7 @@ function WikiReader:searchArticle(title, lang)
 
         UIManager:scheduleIn(0, function()
             local check_url = string.format(
-                "https://%s.wikipedia.org/w/api.php?action=query&titles=%s&format=json&redirects=",
+                "https://%s.wikipedia.org/w/api.php?action=query&titles=%s&prop=pageprops&ppprop=disambiguation&format=json&redirects=",
                 lang, socket_url.escape(title)
             )
             local ok, code, sink = wutil.httpGetJSON(check_url)
@@ -1135,7 +1135,7 @@ function WikiReader:searchArticle(title, lang)
                 local parse_ok, data = pcall(JSON.decode, body)
                 if parse_ok and data and data.query and data.query.pages then
                     for _, page in pairs(data.query.pages) do
-                        if not page.missing then
+                        if not page.missing and not (page.pageprops and page.pageprops.disambiguation) then
                             self:openArticle(title, lang)
                             return
                         end
