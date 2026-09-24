@@ -50,11 +50,6 @@ outlives the day's news.
 - Comments explain **why**, never **what**. No comment should restate the
   function name, narrate the next line, or label a section the code already
   shows.
-- Keep (and write) comments that capture non-obvious external knowledge:
-  KOReader internals (plugin lifecycle, `.sdr` sidecars, monkey-patched
-  hooks), crengine limitations (no flexbox, table quirks), MediaWiki/Parsoid
-  HTML quirks, and traps (Lua `gsub` `%`-escaping, patterns can't do
-  balanced matching).
 - When adding code, add a `why`-comment only where the code alone can't be
   understood. When editing, condense verbose comments rather than growing
   them — but never delete rationale-bearing content.
@@ -66,5 +61,4 @@ outlives the day's news.
 - `nav_history`/`nav_current` in `main.lua` are module-level on purpose
   (KOReader rebuilds plugin instances per UI) — do not move them to `self`.
 - Validate edits with `luac -p <file>`; no test suite exists.
-- KOReader local codebase (for `ui/wikipedia.lua`, `Archiver`, widgets) is
-  probably at `/usr/lib/koreader` — consult it if needed.
+- Find the local koreader codebase using `find / -name "*wikipedia.lua*" 2>/dev/null` in case you need to consult koreader scripts.
