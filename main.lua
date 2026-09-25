@@ -912,7 +912,7 @@ end
 
 function WikiReader:showDatePicker()
     local DateTimeWidget = require("ui/widget/datetimewidget")
-    local today = os.date("*t")
+    local today = os.date("!*t")
     local date_widget = DateTimeWidget:new{
         title_text = _("Pick a date"),
         info_text = _("Fetch the featured article for a specific date."),
@@ -923,7 +923,11 @@ function WikiReader:showDatePicker()
         year_max = today.year,
         ok_text = _("Fetch"),
         callback = function(widget)
-            self:openFeaturedArticle(wutil.formatApiDate(widget.year, widget.month, widget.day))
+            -- The widget only limits the year, so a same-year date past UTC
+            -- today must be clamped down here to avoid a future feed date.
+            local picked = wutil.formatApiDate(widget.year, widget.month, widget.day)
+            local utc_today = os.date("!%Y/%m/%d")
+            self:openFeaturedArticle(picked > utc_today and utc_today or picked)
         end,
     }
     UIManager:show(date_widget)
@@ -934,11 +938,11 @@ function WikiReader:openRandomFeaturedArticle()
     math.randomseed(math.floor(time() * 1000) % 2147483647)
 
     local start_t = os.time{ year = 2016, month = 1, day = 1 }
-    local today = os.date("*t")
-    local end_t = os.time{ year = today.year, month = today.month, day = today.day }
-    if end_t <= start_t then end_t = os.time() end
+    -- "Now" instead of today's midnight: any epoch ≤ now has a UTC date the
+    -- feed has already published, so no random pick lands on a future day.
+    local end_t = os.time()
     local random_t = start_t + math.random(0, end_t - start_t)
-    local t = os.date("*t", random_t)
+    local t = os.date("!*t", random_t)
     self:openFeaturedArticle(wutil.formatApiDate(t.year, t.month, t.day))
 end
 
@@ -985,53 +989,73 @@ function WikiReader:showLanguageDialog()
     dialog:onShowKeyboard()
 end
 
+-- Fetch the featured-content feed for a "YYYY/MM/DD" UTC date and open its
+-- featured article. allow_fallback permits one retry on the previous day for
+-- the publish window after UTC midnight, when the aggregate has no `tfa` yet.
+local function fetchFeaturedArticle(reader, date_str, allow_fallback)
+    local info = InfoMessage:new{
+        text = T(_("Fetching featured article for %1…"), date_str),
+    }
+    UIManager:show(info)
+
+    UIManager:scheduleIn(0, function()
+        local url = string.format(
+            "https://%s.wikipedia.org/api/rest_v1/feed/featured/%s",
+            reader.lang, date_str
+        )
+        local ok, code, sink = wutil.httpGetJSON(url)
+        UIManager:close(info)
+
+        if not ok or code ~= 200 then
+            UIManager:show(InfoMessage:new{
+                text = _("Couldn't fetch the featured article. Check your connection and try again."),
+            })
+            return
+        end
+
+        local JSON = require("json")
+        local body = table.concat(sink)
+        local parse_ok, data = pcall(JSON.decode, body)
+        if not parse_ok or not data then
+            logger.warn("WikiReader: unexpected featured-content response", body)
+            UIManager:show(InfoMessage:new{ text = _("Couldn't read the featured article for that date.") })
+            return
+        end
+
+        if not data.tfa then
+            logger.warn("WikiReader: no tfa in featured-content response", reader.lang, date_str, body)
+            if allow_fallback then
+                local y, m, d = date_str:match("^(%d%d%d%d)/(%d%d)/(%d%d)$")
+                local prev_t = y and os.date("*t", os.time{ year = y, month = m, day = d, hour = 12 } - 86400)
+                if prev_t then
+                    return fetchFeaturedArticle(reader,
+                        wutil.formatApiDate(prev_t.year, prev_t.month, prev_t.day), false)
+                end
+            end
+            UIManager:show(InfoMessage:new{
+                text = _("The featured article for that date isn't available (yet). Try again later or pick a different date."),
+            })
+            return
+        end
+
+        local tfa = data.tfa
+        local title = (tfa.titles and tfa.titles.normalized)
+            or tfa.normalizedtitle
+            or tfa.title
+        if not title then
+            UIManager:show(InfoMessage:new{ text = _("Couldn't identify the featured article for that date.") })
+            return
+        end
+
+        reader:openArticle(title)
+    end)
+end
+
 function WikiReader:openFeaturedArticle(date)
     NetworkMgr:runWhenOnline(function()
-        -- The explicit date comes from the date picker or the random pick,
-        -- so showing it confirms what was actually chosen.
-        local info = InfoMessage:new{
-            text = date
-                and T(_("Fetching featured article for %1…"), date)
-                or _("Fetching featured article…"),
-        }
-        UIManager:show(info)
-
-        UIManager:scheduleIn(0, function()
-            local date_str = date or os.date("%Y/%m/%d")
-            local url = string.format(
-                "https://%s.wikipedia.org/api/rest_v1/feed/featured/%s",
-                self.lang, date_str
-            )
-            local ok, code, sink = wutil.httpGetJSON(url)
-            UIManager:close(info)
-
-            if not ok or code ~= 200 then
-                UIManager:show(InfoMessage:new{
-                    text = _("Couldn't fetch the featured article. Check your connection and try again."),
-                })
-                return
-            end
-
-            local JSON = require("json")
-            local body = table.concat(sink)
-            local parse_ok, data = pcall(JSON.decode, body)
-            if not parse_ok or not data or not data.tfa then
-                logger.warn("WikiReader: unexpected featured-content response", body)
-                UIManager:show(InfoMessage:new{ text = _("Couldn't read the featured article for that date.") })
-                return
-            end
-
-            local tfa = data.tfa
-            local title = (tfa.titles and tfa.titles.normalized)
-                or tfa.normalizedtitle
-                or tfa.title
-            if not title then
-                UIManager:show(InfoMessage:new{ text = _("Couldn't identify the featured article for that date.") })
-                return
-            end
-
-            self:openArticle(title)
-        end)
+        -- Feed dates are UTC; a local-time "today" can even be a future UTC
+        -- date in positive offsets, which the feed answers without `tfa`.
+        fetchFeaturedArticle(self, date or os.date("!%Y/%m/%d"), true)
     end)
 end
 
