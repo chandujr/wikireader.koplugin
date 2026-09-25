@@ -45,6 +45,7 @@ local ltx_sym = {
     star="⋆", ast="∗", bullet="•", circ="∘", odot="⊙", oplus="⊕", otimes="⊗",
     lfloor="⌊", rfloor="⌋", lceil="⌈", rceil="⌉", angle="∠",Triangle="△",
     diamond="◇", square="□", checkmark="✓", degree="°", ell="…",
+    dagger="†", dag="†", ddagger="‡", ddag="‡",
     leq="≤", le="≤", geq="≥", ge="≥", neq="≠", ne="≠",
     approx="≈", sim="∼", simeq="≃", cong="≅", equiv="≡",
     propto="∝", ldots="…", dots="…", cdots="⋯", vdots="⋮", ddots="⋱",
@@ -58,6 +59,9 @@ local ltx_sym = {
     left="", right="", big="", Big="", bigg="", Bigg="",
     bigl="", bigr="", Bigl="", Bigr="", biggl="", biggr="", Biggl="", Biggr="",
     displaystyle="", textstyle="", scriptstyle="", scriptscriptstyle="",
+    -- Old-style bold switches ({{bf {x}}}); bold styling is dropped — plane-1
+    -- Unicode bold (𝐱) risks tofu on e-reader fonts.
+    bf="", bold="", bm="", B="", limits="", nolimits="", displaylimits="",
     quad=" ", qquad=" ", enskip=" ", enspace=" ", thinspace=" ",
     ["not"]="¬",
 }
@@ -207,6 +211,14 @@ local function ltxToText(tex)
                     else
                         table.insert(out, "√")
                     end
+                elseif cmd == "vphantom" or cmd == "hphantom" or cmd == "phantom" then
+                    -- Invisible spacing hacks (zero-width/height rule); the
+                    -- browser shows nothing, so transcription shows nothing.
+                    pos = ltxSkipSpaces(tex, pos)
+                    if tex:sub(pos, pos) == "{" then
+                        local _, e = ltxConsumeGroup(tex, pos)
+                        pos = e + 1
+                    end
                 elseif cmd == "begin" or cmd == "end" then
                     pos = ltxSkipSpaces(tex, pos)
                     if tex:sub(pos, pos) == "{" then
@@ -216,7 +228,9 @@ local function ltxToText(tex)
                     end
                 elseif cmd == "text" or cmd == "mathrm" or cmd == "textnormal"
                     or cmd == "boldsymbol" or cmd == "mathbf" or cmd == "mathit"
-                    or cmd == "mbox" or cmd == "hbox" then
+                    or cmd == "mbox" or cmd == "hbox" or cmd == "mathop"
+                    or cmd == "mathbin" or cmd == "mathrel" or cmd == "pmb"
+                    or cmd == "mathcal" or cmd == "mathscr" then
                     pos = ltxSkipSpaces(tex, pos)
                     if tex:sub(pos, pos) == "{" then
                         local e, inner
