@@ -87,7 +87,7 @@ end
 -- PNG filter byte (we always use filter 0, "None").
 local function encode_png(width, height, raw_scanlines)
     local ihdr = be32(width) .. be32(height) .. string.char(8, 0, 0, 0, 0)
-        -- bit depth 8, color type 0 (greyscale), compression 0, filter 0, interlace 0
+    -- bit depth 8, color type 0 (greyscale), compression 0, filter 0, interlace 0
     local idat = zlib.zlib_compress(raw_scanlines)
     return "\137PNG\r\n\26\n"
         .. png_chunk("IHDR", ihdr)
@@ -201,9 +201,20 @@ HTML transform
 -- walker's stack (Wikipedia's HTML is XHTML-ish and self-closes them, but
 -- be tolerant).
 local VOID_TAGS = {
-    area = true, base = true, br = true, col = true, embed = true,
-    hr = true, img = true, input = true, link = true, meta = true,
-    param = true, source = true, track = true, wbr = true,
+    area = true,
+    base = true,
+    br = true,
+    col = true,
+    embed = true,
+    hr = true,
+    img = true,
+    input = true,
+    link = true,
+    meta = true,
+    param = true,
+    source = true,
+    track = true,
+    wbr = true,
 }
 
 -- Classifies an open tag for the walker: <figure> with a mw:File/mw:Image
@@ -398,7 +409,7 @@ function M.replaceImagesWithQr(html, qr_images, qr_size, lang)
                 local close_start, close_end = html:find("</" .. tagname .. "%s*>", e + 1)
                 if close_start then
                     out[#out + 1] = qrMediaTag(full, html:sub(e + 1, close_start - 1), qr_images, qr_size, lang)
-                    consumed_until = close_end + 1  -- discard up to </video>|</audio>
+                    consumed_until = close_end + 1 -- discard up to </video>|</audio>
                 else
                     -- Malformed (no close tag): leave the tag as-is.
                     out[#out + 1] = full
@@ -416,7 +427,7 @@ function M.replaceImagesWithQr(html, qr_images, qr_size, lang)
                 if tagname == "div" and hasClass(className(attrs), "locmap") then
                     entry.is_dropped = true
                     suppress = suppress + 1
-                    out[#out + 1] = ""  -- drop the locmap's open tag
+                    out[#out + 1] = "" -- drop the locmap's open tag
                 else
                     out[#out + 1] = full
                 end

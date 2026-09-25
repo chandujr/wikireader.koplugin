@@ -15,68 +15,225 @@ Unicode mapping tables
 
 -- Unicode superscripts (all common chars)
 local ltx_sup = {
-    ["0"]="⁰", ["1"]="¹", ["2"]="²", ["3"]="³", ["4"]="⁴",
-    ["5"]="⁵", ["6"]="⁶", ["7"]="⁷", ["8"]="⁸", ["9"]="⁹",
-    ["-"]="⁻", ["+"]="⁺", ["("]="⁽", [")"]="⁾", [","]=",",
+    ["0"] = "⁰",
+    ["1"] = "¹",
+    ["2"] = "²",
+    ["3"] = "³",
+    ["4"] = "⁴",
+    ["5"] = "⁵",
+    ["6"] = "⁶",
+    ["7"] = "⁷",
+    ["8"] = "⁸",
+    ["9"] = "⁹",
+    ["-"] = "⁻",
+    ["+"] = "⁺",
+    ["("] = "⁽",
+    [")"] = "⁾",
+    [","] = ",",
 }
 -- Unicode subscripts (digits and a few letters)
 local ltx_sub = {
-    ["0"]="₀", ["1"]="₁", ["2"]="₂", ["3"]="₃", ["4"]="₄",
-    ["5"]="₅", ["6"]="₆", ["7"]="₇", ["8"]="₈", ["9"]="₉",
-    ["-"]="₋", ["+"]="₊", ["("]="₍", [")"]="₎",
+    ["0"] = "₀",
+    ["1"] = "₁",
+    ["2"] = "₂",
+    ["3"] = "₃",
+    ["4"] = "₄",
+    ["5"] = "₅",
+    ["6"] = "₆",
+    ["7"] = "₇",
+    ["8"] = "₈",
+    ["9"] = "₉",
+    ["-"] = "₋",
+    ["+"] = "₊",
+    ["("] = "₍",
+    [")"] = "₎",
 }
 
 -- Symbols that are just a single Unicode character
 local ltx_sym = {
-    partial="∂", nabla="∇", infty="∞", cdot="·",
-    pm="±", mp="∓", times="×", div="÷",
-    forall="∀", exists="∃",
-    ["in"]="∈", notin="∉", ni="∋",
-    subset="⊂", supset="⊃", subseteq="⊆", supseteq="⊇",
-    subsetneq="⊊", supsetneq="⊋",
-    cup="∪", cap="∩", setminus="∖",
-    emptyset="∅", varnothing="∅",
-    to="→", rightarrow="→", leftarrow="←",
-    leftrightarrow="↔", Rightarrow="⇒", Leftarrow="⇐",
-    Leftrightarrow="⇔", longrightarrow="→",
-    uparrow="↑", downarrow="↓", mapsto="↦",
-    mid="|", parallel="∥", lvert="|", rvert="|", vert="|", Vert="‖",
-    lVert="‖", rVert="‖", colon=":",
-    star="⋆", ast="∗", bullet="•", circ="∘", odot="⊙", oplus="⊕", otimes="⊗",
-    lfloor="⌊", rfloor="⌋", lceil="⌈", rceil="⌉", angle="∠",Triangle="△",
-    diamond="◇", square="□", checkmark="✓", degree="°", ell="…",
-    dagger="†", dag="†", ddagger="‡", ddag="‡",
-    leq="≤", le="≤", geq="≥", ge="≥", neq="≠", ne="≠",
-    approx="≈", sim="∼", simeq="≃", cong="≅", equiv="≡",
-    propto="∝", ldots="…", dots="…", cdots="⋯", vdots="⋮", ddots="⋱",
-    int="∫", iint="∬", iiint="∭", oint="∮",
-    sum="∑", prod="∏", coprod="∐",
-    prime="′", ell="ℓ", ellipsis="…", prime2="″",
-    langle="⟨", rangle="⟩",
-    neg="¬", land="∧", lor="∨", iff="⇔", implies="⇒",
-    Re="ℜ", Im="ℑ", hbar="ℏ", aleph="ℵ",
-    therefore="∴", because="∵",
-    left="", right="", big="", Big="", bigg="", Bigg="",
-    bigl="", bigr="", Bigl="", Bigr="", biggl="", biggr="", Biggl="", Biggr="",
-    displaystyle="", textstyle="", scriptstyle="", scriptscriptstyle="",
+    partial = "∂",
+    nabla = "∇",
+    infty = "∞",
+    cdot = "·",
+    pm = "±",
+    mp = "∓",
+    times = "×",
+    div = "÷",
+    forall = "∀",
+    exists = "∃",
+    ["in"] = "∈",
+    notin = "∉",
+    ni = "∋",
+    subset = "⊂",
+    supset = "⊃",
+    subseteq = "⊆",
+    supseteq = "⊇",
+    subsetneq = "⊊",
+    supsetneq = "⊋",
+    cup = "∪",
+    cap = "∩",
+    setminus = "∖",
+    emptyset = "∅",
+    varnothing = "∅",
+    to = "→",
+    rightarrow = "→",
+    leftarrow = "←",
+    leftrightarrow = "↔",
+    Rightarrow = "⇒",
+    Leftarrow = "⇐",
+    Leftrightarrow = "⇔",
+    longrightarrow = "→",
+    uparrow = "↑",
+    downarrow = "↓",
+    mapsto = "↦",
+    mid = "|",
+    parallel = "∥",
+    lvert = "|",
+    rvert = "|",
+    vert = "|",
+    Vert = "‖",
+    lVert = "‖",
+    rVert = "‖",
+    colon = ":",
+    star = "⋆",
+    ast = "∗",
+    bullet = "•",
+    circ = "∘",
+    odot = "⊙",
+    oplus = "⊕",
+    otimes = "⊗",
+    lfloor = "⌊",
+    rfloor = "⌋",
+    lceil = "⌈",
+    rceil = "⌉",
+    angle = "∠",
+    Triangle = "△",
+    diamond = "◇",
+    square = "□",
+    checkmark = "✓",
+    degree = "°",
+    ell = "…",
+    dagger = "†",
+    dag = "†",
+    ddagger = "‡",
+    ddag = "‡",
+    leq = "≤",
+    le = "≤",
+    geq = "≥",
+    ge = "≥",
+    neq = "≠",
+    ne = "≠",
+    approx = "≈",
+    sim = "∼",
+    simeq = "≃",
+    cong = "≅",
+    equiv = "≡",
+    propto = "∝",
+    ldots = "…",
+    dots = "…",
+    cdots = "⋯",
+    vdots = "⋮",
+    ddots = "⋱",
+    int = "∫",
+    iint = "∬",
+    iiint = "∭",
+    oint = "∮",
+    sum = "∑",
+    prod = "∏",
+    coprod = "∐",
+    prime = "′",
+    ell = "ℓ",
+    ellipsis = "…",
+    prime2 = "″",
+    langle = "⟨",
+    rangle = "⟩",
+    neg = "¬",
+    land = "∧",
+    lor = "∨",
+    iff = "⇔",
+    implies = "⇒",
+    Re = "ℜ",
+    Im = "ℑ",
+    hbar = "ℏ",
+    aleph = "ℵ",
+    therefore = "∴",
+    because = "∵",
+    left = "",
+    right = "",
+    big = "",
+    Big = "",
+    bigg = "",
+    Bigg = "",
+    bigl = "",
+    bigr = "",
+    Bigl = "",
+    Bigr = "",
+    biggl = "",
+    biggr = "",
+    Biggl = "",
+    Biggr = "",
+    displaystyle = "",
+    textstyle = "",
+    scriptstyle = "",
+    scriptscriptstyle = "",
     -- Old-style bold switches ({{bf {x}}}); bold styling is dropped — plane-1
     -- Unicode bold (𝐱) risks tofu on e-reader fonts.
-    bf="", bold="", bm="", B="", limits="", nolimits="", displaylimits="",
-    quad=" ", qquad=" ", enskip=" ", enspace=" ", thinspace=" ",
-    ["not"]="¬",
+    bf = "",
+    bold = "",
+    bm = "",
+    B = "",
+    limits = "",
+    nolimits = "",
+    displaylimits = "",
+    quad = " ",
+    qquad = " ",
+    enskip = " ",
+    enspace = " ",
+    thinspace = " ",
+    ["not"] = "¬",
 }
 
 local ltx_greek = {
-    alpha="α", beta="β", gamma="γ", delta="δ",
-    epsilon="ε", varepsilon="ε", zeta="ζ", eta="η",
-    theta="θ", vartheta="ϑ", iota="ι", kappa="κ",
-    lambda="λ", mu="μ", nu="ν", xi="ξ",
-    pi="π", varpi="ϖ", rho="ρ", varrho="ϱ",
-    sigma="σ", varsigma="ς", tau="τ", upsilon="υ",
-    phi="φ", varphi="φ", chi="χ", psi="ψ", omega="ω",
-    Gamma="Γ", Delta="Δ", Theta="Θ", Lambda="Λ",
-    Xi="Ξ", Pi="Π", Sigma="Σ", Upsilon="Υ",
-    Phi="Φ", Psi="Ψ", Omega="Ω",
+    alpha = "α",
+    beta = "β",
+    gamma = "γ",
+    delta = "δ",
+    epsilon = "ε",
+    varepsilon = "ε",
+    zeta = "ζ",
+    eta = "η",
+    theta = "θ",
+    vartheta = "ϑ",
+    iota = "ι",
+    kappa = "κ",
+    lambda = "λ",
+    mu = "μ",
+    nu = "ν",
+    xi = "ξ",
+    pi = "π",
+    varpi = "ϖ",
+    rho = "ρ",
+    varrho = "ϱ",
+    sigma = "σ",
+    varsigma = "ς",
+    tau = "τ",
+    upsilon = "υ",
+    phi = "φ",
+    varphi = "φ",
+    chi = "χ",
+    psi = "ψ",
+    omega = "ω",
+    Gamma = "Γ",
+    Delta = "Δ",
+    Theta = "Θ",
+    Lambda = "Λ",
+    Xi = "Ξ",
+    Pi = "Π",
+    Sigma = "Σ",
+    Upsilon = "Υ",
+    Phi = "Φ",
+    Psi = "Ψ",
+    Omega = "Ω",
 }
 
 --[[-------------------------------------------------------------------------
@@ -131,7 +288,7 @@ local function ltxSup(str)
         local c = str:sub(i, i)
         local u = ltx_sup[c]
         if u then
-            out[#out+1] = u
+            out[#out + 1] = u
         else
             all_sup = false
             break
@@ -155,7 +312,7 @@ local function ltxSub(str)
         local c = str:sub(i, i)
         local u = ltx_sub[c]
         if u then
-            out[#out+1] = u
+            out[#out + 1] = u
         else
             all_sub = false
             break
@@ -265,7 +422,7 @@ local function ltxToText(tex)
                         local e, inner
                         inner, e = ltxConsumeGroup(tex, pos)
                         pos = e + 1
-                        local bb = { R="ℝ", C="ℂ", N="ℕ", Z="ℤ", Q="ℚ", H="ℍ", P="ℙ" }
+                        local bb = { R = "ℝ", C = "ℂ", N = "ℕ", Z = "ℤ", Q = "ℚ", H = "ℍ", P = "ℙ" }
                         table.insert(out, bb[inner] or inner)
                     end
                 elseif cmd == "overline" or cmd == "bar" or cmd == "prime" then
@@ -303,7 +460,7 @@ local function ltxToText(tex)
                         local cs2, ce2 = tex:find("\\[a-zA-Z]+", pos)
                         local d2 = cs2 == pos and tex:sub(pos + 1, ce2) or tex:sub(pos + 1, pos + 1)
                         local sym = ltx_sym[d2] or ltx_greek[d2]
-                                    or ({ ["{"]="{", ["}"]="}", ["|"]="|", ["."]="" })[d2]
+                            or ({ ["{"] = "{", ["}"] = "}", ["|"] = "|", ["."] = "" })[d2]
                         if sym ~= nil then
                             table.insert(out, sym)
                             pos = (cs2 == pos and ce2 or pos) + 1
@@ -311,8 +468,16 @@ local function ltxToText(tex)
                             pos = pos + 2
                         end
                     else
-                        local m = { ["("]="(", [")"]=")", ["["]="[", ["]"]="]",
-                                    ["{"]="{", ["}"]="}", ["|"]="|", ["."]="" }
+                        local m = {
+                            ["("] = "(",
+                            [")"] = ")",
+                            ["["] = "[",
+                            ["]"] = "]",
+                            ["{"] = "{",
+                            ["}"] = "}",
+                            ["|"] = "|",
+                            ["."] = ""
+                        }
                         table.insert(out, m[d] or "")
                         pos = pos + 1
                     end
@@ -339,11 +504,29 @@ local function ltxToText(tex)
                 end
             else
                 local ch = tex:sub(pos + 1, pos + 1)
-                local esc = { ["{"]="{", ["}"]="}", ["%"]="%", ["_"]="_", ["$"]="$",
-                              ["#"]="#", ["&"]="&", ["|"]="|", ["("]="(", [")"]=")",
-                              ["["]="[", ["]"]="]", ["/"]="/", [","]=" ", [";"]=" ",
-                              [":"]="  ", ["!"]="", ["'"]="′", [" "]=" ", ["~"]=" ",
-                              ["\\"]=" ; " }
+                local esc = {
+                    ["{"] = "{",
+                    ["}"] = "}",
+                    ["%"] = "%",
+                    ["_"] = "_",
+                    ["$"] = "$",
+                    ["#"] = "#",
+                    ["&"] = "&",
+                    ["|"] = "|",
+                    ["("] = "(",
+                    [")"] = ")",
+                    ["["] = "[",
+                    ["]"] = "]",
+                    ["/"] = "/",
+                    [","] = " ",
+                    [";"] = " ",
+                    [":"] = "  ",
+                    ["!"] = "",
+                    ["'"] = "′",
+                    [" "] = " ",
+                    ["~"] = " ",
+                    ["\\"] = " ; "
+                }
                 table.insert(out, esc[ch] or ch or "")
                 if ch == "" then pos = pos + 1 end
                 pos = pos + 2
@@ -483,7 +666,7 @@ function M.replaceMathElements(html, math_images)
                 local is_block = open_tag:find("mwe%-math%-element%-block", 1) ~= nil
                 local style = is_block
                     and 'display:block; text-align:center; margin:0.6em 0; font-style:italic;'
-                    or  'white-space:nowrap; font-style:italic;'
+                    or 'white-space:nowrap; font-style:italic;'
                 marker = string.format(
                     '<span class="wikireader-math" style="%s">%s</span>', style, text)
             end

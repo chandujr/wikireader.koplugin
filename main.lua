@@ -30,7 +30,7 @@ toggle, no eviction) and never expire.
 
 Install: copy this wikireader.koplugin folder into koreader/plugins/ and
 restart KOReader.
---]]--
+--]] --
 
 local ConfirmBox = require("ui/widget/confirmbox")
 local DataStorage = require("datastorage")
@@ -57,7 +57,7 @@ local history = require("wikireader-history")
 local mainpage = require("mainpage")
 local wutil = require("wikiutil")
 
-local WikiReader = WidgetContainer:extend{
+local WikiReader = WidgetContainer:extend {
     name = "wikireader",
     lang = "en",
 }
@@ -177,7 +177,7 @@ function WikiReader:init()
             local statistics_onReaderReady = plugin.onReaderReady
             plugin.onReaderReady = function(stats, config)
                 if not G_reader_settings:isTrue("wikireader_count_in_stats")
-                        and isWikiEpubPath(stats.ui and stats.ui.document and stats.ui.document.file) then
+                    and isWikiEpubPath(stats.ui and stats.ui.document and stats.ui.document.file) then
                     return
                 end
                 return statistics_onReaderReady(stats, config)
@@ -325,13 +325,15 @@ function WikiReader:addToMainMenu(menu_items)
                 callback = function()
                     self:openMainPage()
                 end,
-                help_text = _("Today's English Wikipedia main page with its \"In the news\", \"Did you know\" and \"On this day\" sections, as a readable book. Tapping an article opens it like any other WikiReader article."),
+                help_text = _(
+                "Today's English Wikipedia main page with its \"In the news\", \"Did you know\" and \"On this day\" sections, as a readable book. Tapping an article opens it like any other WikiReader article."),
             },
             {
                 text = _("Featured Articles"),
                 keep_menu_open = true,
                 separator = true,
-                help_text = _("Read Wikipedia's featured article for today or a past date, or browse featured articles by category. This relies on the \"featured article of the day\" feed, which may be missing or unreliable for languages other than English."),
+                help_text = _(
+                "Read Wikipedia's featured article for today or a past date, or browse featured articles by category. This relies on the \"featured article of the day\" feed, which may be missing or unreliable for languages other than English."),
                 sub_item_table = {
                     {
                         text = _("Today's Featured Article"),
@@ -379,7 +381,8 @@ function WikiReader:addToMainMenu(menu_items)
                         callback = function()
                             G_reader_settings:flipNilOrTrue("wikireader_skip_link_dialog")
                         end,
-                        help_text = _("Whenever you tap a Wikipedia link inside an article, show a short preview of that article instead of the intermediate dialog box, with a button to open it fully."),
+                        help_text = _(
+                        "Whenever you tap a Wikipedia link inside an article, show a short preview of that article instead of the intermediate dialog box, with a button to open it fully."),
                     },
                     {
                         text = _("Exclude from KOReader statistics and history"),
@@ -390,7 +393,8 @@ function WikiReader:addToMainMenu(menu_items)
                         callback = function()
                             G_reader_settings:flipNilOrFalse("wikireader_count_in_stats")
                         end,
-                        help_text = _("Wikipedia reading don't pollute your normal book reading stats or history. Untick to count WikiReader articles like any other book."),
+                        help_text = _(
+                        "Wikipedia reading don't pollute your normal book reading stats or history. Untick to count WikiReader articles like any other book."),
                     },
                     {
                         text = _("Show media as QR codes"),
@@ -401,7 +405,8 @@ function WikiReader:addToMainMenu(menu_items)
                         callback = function()
                             G_reader_settings:flipNilOrFalse("wikireader_qr_media")
                         end,
-                        help_text = _("Replace images and other media in an article with small QR codes you can scan with your phone. Turn this off to remove the media boxes entirely."),
+                        help_text = _(
+                        "Replace images and other media in an article with small QR codes you can scan with your phone. Turn this off to remove the media boxes entirely."),
                     },
                     {
                         text = _("Show infoboxes"),
@@ -412,7 +417,8 @@ function WikiReader:addToMainMenu(menu_items)
                         callback = function()
                             G_reader_settings:flipNilOrFalse("wikireader_show_infoboxes")
                         end,
-                        help_text = _("Keep the summary tables (infoboxes) that appear at the top of many articles. Their images are still removed for a cleaner reading view."),
+                        help_text = _(
+                        "Keep the summary tables (infoboxes) that appear at the top of many articles. Their images are still removed for a cleaner reading view."),
                     },
                     {
                         text = _("Disable hyperlinks"),
@@ -424,7 +430,8 @@ function WikiReader:addToMainMenu(menu_items)
                         callback = function()
                             G_reader_settings:flipNilOrFalse("wikireader_disable_hyperlinks")
                         end,
-                        help_text = _("Remove links to other Wikipedia articles from downloaded EPUBs, keeping their text. Links to references, footnotes and external sites are kept."),
+                        help_text = _(
+                        "Remove links to other Wikipedia articles from downloaded EPUBs, keeping their text. Links to references, footnotes and external sites are kept."),
                     },
                     {
                         text = _("Clear history"),
@@ -432,18 +439,19 @@ function WikiReader:addToMainMenu(menu_items)
                             return #history.getList() > 0
                         end,
                         callback = function()
-                            UIManager:show(ConfirmBox:new{
+                            UIManager:show(ConfirmBox:new {
                                 text = _("Forget all articles in the WikiReader history?"),
                                 ok_text = _("Clear"),
                                 ok_callback = function()
                                     history.clear()
-                                    UIManager:show(InfoMessage:new{
+                                    UIManager:show(InfoMessage:new {
                                         text = T("History cleared."),
                                     })
                                 end,
                             })
                         end,
-                        help_text = _("Forget the list of the last 10 articles shown in the History menu. Cached EPUB files are not deleted."),
+                        help_text = _(
+                        "Forget the list of the last 10 articles shown in the History menu. Cached EPUB files are not deleted."),
                     },
                     {
                         text = _("Clear bookmarks"),
@@ -451,12 +459,12 @@ function WikiReader:addToMainMenu(menu_items)
                             return #bookmarks.getList() > 0
                         end,
                         callback = function()
-                            UIManager:show(ConfirmBox:new{
+                            UIManager:show(ConfirmBox:new {
                                 text = _("Remove all WikiReader bookmarks?"),
                                 ok_text = _("Clear"),
                                 ok_callback = function()
                                     bookmarks.clear()
-                                    UIManager:show(InfoMessage:new{
+                                    UIManager:show(InfoMessage:new {
                                         text = T("Bookmarks cleared."),
                                     })
                                 end,
@@ -471,7 +479,7 @@ function WikiReader:addToMainMenu(menu_items)
                             return not cache.isEmpty()
                         end,
                         callback = function()
-                            UIManager:show(ConfirmBox:new{
+                            UIManager:show(ConfirmBox:new {
                                 text = _("Delete all cached WikiReader articles?\nIf an article is currently open, it will be closed."),
                                 ok_text = _("Delete"),
                                 ok_callback = function()
@@ -479,13 +487,14 @@ function WikiReader:addToMainMenu(menu_items)
                                 end,
                             })
                         end,
-                        help_text = _("Remove all cached WikiReader EPUB files and their reading progress. Closes the current article if one is open, so no leftover files remain."),
+                        help_text = _(
+                        "Remove all cached WikiReader EPUB files and their reading progress. Closes the current article if one is open, so no leftover files remain."),
                     },
                     {
                         text = _("Gestures"),
                         keep_menu_open = true,
                         callback = function()
-                            UIManager:show(InfoMessage:new{
+                            UIManager:show(InfoMessage:new {
                                 text = _("You can bind gestures to WikiReader actions through the Gesture manager:\n\n• Back to previous article\n  \"General > WikiReader: back to previous article\"\n\n• Open WikiReader menu\n  \"General > WikiReader: open WikiReader menu\""),
                             })
                         end,
@@ -528,7 +537,8 @@ function WikiReader:addToMainMenu(menu_items)
                 text = _("Save current article"),
                 keep_menu_open = true,
                 enabled_func = function()
-                    return nav_reader_alive and nav_current ~= nil and nav_current.path ~= nil and not nav_current.helper
+                    return nav_reader_alive and nav_current ~= nil and nav_current.path ~= nil and not nav_current
+                    .helper
                 end,
                 callback = function()
                     self:saveCurrentArticle()
@@ -539,22 +549,26 @@ function WikiReader:addToMainMenu(menu_items)
                 text = _("Share current article link"),
                 keep_menu_open = true,
                 enabled_func = function()
-                    return nav_reader_alive and nav_current ~= nil and nav_current.title ~= nil and not nav_current.helper
+                    return nav_reader_alive and nav_current ~= nil and nav_current.title ~= nil and
+                    not nav_current.helper
                 end,
                 callback = function()
                     self:shareCurrentArticleLink()
                 end,
-                help_text = _("Copies the current article's Wikipedia link to the clipboard and shows a QR code of it that you can scan from another device."),
+                help_text = _(
+                "Copies the current article's Wikipedia link to the clipboard and shows a QR code of it that you can scan from another device."),
             },
             {
                 text = _("Refetch current article"),
                 enabled_func = function()
-                    return nav_reader_alive and nav_current ~= nil and nav_current.title ~= nil and not nav_current.helper
+                    return nav_reader_alive and nav_current ~= nil and nav_current.title ~= nil and
+                    not nav_current.helper
                 end,
                 callback = function()
                     self:refetchCurrentArticle()
                 end,
-                help_text = _("Delete the cached copy of the article you are reading and download it again, so the media, infobox and hyperlink settings in \"Settings\" also apply to it. Your reading position is kept."),
+                help_text = _(
+                "Delete the cached copy of the article you are reading and download it again, so the media, infobox and hyperlink settings in \"Settings\" also apply to it. Your reading position is kept."),
             },
             {
                 text_func = function()
@@ -639,7 +653,7 @@ function WikiReader:buildHistoryMenu()
                 self:openHistoryEntry(entry)
             end,
             hold_callback = function(touchmenu_instance)
-                UIManager:show(ConfirmBox:new{
+                UIManager:show(ConfirmBox:new {
                     text = T(_("Forget \"%1\" in the WikiReader history?"), entry.title),
                     ok_text = _("Forget"),
                     ok_callback = function()
@@ -683,7 +697,7 @@ function WikiReader:buildBookmarksMenu()
                 self:openHistoryEntry(entry)
             end,
             hold_callback = function(touchmenu_instance)
-                UIManager:show(ConfirmBox:new{
+                UIManager:show(ConfirmBox:new {
                     text = T(_("Remove \"%1\" from bookmarks?"), entry.title),
                     ok_text = _("Remove"),
                     ok_callback = function()
@@ -706,7 +720,7 @@ function WikiReader:toggleBookmark(title, lang)
         return false
     end
     if not bookmarks.add(title, lang) then
-        UIManager:show(InfoMessage:new{
+        UIManager:show(InfoMessage:new {
             text = T(_("Bookmark list is full (%1). Remove some bookmarks first."), bookmarks.MAX_ENTRIES),
         })
         return nil
@@ -718,7 +732,7 @@ function WikiReader:toggleCurrentArticleBookmark()
     if not nav_current or not nav_current.title then return end
     local state = self:toggleBookmark(nav_current.title, nav_current.lang or self.lang)
     if state == nil then return end
-    UIManager:show(InfoMessage:new{
+    UIManager:show(InfoMessage:new {
         text = state
             and T(_("Added \"%1\" to bookmarks."), nav_current.title)
             or T(_("Removed \"%1\" from bookmarks."), nav_current.title),
@@ -879,7 +893,7 @@ end
 
 function WikiReader:showLanding()
     local dialog
-    dialog = InputDialog:new{
+    dialog = InputDialog:new {
         title = _("WikiReader"),
         input_hint = _("Search Wikipedia…"),
         description = _("Type a topic to search for."),
@@ -913,7 +927,7 @@ end
 function WikiReader:showDatePicker()
     local DateTimeWidget = require("ui/widget/datetimewidget")
     local today = os.date("!*t")
-    local date_widget = DateTimeWidget:new{
+    local date_widget = DateTimeWidget:new {
         title_text = _("Pick a date"),
         info_text = _("Fetch the featured article for a specific date."),
         year = today.year,
@@ -937,7 +951,7 @@ function WikiReader:openRandomFeaturedArticle()
     local time = require("ffi/util").gettime
     math.randomseed(math.floor(time() * 1000) % 2147483647)
 
-    local start_t = os.time{ year = 2016, month = 1, day = 1 }
+    local start_t = os.time { year = 2016, month = 1, day = 1 }
     -- "Now" instead of today's midnight: any epoch ≤ now has a UTC date the
     -- feed has already published, so no random pick lands on a future day.
     local end_t = os.time()
@@ -948,14 +962,14 @@ end
 
 function WikiReader:showAbout()
     local version = self.version and (" v" .. self.version) or ""
-    UIManager:show(InfoMessage:new{
+    UIManager:show(InfoMessage:new {
         text = (self.fullname or _("WikiReader")) .. version .. "\n\n" .. (self.description or ""),
     })
 end
 
 function WikiReader:showLanguageDialog()
     local dialog
-    dialog = InputDialog:new{
+    dialog = InputDialog:new {
         title = _("Set Wikipedia language"),
         input = self.lang,
         input_hint = _("Language code"),
@@ -993,7 +1007,7 @@ end
 -- featured article. allow_fallback permits one retry on the previous day for
 -- the publish window after UTC midnight, when the aggregate has no `tfa` yet.
 local function fetchFeaturedArticle(reader, date_str, allow_fallback)
-    local info = InfoMessage:new{
+    local info = InfoMessage:new {
         text = T(_("Fetching featured article for %1…"), date_str),
     }
     UIManager:show(info)
@@ -1007,7 +1021,7 @@ local function fetchFeaturedArticle(reader, date_str, allow_fallback)
         UIManager:close(info)
 
         if not ok or code ~= 200 then
-            UIManager:show(InfoMessage:new{
+            UIManager:show(InfoMessage:new {
                 text = _("Couldn't fetch the featured article. Check your connection and try again."),
             })
             return
@@ -1018,7 +1032,7 @@ local function fetchFeaturedArticle(reader, date_str, allow_fallback)
         local parse_ok, data = pcall(JSON.decode, body)
         if not parse_ok or not data then
             logger.warn("WikiReader: unexpected featured-content response", body)
-            UIManager:show(InfoMessage:new{ text = _("Couldn't read the featured article for that date.") })
+            UIManager:show(InfoMessage:new { text = _("Couldn't read the featured article for that date.") })
             return
         end
 
@@ -1026,13 +1040,13 @@ local function fetchFeaturedArticle(reader, date_str, allow_fallback)
             logger.warn("WikiReader: no tfa in featured-content response", reader.lang, date_str, body)
             if allow_fallback then
                 local y, m, d = date_str:match("^(%d%d%d%d)/(%d%d)/(%d%d)$")
-                local prev_t = y and os.date("*t", os.time{ year = y, month = m, day = d, hour = 12 } - 86400)
+                local prev_t = y and os.date("*t", os.time { year = y, month = m, day = d, hour = 12 } - 86400)
                 if prev_t then
                     return fetchFeaturedArticle(reader,
                         wutil.formatApiDate(prev_t.year, prev_t.month, prev_t.day), false)
                 end
             end
-            UIManager:show(InfoMessage:new{
+            UIManager:show(InfoMessage:new {
                 text = _("The featured article for that date isn't available (yet). Try again later or pick a different date."),
             })
             return
@@ -1043,7 +1057,7 @@ local function fetchFeaturedArticle(reader, date_str, allow_fallback)
             or tfa.normalizedtitle
             or tfa.title
         if not title then
-            UIManager:show(InfoMessage:new{ text = _("Couldn't identify the featured article for that date.") })
+            UIManager:show(InfoMessage:new { text = _("Couldn't identify the featured article for that date.") })
             return
         end
 
@@ -1061,7 +1075,7 @@ end
 
 function WikiReader:openMainPage()
     NetworkMgr:runWhenOnline(function()
-        local info = InfoMessage:new{ text = _("Fetching Wikipedia main page…") }
+        local info = InfoMessage:new { text = _("Fetching Wikipedia main page…") }
         UIManager:show(info)
 
         UIManager:scheduleIn(0, function()
@@ -1069,7 +1083,7 @@ function WikiReader:openMainPage()
             UIManager:close(info)
 
             if not sections then
-                UIManager:show(InfoMessage:new{
+                UIManager:show(InfoMessage:new {
                     text = err == "layout"
                         and _("Couldn't find the news sections on the Wikipedia main page (its layout may have changed).")
                         or _("Couldn't fetch the Wikipedia main page. Check your connection and try again."),
@@ -1079,7 +1093,7 @@ function WikiReader:openMainPage()
 
             local ok_build, epub_path = epub.buildMainPageEpub(os.date("%Y-%m-%d"), "en", sections)
             if not ok_build then
-                UIManager:show(InfoMessage:new{
+                UIManager:show(InfoMessage:new {
                     text = _("Couldn't build the main page."),
                 })
                 return
@@ -1114,7 +1128,7 @@ function WikiReader:fetchAndOpen(title, lang, open_fn)
         local epub_path = cache.getCachePath(title, lang)
         epub.buildEpub(epub_path, title, lang, function(success, used_path, resolved_title)
             if not success then
-                UIManager:show(InfoMessage:new{
+                UIManager:show(InfoMessage:new {
                     text = _("Couldn't download that article. Check the title and your connection."),
                 })
                 return
@@ -1142,7 +1156,7 @@ function WikiReader:searchArticle(title, lang)
     lang = lang or self.lang
 
     NetworkMgr:runWhenOnline(function()
-        local info = InfoMessage:new{ text = _("Searching Wikipedia…") }
+        local info = InfoMessage:new { text = _("Searching Wikipedia…") }
         UIManager:show(info)
 
         UIManager:scheduleIn(0, function()
@@ -1177,7 +1191,7 @@ function WikiReader:searchArticle(title, lang)
             )
             local search_ok, search_code, search_sink = wutil.httpGetJSON(search_url)
             if not search_ok or search_code ~= 200 then
-                UIManager:show(InfoMessage:new{
+                UIManager:show(InfoMessage:new {
                     text = _("Couldn't search Wikipedia. Check your connection and try again."),
                 })
                 return
@@ -1187,7 +1201,7 @@ function WikiReader:searchArticle(title, lang)
             local search_body = table.concat(search_sink)
             local search_parse_ok, search_data = pcall(JSON.decode, search_body)
             if not search_parse_ok or not search_data or not search_data.query or not search_data.query.search then
-                UIManager:show(InfoMessage:new{
+                UIManager:show(InfoMessage:new {
                     text = T(_("No results found for \"%1\"."), title),
                 })
                 return
@@ -1195,7 +1209,7 @@ function WikiReader:searchArticle(title, lang)
 
             local results = search_data.query.search
             if #results == 0 then
-                UIManager:show(InfoMessage:new{
+                UIManager:show(InfoMessage:new {
                     text = T(_("No results found for \"%1\"."), title),
                 })
                 return
@@ -1204,7 +1218,7 @@ function WikiReader:searchArticle(title, lang)
             local epub_path = cache.getCachePath("__search__" .. title, lang)
             epub.buildSearchEpub(epub_path, title, lang, results, function(success, used_path)
                 if not success then
-                    UIManager:show(InfoMessage:new{
+                    UIManager:show(InfoMessage:new {
                         text = _("Couldn't build search results page."),
                     })
                     return
@@ -1236,7 +1250,7 @@ end
 -- preview box, so a stray tap doesn't cost a full article download.
 function WikiReader:showLinkPreview(title, lang)
     NetworkMgr:runWhenOnline(function()
-        local info = InfoMessage:new{ text = _("Fetching preview…") }
+        local info = InfoMessage:new { text = _("Fetching preview…") }
         UIManager:show(info)
         UIManager:forceRePaint()
         UIManager:yieldToEPDC()
@@ -1273,7 +1287,7 @@ function WikiReader:showLinkPreview(title, lang)
             return bookmarks.has(bookmark_title, lang) and _("Remove bookmark") or _("Add to bookmarks")
         end
         local preview
-        preview = TextViewer:new{
+        preview = TextViewer:new {
             title = bookmark_title:gsub("_", " "),
             title_multilines = true,
             show_menu = false,
@@ -1298,7 +1312,7 @@ function WikiReader:showLinkPreview(title, lang)
                         callback = function()
                             local state = self:toggleBookmark(bookmark_title, lang)
                             if state == nil then return end
-                            UIManager:show(InfoMessage:new{
+                            UIManager:show(InfoMessage:new {
                                 text = state
                                     and T(_("Added \"%1\" to bookmarks."), bookmark_title)
                                     or T(_("Removed \"%1\" from bookmarks."), bookmark_title),
@@ -1324,7 +1338,7 @@ end
 -- this is how they get applied to an already-built EPUB.
 function WikiReader:refetchCurrentArticle()
     if not nav_current or not nav_current.title then
-        UIManager:show(InfoMessage:new{ text = _("No article is currently open.") })
+        UIManager:show(InfoMessage:new { text = _("No article is currently open.") })
         return
     end
 
@@ -1345,14 +1359,14 @@ function WikiReader:refetchCurrentArticle()
     end
 
     NetworkMgr:runWhenOnline(function()
-        local info = InfoMessage:new{ text = _("Re-fetching current article…") }
+        local info = InfoMessage:new { text = _("Re-fetching current article…") }
         UIManager:show(info)
 
         local epub_path = cache.getCachePath(title, lang)
         epub.buildEpub(epub_path, title, lang, function(success, used_path, resolved_title)
             UIManager:close(info)
             if not success then
-                UIManager:show(InfoMessage:new{
+                UIManager:show(InfoMessage:new {
                     text = _("Couldn't re-download that article. Check your connection and try again."),
                 })
                 return
@@ -1373,7 +1387,7 @@ end
 
 function WikiReader:onWikiReaderGoBack()
     if #nav_history == 0 then
-        UIManager:show(InfoMessage:new{ text = _("No previous Wikipedia article to go back to.") })
+        UIManager:show(InfoMessage:new { text = _("No previous Wikipedia article to go back to.") })
         return
     end
     local prev = nav_history[#nav_history]
@@ -1416,7 +1430,7 @@ end
 
 function WikiReader:saveCurrentArticle()
     if not nav_current or not nav_current.path then
-        UIManager:show(InfoMessage:new{
+        UIManager:show(InfoMessage:new {
             text = _("No article is currently open."),
         })
         return
@@ -1424,7 +1438,7 @@ function WikiReader:saveCurrentArticle()
 
     local src_path = nav_current.path
     if not lfs.attributes(src_path) then
-        UIManager:show(InfoMessage:new{
+        UIManager:show(InfoMessage:new {
             text = _("The article file no longer exists (may have been evicted from cache)."),
         })
         return
@@ -1442,7 +1456,7 @@ function WikiReader:saveCurrentArticle()
     local dest_path = save_dir .. "/" .. filename
 
     if lfs.attributes(dest_path) then
-        UIManager:show(ConfirmBox:new{
+        UIManager:show(ConfirmBox:new {
             text = T(_("%1 already exists. Overwrite?"), BD.filename(filename)),
             ok_text = _("Overwrite"),
             ok_callback = function()
@@ -1459,7 +1473,7 @@ function WikiReader:doSaveArticle(src_path, dest_path, display_filename)
     local ffiutil = require("ffi/util")
     local err = ffiutil.copyFile(src_path, dest_path)
     if err then
-        UIManager:show(InfoMessage:new{
+        UIManager:show(InfoMessage:new {
             text = T(_("Failed to save article: %1"), err),
         })
         return
@@ -1467,14 +1481,14 @@ function WikiReader:doSaveArticle(src_path, dest_path, display_filename)
 
     DocSettings.updateLocation(src_path, dest_path, true)
 
-    UIManager:show(InfoMessage:new{
+    UIManager:show(InfoMessage:new {
         text = T(_("Article saved as %1"), BD.filename(display_filename)),
     })
 end
 
 function WikiReader:shareCurrentArticleLink()
     if not nav_current or not nav_current.title then
-        UIManager:show(InfoMessage:new{
+        UIManager:show(InfoMessage:new {
             text = _("No article is currently open."),
         })
         return
@@ -1508,7 +1522,7 @@ function WikiReader:showShareQR(url)
     local Screen = Device.screen
     local Input = Device.input
 
-    local ShareBox = InputContainer:extend{
+    local ShareBox = InputContainer:extend {
         modal = true,
     }
 
@@ -1518,9 +1532,9 @@ function WikiReader:showShareQR(url)
         end
         if Device:isTouchDevice() then
             self.ges_events.TapClose = {
-                GestureRange:new{
+                GestureRange:new {
                     ges = "tap",
-                    range = Geom:new{
+                    range = Geom:new {
                         x = 0, y = 0,
                         w = Screen:getWidth(),
                         h = Screen:getHeight(),
@@ -1531,36 +1545,36 @@ function WikiReader:showShareQR(url)
 
         local padding = Size.padding.fullscreen
         local caption_face = Font:getFace("x_smallinfofont")
-        local caption1 = TextWidget:new{
+        local caption1 = TextWidget:new {
             text = _("Link copied to clipboard."),
             face = caption_face,
         }
-        local caption2 = TextWidget:new{
+        local caption2 = TextWidget:new {
             text = _("Scan the QR code to open it on another device."),
             face = caption_face,
         }
         local qr_size = math.floor(math.min(Screen:getWidth(), Screen:getHeight()) * 0.75)
-        local qr_image = QRWidget:new{
+        local qr_image = QRWidget:new {
             text = url,
             width = qr_size,
             height = qr_size,
             alpha = true,
             scale_factor = 1,
         }
-        local vgroup = VerticalGroup:new{
+        local vgroup = VerticalGroup:new {
             align = "center",
             caption1,
             caption2,
-            VerticalSpan:new{ width = Size.span.vertical_default },
+            VerticalSpan:new { width = Size.span.vertical_default },
             qr_image,
         }
-        local frame = FrameContainer:new{
+        local frame = FrameContainer:new {
             background = Blitbuffer.COLOR_WHITE,
             padding = padding,
             vgroup,
         }
 
-        self[1] = CenterContainer:new{
+        self[1] = CenterContainer:new {
             dimen = Screen:getSize(),
             frame,
         }
@@ -1582,7 +1596,7 @@ function WikiReader:showShareQR(url)
 
     ShareBox.onAnyKeyPressed = ShareBox.onTapClose
 
-    UIManager:show(ShareBox:new{})
+    UIManager:show(ShareBox:new {})
 end
 
 -- Delete every cached article; the file walking and history cleanup live
@@ -1623,14 +1637,14 @@ function WikiReader:clearCache()
 
     local count = cache.wipeAll()
 
-    UIManager:show(InfoMessage:new{
+    UIManager:show(InfoMessage:new {
         text = T(_("Cache cleared (%1 file(s) deleted)."), count),
     })
 end
 
 function WikiReader:showFeaturedCategories()
     NetworkMgr:runWhenOnline(function()
-        local info = InfoMessage:new{ text = _("Loading categories…") }
+        local info = InfoMessage:new { text = _("Loading categories…") }
         UIManager:show(info)
 
         UIManager:scheduleIn(0, function()
@@ -1638,7 +1652,7 @@ function WikiReader:showFeaturedCategories()
             UIManager:close(info)
 
             if not sections then
-                UIManager:show(InfoMessage:new{
+                UIManager:show(InfoMessage:new {
                     text = err == "parse"
                         and _("Couldn't parse featured article categories.")
                         or _("Couldn't load featured article categories."),
@@ -1648,7 +1662,7 @@ function WikiReader:showFeaturedCategories()
 
             local tree = categories.buildCategoryTree(sections)
             if #tree == 0 then
-                UIManager:show(InfoMessage:new{
+                UIManager:show(InfoMessage:new {
                     text = _("No categories found."),
                 })
                 return
@@ -1659,7 +1673,7 @@ function WikiReader:showFeaturedCategories()
 
             local ok_build, cat_epub_path = epub.buildCategoryEpub(tree, _("Featured article categories"), self.lang)
             if not ok_build then
-                UIManager:show(InfoMessage:new{
+                UIManager:show(InfoMessage:new {
                     text = _("Couldn't build category page."),
                 })
                 return
@@ -1677,7 +1691,7 @@ function WikiReader:fetchFeaturedCategoryArticles(section_index, section_title)
     local node = categories.findNode(categories.category_tree, section_index)
 
     NetworkMgr:runWhenOnline(function()
-        local info = InfoMessage:new{ text = T(_("Loading %1…"), section_title) }
+        local info = InfoMessage:new { text = T(_("Loading %1…"), section_title) }
         UIManager:show(info)
         UIManager:forceRePaint()
 
@@ -1689,7 +1703,7 @@ function WikiReader:fetchFeaturedCategoryArticles(section_index, section_title)
             local all_links = getCachedLinks(section_index)
             if not all_links then
                 UIManager:close(info)
-                UIManager:show(InfoMessage:new{
+                UIManager:show(InfoMessage:new {
                     text = _("Couldn't load articles for that category."),
                 })
                 return
@@ -1716,9 +1730,10 @@ function WikiReader:fetchFeaturedCategoryArticles(section_index, section_title)
 
                 UIManager:close(info)
 
-                local ok_build, cat_epub_path = epub.buildCategoryEpub(node.children, section_title, self.lang, direct_articles)
+                local ok_build, cat_epub_path = epub.buildCategoryEpub(node.children, section_title, self.lang,
+                    direct_articles)
                 if not ok_build then
-                    UIManager:show(InfoMessage:new{
+                    UIManager:show(InfoMessage:new {
                         text = _("Couldn't build category page."),
                     })
                     return
@@ -1745,7 +1760,7 @@ function WikiReader:fetchFeaturedCategoryArticles(section_index, section_title)
                 end
 
                 if #articles == 0 then
-                    UIManager:show(InfoMessage:new{
+                    UIManager:show(InfoMessage:new {
                         text = _("No articles found in that category."),
                     })
                     return
@@ -1754,7 +1769,7 @@ function WikiReader:fetchFeaturedCategoryArticles(section_index, section_title)
                 local epub_path = cache.getCachePath("__featured__" .. section_title, self.lang)
                 epub.buildSearchEpub(epub_path, section_title, self.lang, articles, function(success, used_path)
                     if not success then
-                        UIManager:show(InfoMessage:new{
+                        UIManager:show(InfoMessage:new {
                             text = _("Couldn't build category page."),
                         })
                         return

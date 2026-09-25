@@ -191,7 +191,7 @@ function M.cleanElementClasses(html, tag, class_patterns, classes_to_remove, rem
                 local style_val = style_attr and style_attr:match('style%s*=%s*"([^"]*)"') or ""
                 local new_style = remove_style(style_val)
                 if new_style and new_style ~= "" then
-                -- Replace an existing style attribute in place, otherwise insert one.
+                    -- Replace an existing style attribute in place, otherwise insert one.
                     if style_attr then
                         modified_tag = modified_tag:gsub('style%s*=%s*"[^"]*"', 'style="' .. new_style .. '"')
                     else
@@ -455,6 +455,7 @@ function M.cellHasMedia(content)
     end
     return false
 end
+
 -- Inner helper: given the content between the <table ...> and </table> of
 -- a matching table, drop the media from genuine image/caption cells, but
 -- keep the text (names, links, footnotes, ...) of cells that merely carry
@@ -506,7 +507,7 @@ function M.stripImageCellsInBlock(block)
                     or name == "center" then
                     pos = after_tag -- cross the bare wrapper tag, keep it
                 else
-                    break -- anything else (media, close tags, text): stop
+                    break           -- anything else (media, close tags, text): stop
                 end
             end
         end
@@ -645,12 +646,12 @@ end
 function M.centerInfoboxCells(html)
     return (html:gsub('(<t[dh][^>]*class%s*=%s*"([^"]*)"[^>]*>)', function(tag, classes)
         if not (classes:find("infobox%-title", 1)
-            or classes:find("infobox%-above", 1)
-            or classes:find("infobox%-header", 1)
-            or classes:find("infobox%-subheader", 1)
-            or classes:find("infobox%-image", 1)
-            or classes:find("infobox%-full%-data", 1)
-            or classes:find("infobox%-below", 1)) then
+                or classes:find("infobox%-above", 1)
+                or classes:find("infobox%-header", 1)
+                or classes:find("infobox%-subheader", 1)
+                or classes:find("infobox%-image", 1)
+                or classes:find("infobox%-full%-data", 1)
+                or classes:find("infobox%-below", 1)) then
             return tag
         end
         local style_attr = tag:match('style%s*=%s*"[^"]*"')

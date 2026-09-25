@@ -59,7 +59,7 @@ function M.httpGetJSON(url)
     -- socketutil's table_sink also enforces the total timeout across chunks,
     -- which a plain ltn12.sink.table would not.
     local pcall_ok = pcall(function()
-        local request_ok, request_code_or_err = http.request{
+        local request_ok, request_code_or_err = http.request {
             url = url,
             method = "GET",
             sink = socketutil.table_sink(sink),

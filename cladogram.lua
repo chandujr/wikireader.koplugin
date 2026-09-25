@@ -263,7 +263,7 @@ local function renderChildren(kids, prefix, out)
     for i, kid in ipairs(kids) do
         local last = (i == n)
         local branch = last and "\u{2514}\u{2500} " or "\u{251C}\u{2500} " -- └─ / ├─
-        local cont = last and "   " or "\u{2502}  " --      / │
+        local cont = last and "   " or "\u{2502}  "                        --      / │
         if kid.kind == "leaf" then
             emitLines(out, prefix .. branch, kid.text, prefix .. cont)
         else
