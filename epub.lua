@@ -1,7 +1,7 @@
 -- EPUB building for WikiReader.
 -- Wraps KOReader's built-in Wikipedia.createEpub() with HTML cleanup
--- (stripping navboxes, removing image captions, etc.; converting math
--- formulas to readable text; extracting hatnotes into bordered boxes).
+-- (stripping navboxes, removing image captions, etc.; rendering math
+-- formulas as SVGs/text; extracting hatnotes into bordered boxes).
 -- Infobox tables are stripped by default; the "Show infoboxes"
 -- setting keeps them instead, forced to span the full page
 -- width like wikitables. Also provides standalone EPUB builders for
@@ -31,7 +31,7 @@ Full article EPUB builder
 -- Fetches an article and converts it to an EPUB via Wikipedia.createEpub(),
 -- after cleaning the HTML: clutter tables (navbox/sidebar/rmbox, and infobox
 -- unless "Show infoboxes" is on) and the category list are stripped, math
--- formulas become readable text, cladograms become text diagrams, and
+-- formulas become SVGs (block) or text (inline), cladograms become text diagrams,
 -- leading hatnotes are boxed. With "media as QR codes" (the default) each
 -- media box keeps its caption and gets a QR code of its File: page; with it
 -- off the boxes are removed entirely. The resolved title and short

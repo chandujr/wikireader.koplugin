@@ -9,8 +9,8 @@
 -- survive but every connecting line vanishes, leaving a meaningless column
 -- of text.
 --
--- Like latex.lua does for formulas, this module re-parses the clade tables
--- and re-emits each diagram as a monospaced <pre> block drawn with Unicode
+-- Like latex.lua's inline-formula transcription, this module re-parses the
+-- clade tables and re-emits each diagram as a monospaced <pre> block drawn with Unicode
 -- box-drawing characters, so the tree structure always shows regardless of
 -- the CSS the renderer supports.
 

@@ -1,7 +1,9 @@
--- LaTeX-to-readable-text conversion for WikiReader.
--- Wikipedia renders formulas as hidden MathML + visible <img>. With images
--- disabled, formulas vanish. This module extracts the raw LaTeX source from
--- <math> blocks and converts it to a best-effort Unicode transcription.
+-- LaTeX formula rendering for WikiReader (hybrid: SVG for block, text for
+-- inline). Wikipedia renders formulas as hidden MathML + visible <img>.
+-- With images disabled, formulas vanish. This module extracts the raw LaTeX
+-- source from <math> blocks: block formulas are fetched as real Wikipedia
+-- SVG images at build time (capped, with per-formula Unicode fallback on
+-- failure); inline formulas get a best-effort Unicode transcription.
 
 local wutil = require("wikiutil")
 local util = require("util")

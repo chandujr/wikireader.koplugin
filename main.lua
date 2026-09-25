@@ -19,8 +19,9 @@ you can scan with a phone (toggleable; off removes the boxes entirely).
 
 Infoboxes, navboxes, sidebars, route-map tables, the short-description
 metadata, the category list, hatnotes/maintenance banners, and quote
-attribution are cleaned from the HTML before conversion. Cladograms and
-math formulas are rendered as text, since crengine can't draw their CSS/JS.
+attribution are cleaned from the HTML before conversion. Cladograms are
+re-rendered as text diagrams, and math formulas become SVG images (block
+math) or text (inline math), since crengine can't draw their CSS/JS.
 
 Tapping a Wikipedia link inside an open article is hooked to "Read as book"
 (the plugin's link handler), and keeps a back-history.

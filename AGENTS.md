@@ -18,7 +18,7 @@ KOReader's `G_reader_settings` under `wikireader_*`.
 | `epub.lua` | Orchestrates article → EPUB: monkey-patches `Wikipedia` + `Archiver` hooks, sets per-feature HTML-cleaning options, injects stylesheet + metadata. Change here to alter the fetch/build pipeline or which passes run. |
 | `htmlclean.lua` | All HTML transformations: strip clutter (navboxes, hatnotes, timeline bars), unwrap article links, drop/keep infobox media cells, center infobox cells, border infobox/wikitable tables, merge quote attributions, rewrite `{{Multiple image}}` flexbox to tables. |
 | `qrimage.lua` | Replaces media with QR codes (renders QR via KOReader's `ffi/qrencode`, writes minimal PNGs, rewrites media boxes to placeholder `<img>`s). |
-| `latex.lua` | LaTeX formula → Unicode transcription (replaces `MathML`/images). |
+| `latex.lua` | Math formulas: block formulas → fetched Wikipedia SVGs (cap 60, Unicode fallback), inline formulas → Unicode transcription (replaces `MathML`/images). |
 | `cladogram.lua` | Clade tables → Unicode box-drawing `<pre>` diagrams. |
 | `wikiutil.lua` | Shared helpers: minimal HTTP JSON GET, Wikipedia URL parsing/encoding, HTML notice-tag constants, balanced-tag matching (`findMatchingClose`). |
 | `wikireader-cache.lua` | EPUB cache (10 entries / 24 h), stale-file removal, sidecar-aware delete, cache dir handling. |
@@ -33,9 +33,10 @@ KOReader's `G_reader_settings` under `wikireader_*`.
 1. `main.lua` resolves title/lang → `epub.buildEpub`.
 2. `epub.lua` checks cache → fetches Parsoid HTML from the MediaWiki API.
 3. HTML cleaning passes run in sequence (`htmlclean`, `latex`, `cladogram`,
-   QR placeholders via `qrimage`).
+   QR placeholders via `qrimage`); `latex` also fetches block-formula SVGs
+   (capped, Unicode fallback on failure).
 4. `Wikipedia.createEpub` builds the EPUB; patched `Archiver` hooks inject
-   QR PNGs, stylesheet, metadata.
+   QR PNGs, block-formula math SVGs, stylesheet, metadata.
 5. Result cached as `<lang> - <Title>.epub`; opened via ReaderUI.
 
 The "Wikipedia main page" flow skips steps 2–4: `mainpage.fetchSections`
