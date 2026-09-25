@@ -40,13 +40,17 @@ local ltx_sym = {
     leftrightarrow="↔", Rightarrow="⇒", Leftarrow="⇐",
     Leftrightarrow="⇔", longrightarrow="→",
     uparrow="↑", downarrow="↓", mapsto="↦",
-    mid="|", parallel="∥",
+    mid="|", parallel="∥", lvert="|", rvert="|", vert="|", Vert="‖",
+    lVert="‖", rVert="‖", colon=":",
+    star="⋆", ast="∗", bullet="•", circ="∘", odot="⊙", oplus="⊕", otimes="⊗",
+    lfloor="⌊", rfloor="⌋", lceil="⌈", rceil="⌉", angle="∠",Triangle="△",
+    diamond="◇", square="□", checkmark="✓", degree="°", ell="…",
     leq="≤", le="≤", geq="≥", ge="≥", neq="≠", ne="≠",
     approx="≈", sim="∼", simeq="≃", cong="≅", equiv="≡",
     propto="∝", ldots="…", dots="…", cdots="⋯", vdots="⋮", ddots="⋱",
     int="∫", iint="∬", iiint="∭", oint="∮",
     sum="∑", prod="∏", coprod="∐",
-    prime="′", ell="ℓ",
+    prime="′", ell="ℓ", ellipsis="…", prime2="″",
     langle="⟨", rangle="⟩",
     neg="¬", land="∧", lor="∨", iff="⇔", implies="⇒",
     Re="ℜ", Im="ℑ", hbar="ℏ", aleph="ℵ",
@@ -218,7 +222,20 @@ local function ltxToText(tex)
                         local e, inner
                         inner, e = ltxConsumeGroup(tex, pos)
                         pos = e + 1
-                        table.insert(out, inner)
+                        -- Wikipedia bolds symbols (mathbf{alpha}) but the
+                        -- content is still math; transcribe recursively or the
+                        -- raw \alpha would leak through as literal text.
+                        -- Trim the padding Wikipedia puts inside the braces
+                        -- (mathbf{psi } -> "psi "), except in text-like
+                        -- commands where trailing spaces can be meaningful.
+                        local trim = cmd ~= "text" and cmd ~= "mathrm"
+                            and cmd ~= "textnormal" and cmd ~= "mbox" and cmd ~= "hbox"
+                        table.insert(out, ltxToText(trim
+                            and inner:gsub("^%s+", ""):gsub("%s+$", "")
+                            or inner))
+                        -- Wikipedia also pads after the group (mathbf{psi } (t,x));
+                        -- real math rendering drops that space too.
+                        if trim then pos = ltxSkipSpaces(tex, pos) end
                     end
                 elseif cmd == "operatorname" then
                     pos = ltxSkipSpaces(tex, pos)
@@ -226,7 +243,7 @@ local function ltxToText(tex)
                         local e, inner
                         inner, e = ltxConsumeGroup(tex, pos)
                         pos = e + 1
-                        table.insert(out, inner)
+                        table.insert(out, ltxToText(inner))
                     end
                 elseif cmd == "mathbb" or cmd == "Bbb" then
                     pos = ltxSkipSpaces(tex, pos)
@@ -243,7 +260,7 @@ local function ltxToText(tex)
                         local e, inner
                         inner, e = ltxConsumeGroup(tex, pos)
                         pos = e + 1
-                        table.insert(out, inner)
+                        table.insert(out, ltxToText(inner))
                     end
                 elseif cmd == "vec" or cmd == "hat" or cmd == "dot"
                     or cmd == "ddot" or cmd == "tilde" then
@@ -252,16 +269,33 @@ local function ltxToText(tex)
                         local e, inner
                         inner, e = ltxConsumeGroup(tex, pos)
                         pos = e + 1
-                        table.insert(out, inner)
+                        table.insert(out, ltxToText(inner))
+                    end
+                elseif cmd == "pmod" or cmd == "bmod" or cmd == "mod" then
+                    local arg
+                    arg, pos = ltxReadArg(tex, pos)
+                    if cmd == "pmod" then
+                        table.insert(out, "(mod " .. ltxToText(arg) .. ")")
+                    else
+                        table.insert(out, "mod " .. ltxToText(arg))
                     end
                 elseif cmd == "left" or cmd == "right" then
                     pos = ltxSkipSpaces(tex, pos)
                     local d = tex:sub(pos, pos)
                     if d == "\\" then
-                        local d2 = tex:sub(pos + 1, pos + 1)
-                        local mm = { ["{"]="{", ["}"]="}", ["|"]="|", ["."]="" }
-                        if mm[d2] ~= nil then table.insert(out, mm[d2]) end
-                        pos = pos + 2
+                        -- \left \lfloor etc.: the delimiter is a full command,
+                        -- not one char — re-emit its symbol instead of eating
+                        -- its first letter as literal text.
+                        local cs2, ce2 = tex:find("\\[a-zA-Z]+", pos)
+                        local d2 = cs2 == pos and tex:sub(pos + 1, ce2) or tex:sub(pos + 1, pos + 1)
+                        local sym = ltx_sym[d2] or ltx_greek[d2]
+                                    or ({ ["{"]="{", ["}"]="}", ["|"]="|", ["."]="" })[d2]
+                        if sym ~= nil then
+                            table.insert(out, sym)
+                            pos = (cs2 == pos and ce2 or pos) + 1
+                        else
+                            pos = pos + 2
+                        end
                     else
                         local m = { ["("]="(", [")"]=")", ["["]="[", ["]"]="]",
                                     ["{"]="{", ["}"]="}", ["|"]="|", ["."]="" }
@@ -295,7 +329,7 @@ local function ltxToText(tex)
                               ["#"]="#", ["&"]="&", ["|"]="|", ["("]="(", [")"]=")",
                               ["["]="[", ["]"]="]", ["/"]="/", [","]=" ", [";"]=" ",
                               [":"]="  ", ["!"]="", ["'"]="′", [" "]=" ", ["~"]=" ",
-                              ["\\"]="" }
+                              ["\\"]=" ; " }
                 table.insert(out, esc[ch] or ch or "")
                 if ch == "" then pos = pos + 1 end
                 pos = pos + 2
