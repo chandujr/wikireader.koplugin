@@ -474,6 +474,12 @@ pre {
   page-break-inside: avoid;
 }
 
+/* Inline code snippets in prose get the same shading as block code; a
+   full border/padding box reads as clutter at inline size. */
+code {
+  background: #f4f4f4;
+}
+
 /* Attribution line of Template:Quote, merged inside blockquote by
    htmlclean.mergeQuoteCites(). Right-aligned, normal weight and slightly
    smaller so it reads as a distinct " — who said it" trailing note. */
@@ -495,6 +501,24 @@ pre {
 
 .wikireader-math {
   white-space: nowrap;
+}
+
+/* Block formulas (Unicode transcriptions and SVG images) get the same
+   shaded box as code blocks and cladograms, so every non-prose element
+   reads as a distinct "display" unit. Inline formulas are unaffected:
+   crengine does not paint backgrounds on inline boxes. */
+.wikireader-math {
+  background: #f4f4f4;
+  border: 1px solid #ccc;
+  padding: 0.5em 0.8em;
+  page-break-inside: avoid;
+}
+
+.wikireader-mathimg {
+  background: #f4f4f4;
+  border: 1px solid #ccc;
+  padding: 0.5em 0.8em;
+  page-break-inside: avoid;
 }
 
 /* Cladogram (phylogeny tree) diagrams, converted to box-drawing text by
