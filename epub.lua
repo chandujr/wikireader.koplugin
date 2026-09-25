@@ -48,6 +48,9 @@ function M.buildEpub(epub_path, title, lang, callback)
     local qr_enabled = G_reader_settings:isTrue("wikireader_qr_media")
     local qr_size = G_reader_settings:readSetting("wikireader_qr_size") or qrimage.DEFAULT_QR_SIZE
     local qr_images = {}
+    -- Block-formula SVGs fetched by latex.replaceMathElements; stitched in
+    -- from the Archiver hooks below, like the QR images.
+    local math_images = {}
 
     -- Patch redirects support
     local original_phtml_redirects = Wikipedia.wiki_phtml_params.redirects
@@ -216,7 +219,7 @@ function M.buildEpub(epub_path, title, lang, callback)
                 html = htmlclean.stripElementsByAttr(html, "figure", "typeof", { "mw:file", "mw:image", "mw:video", "mw:audio" })
                 html = html:gsub("<audio.-</audio%s*>", "")
             end
-            html = latex.replaceMathElements(html)
+            html = latex.replaceMathElements(html, math_images)
             -- Render cladograms (Template:Clade phylogeny trees) as text
             -- diagrams, since crengine cannot draw their CSS border lines.
             html = cladogram.replaceCladograms(html)
@@ -286,6 +289,27 @@ function M.buildEpub(epub_path, title, lang, callback)
                     original_addFileFromMemory(self, "OEBPS/" .. qr.path, qr.png, mtime)
                 end
             end
+            -- Swap each block-formula marker back to a real <img>, carrying
+            -- the original SVG's inline style (..height/vertical-align:)
+            -- from Wikipedia, and register the SVG files.
+            if next(math_images) then
+                content = content:gsub('<span class="wikireader%-mathimg" data%-mathimgindex="(%d+)"[^>]*></span>', function(idx)
+                    local mathimg = math_images[tonumber(idx)]
+                    if not mathimg then
+                        return ""
+                    end
+                    local path = string.format("images/math%05d.svg", tonumber(idx))
+                    -- Wikipedia's inline sizing style would let body text flow
+                    -- around the formula; block formulas go on their own line.
+                    return string.format(
+                        '<img src="%s" style="display:block; margin:0.6em auto; %s" class="wikireader-mathimg"/>',
+                        path, mathimg.style)
+                end)
+                for idx, mathimg in ipairs(math_images) do
+                    original_addFileFromMemory(self,
+                        string.format("OEBPS/images/math%05d.svg", idx), mathimg.svg, mtime)
+                end
+            end
         elseif entry_path == "OEBPS/content.opf" then
             if resolved_title then
                 content = content:gsub('(<dc:title>).-(</dc:title>)', '%1' .. resolved_title .. '%2')
@@ -296,6 +320,13 @@ function M.buildEpub(epub_path, title, lang, callback)
                     content = content:gsub("</manifest>", string.format(
                         '<item id="qr%05d" href="%s" media-type="image/png"/>\n  </manifest>',
                         idx, qr.path))
+                end
+            end
+            if next(math_images) then
+                for idx in ipairs(math_images) do
+                    content = content:gsub("</manifest>", string.format(
+                        '<item id="math%05d" href="images/math%05d.svg" media-type="image/svg+xml"/>\n  </manifest>',
+                        idx, idx))
                 end
             end
         elseif entry_path == "OEBPS/toc.ncx" then

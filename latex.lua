@@ -5,6 +5,7 @@
 
 local wutil = require("wikiutil")
 local util = require("util")
+local logger = require("logger")
 
 local M = {}
 
@@ -359,7 +360,57 @@ end
 -- Replace every <span class="mwe-math-element...">...</span> block (the
 -- wrapper around every formula) with a readable text approximation of
 -- the embedded LaTeX. Also handles any bare <math> tags as a fallback.
-function M.replaceMathElements(html)
+-- math_images (optional, ordered) collects fetched block-formula SVGs;
+-- epub.lua stitches them in from its Archiver hooks.
+
+-- Rendering as the real SVG preserves display layout (fractions, big
+-- operators) that Unicode transcription flattens. Marker spans instead of
+-- <img> because createEpub runs with with_images=false and strips every
+-- img tag; only Archiver-injected files survive. The cap bounds network
+-- fetches per article; overflow falls back to transcription.
+local MATH_IMG_CAP = 60
+
+local function blockSvgMarker(open_tag, block, math_images, seen)
+    -- Only display math gets the SVG; inline formulas read fine as
+    -- transcription and would need awkward sizing as images.
+    if open_tag:find("mwe%-math%-element%-block", 1) == nil then return nil end
+    local img_tag = block:match("<img[^>]-/math/render/svg/[^>]*>")
+    if not img_tag then return nil end
+    local src = img_tag:match('src%s*=%s*"([^"]*)"')
+    local key = src and src:match('/math/render/svg/(.-)%s*$')
+    if not key then return nil end
+    local prior = seen[key]
+    if prior ~= nil then
+        if prior == 0 then return nil end -- earlier fetch failed
+        return string.format('<span class="wikireader-mathimg" data-mathimgindex="%d"></span>', prior)
+    end
+    if #math_images >= MATH_IMG_CAP then
+        if not seen.getWarned then
+            seen.getWarned = true
+            logger.warn("WikiReader: block-formula SVG cap of", MATH_IMG_CAP,
+                "reached; remaining formulas fall back to Unicode transcription")
+        end
+        return nil
+    end
+    -- Parsoid emits both absolute ("https://wikimedia.org/...") and
+    -- protocol-relative ("//upload.wikimedia.org/...") srcs; accept either.
+    -- httpGetJSON is binary-safe via its table sink.
+    local url = src:sub(1, 2) == "//" and "https:" .. src or src
+    if src:sub(1, 8) ~= "https://" and src:sub(1, 2) ~= "//" then return nil end
+    local ok, code, sink = wutil.httpGetJSON(url)
+    local svg = ok and code == 200 and sink and table.concat(sink) or ""
+    if svg == "" then
+        seen[key] = 0
+        return nil
+    end
+    local index = #math_images + 1
+    math_images[index] = { svg = svg, style = img_tag:match('style%s*=%s*"([^"]*)"') or "" }
+    seen[key] = index
+    return string.format('<span class="wikireader-mathimg" data-mathimgindex="%d"></span>', index)
+end
+
+function M.replaceMathElements(html, math_images)
+    local seen = math_images and {} or nil
     local out = {}
     local pos = 1
     local open_pat = '<span class="mwe%-math%-element[^>]*>'
@@ -370,21 +421,27 @@ function M.replaceMathElements(html)
             break
         end
         local open_tag = html:sub(os_, oe)
-        local cs, ce = wutil.findMatchingClose(html, "span", oe)
+        local _, ce = wutil.findMatchingClose(html, "span", oe)
         if not ce then
             table.insert(out, html:sub(pos))
             break
         end
         local block = html:sub(os_, ce)
         table.insert(out, html:sub(pos, os_ - 1))
-        local text = mathBlockToText(block)
-        if text then
-            local is_block = open_tag:find("mwe%-math%-element%-block", 1) ~= nil
-            local style = is_block
-                and 'display:block; text-align:center; margin:0.6em 0; font-style:italic;'
-                or  'white-space:nowrap; font-style:italic;'
-            table.insert(out, string.format(
-                '<span class="wikireader-math" style="%s">%s</span>', style, text))
+        local marker = seen and blockSvgMarker(open_tag, block, math_images, seen) or nil
+        if not marker then
+            local text = mathBlockToText(block)
+            if text then
+                local is_block = open_tag:find("mwe%-math%-element%-block", 1) ~= nil
+                local style = is_block
+                    and 'display:block; text-align:center; margin:0.6em 0; font-style:italic;'
+                    or  'white-space:nowrap; font-style:italic;'
+                marker = string.format(
+                    '<span class="wikireader-math" style="%s">%s</span>', style, text)
+            end
+        end
+        if marker then
+            table.insert(out, marker)
         end
         pos = ce + 1
     end
