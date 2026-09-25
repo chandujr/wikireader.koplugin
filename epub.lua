@@ -433,6 +433,16 @@ blockquote {
   font-style: italic;
 }
 
+/* Matches the blockquote box styling for article pseudocode blocks
+   (e.g. Binary search). Inline <code> is deliberately not styled:
+   crengine forces display:inline and doesn't paint inline backgrounds. */
+pre {
+  background: #f4f4f4;
+  border: 1px solid #ccc;
+  padding: 0.5em 0.8em;
+  page-break-inside: avoid;
+}
+
 /* Attribution line of Template:Quote, merged inside blockquote by
    htmlclean.mergeQuoteCites(). Right-aligned, normal weight and slightly
    smaller so it reads as a distinct " — who said it" trailing note. */
