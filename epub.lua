@@ -480,6 +480,12 @@ code {
   background: #f4f4f4;
 }
 
+/* Droid Sans Mono's glyphs run taller than the default serif at the
+   same nominal size; drop both block and inline code to compensate. */
+pre, code {
+  font-size: 80%;
+}
+
 /* Attribution line of Template:Quote, merged inside blockquote by
    htmlclean.mergeQuoteCites(). Right-aligned, normal weight and slightly
    smaller so it reads as a distinct " — who said it" trailing note. */
