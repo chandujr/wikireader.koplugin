@@ -13,7 +13,6 @@ local Trapper = require("ui/trapper")
 local Wikipedia = require("ui/wikipedia")
 local socket_url = require("socket.url")
 local util = require("util")
-local logger = require("logger")
 local _ = require("gettext")
 
 local cache = require("wikireader-cache")
@@ -47,6 +46,10 @@ function M.buildEpub(epub_path, title, lang, callback)
     local qr_enabled = G_reader_settings:isTrue("wikireader_qr_media")
     local qr_size = G_reader_settings:readSetting("wikireader_qr_size") or qrimage.DEFAULT_QR_SIZE
     local qr_images = {}
+    -- Read once at build scope: both the HTML-cleaning hook and the Archiver
+    -- stylesheet hook below need it, and the Archiver hook must not read a
+    -- bare global (that bug silently disabled the full-width infobox CSS).
+    local infobox_full_width = G_reader_settings:isTrue("wikireader_show_infoboxes")
     -- Block-formula SVGs fetched by latex.replaceMathElements; stitched in
     -- from the Archiver hooks below, like the QR images.
     local math_images = {}
@@ -98,10 +101,6 @@ function M.buildEpub(epub_path, title, lang, callback)
             if result.title then
                 resolved_title = result.title
             end
-            -- Kept infoboxes are normally stripped (fixed width and float
-            -- wreck a single-column reflowable layout); when kept, force
-            -- them to span the full page width like wikitables.
-            local infobox_full_width = G_reader_settings:isTrue("wikireader_show_infoboxes")
 
             -- Force a kept table to span the whole page width and drop any
             -- inline float or horizontal margin, so body text can never sit
@@ -695,6 +694,55 @@ local function writeSinglePageEpub(epub_path, title, lang, bookid_prefix, html_c
     return true
 end
 
+-- Shared document prologue for the search/category/main-page builders.
+local function beginDoc(parts, title)
+    table.insert(parts, '<?xml version="1.0" encoding="utf-8"?>\n')
+    table.insert(parts, '<!DOCTYPE html>\n')
+    table.insert(parts, '<html xmlns="http://www.w3.org/1999/xhtml">\n')
+    table.insert(parts, '<head>\n')
+    table.insert(parts, '<meta charset="utf-8"/>\n')
+    table.insert(parts, '<link rel="stylesheet" type="text/css" href="stylesheet.css"/>\n')
+    table.insert(parts, '<title>')
+    table.insert(parts, title)
+    table.insert(parts, '</title>\n')
+    table.insert(parts, '</head>\n')
+    table.insert(parts, '<body>\n')
+end
+
+local function endDoc(parts)
+    table.insert(parts, '</body>\n')
+    table.insert(parts, '</html>\n')
+    return table.concat(parts)
+end
+
+-- Shared rules for the search-results and main-page pages; each builder
+-- appends its own extra rules below. The a rule matches article EPUBs'
+-- link style; otherwise crengine's default blue shows.
+local FRONTPAGE_CSS = [[
+body {
+  text-align: justify;
+}
+h1.koreaderwikifrontpage {
+  text-align: center;
+  margin-top: 0;
+}
+p.koreaderwikifrontpage {
+  font-style: italic;
+  text-align: center;
+  margin-bottom: 1em;
+  text-indent: 0;
+}
+hr.koreaderwikifrontpage {
+  margin-left: 20%;
+  margin-right: 20%;
+  margin-bottom: 1.2em;
+}
+a {
+  text-decoration: underline;
+  color: inherit;
+}
+]]
+
 --[[-------------------------------------------------------------------------
 Search results EPUB builder
 --]]
@@ -708,21 +756,7 @@ function M.buildSearchEpub(epub_path, query, lang, results, callback, custom_tit
     local is_search = not custom_title
 
     local html_parts = {}
-    table.insert(html_parts, '<?xml version="1.0" encoding="utf-8"?>\n')
-    table.insert(html_parts, '<!DOCTYPE html>\n')
-    table.insert(html_parts, '<html xmlns="http://www.w3.org/1999/xhtml">\n')
-    table.insert(html_parts, '<head>\n')
-    table.insert(html_parts, '<meta charset="utf-8"/>\n')
-    table.insert(html_parts, '<link rel="stylesheet" type="text/css" href="stylesheet.css"/>\n')
-    table.insert(html_parts, '<title>')
-    if is_search then
-        table.insert(html_parts, string.format('Search results for "%s"', query))
-    else
-        table.insert(html_parts, display_title)
-    end
-    table.insert(html_parts, '</title>\n')
-    table.insert(html_parts, '</head>\n')
-    table.insert(html_parts, '<body>\n')
+    beginDoc(html_parts, is_search and string.format('Search results for "%s"', query) or display_title)
     if is_search then
         table.insert(html_parts, '<h1 class="koreaderwikifrontpage">Search results</h1>\n')
         table.insert(html_parts, '<p class="koreaderwikifrontpage">')
@@ -758,29 +792,9 @@ function M.buildSearchEpub(epub_path, query, lang, results, callback, custom_tit
         end
     end
 
-    table.insert(html_parts, '</body>\n')
-    table.insert(html_parts, '</html>\n')
-    local html_content = table.concat(html_parts)
+    local html_content = endDoc(html_parts)
 
-    local css = [[
-body {
-  text-align: justify;
-}
-h1.koreaderwikifrontpage {
-  text-align: center;
-  margin-top: 0;
-}
-p.koreaderwikifrontpage {
-  font-style: italic;
-  text-align: center;
-  margin-bottom: 1em;
-  text-indent: 0;
-}
-hr.koreaderwikifrontpage {
-  margin-left: 20%;
-  margin-right: 20%;
-  margin-bottom: 1.2em;
-}
+    local css = FRONTPAGE_CSS .. [[
 .search-result {
   margin-bottom: 1em;
 }
@@ -790,10 +804,6 @@ p.article-link {
 p.snippet {
   margin: 0 0 0.8em 0;
   font-size: 80%;
-}
-a {
-  text-decoration: underline;
-  color: inherit;
 }
 ]]
 
@@ -816,17 +826,7 @@ Category EPUB builder
 -- that the link handler intercepts; articles use standard Wikipedia URLs.
 function M.buildCategoryEpub(nodes, title, lang, direct_articles)
     local html_parts = {}
-    table.insert(html_parts, '<?xml version="1.0" encoding="utf-8"?>\n')
-    table.insert(html_parts, '<!DOCTYPE html>\n')
-    table.insert(html_parts, '<html xmlns="http://www.w3.org/1999/xhtml">\n')
-    table.insert(html_parts, '<head>\n')
-    table.insert(html_parts, '<meta charset="utf-8"/>\n')
-    table.insert(html_parts, '<link rel="stylesheet" type="text/css" href="stylesheet.css"/>\n')
-    table.insert(html_parts, '<title>')
-    table.insert(html_parts, title)
-    table.insert(html_parts, '</title>\n')
-    table.insert(html_parts, '</head>\n')
-    table.insert(html_parts, '<body>\n')
+    beginDoc(html_parts, title)
     table.insert(html_parts, '<h1>')
     table.insert(html_parts, title)
     table.insert(html_parts, '</h1>\n')
@@ -854,9 +854,7 @@ function M.buildCategoryEpub(nodes, title, lang, direct_articles)
         end
     end
 
-    table.insert(html_parts, '</body>\n')
-    table.insert(html_parts, '</html>\n')
-    local html_content = table.concat(html_parts)
+    local html_content = endDoc(html_parts)
 
     local css = [[
 body {
@@ -908,7 +906,7 @@ function M.buildMainPageEpub(date_str, lang, sections)
     if year then
         -- hour=12 keeps the DST-sensitive %B conversion away from
         -- midnight edges; the C locale gives English month names.
-        local t = os.time { year = tonumber(year), month = tonumber(month), day = tonumber(day), hour = 12 }
+        local t = os.time { year = year, month = month, day = day, hour = 12 }
         display_date = string.format("%s %d, %d", os.date("%B", t), day, year)
     end
 
@@ -916,17 +914,7 @@ function M.buildMainPageEpub(date_str, lang, sections)
     local display_title = page_title .. " (" .. display_date .. ")"
 
     local html_parts = {}
-    table.insert(html_parts, '<?xml version="1.0" encoding="utf-8"?>\n')
-    table.insert(html_parts, '<!DOCTYPE html>\n')
-    table.insert(html_parts, '<html xmlns="http://www.w3.org/1999/xhtml">\n')
-    table.insert(html_parts, '<head>\n')
-    table.insert(html_parts, '<meta charset="utf-8"/>\n')
-    table.insert(html_parts, '<link rel="stylesheet" type="text/css" href="stylesheet.css"/>\n')
-    table.insert(html_parts, '<title>')
-    table.insert(html_parts, display_title)
-    table.insert(html_parts, '</title>\n')
-    table.insert(html_parts, '</head>\n')
-    table.insert(html_parts, '<body>\n')
+    beginDoc(html_parts, display_title)
     table.insert(html_parts, '<h1 class="koreaderwikifrontpage">')
     table.insert(html_parts, page_title)
     table.insert(html_parts, '</h1>\n')
@@ -952,39 +940,14 @@ function M.buildMainPageEpub(date_str, lang, sections)
         end
     end
 
-    table.insert(html_parts, '</body>\n')
-    table.insert(html_parts, '</html>\n')
-    local html_content = table.concat(html_parts)
+    local html_content = endDoc(html_parts)
 
-    local css = [[
-body {
-  text-align: justify;
-}
-h1.koreaderwikifrontpage {
-  text-align: center;
-  margin-top: 0;
-}
-p.koreaderwikifrontpage {
-  font-style: italic;
-  text-align: center;
-  margin-bottom: 1em;
-  text-indent: 0;
-}
-hr.koreaderwikifrontpage {
-  margin-left: 20%;
-  margin-right: 20%;
-  margin-bottom: 1.2em;
-}
+    local css = FRONTPAGE_CSS .. [[
 h2.wikireader-mainpage-section {
   font-size: 120%;
   border-bottom: 1px solid #aaa;
   padding-bottom: 0.2em;
   margin-top: 1em;
-}
-/* Match article EPUBs' link style; otherwise crengine's default blue shows */
-a {
-  text-decoration: underline;
-  color: inherit;
 }
 ]]
 

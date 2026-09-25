@@ -1,0 +1,20 @@
+{
+  "$schema": "https://raw.githubusercontent.com/sumneko/vscode-lua/master/setting/schema.json",
+  "runtime.version": "LuaJIT",
+  "diagnostics.globals": [
+    "G_reader_settings",
+    "G_defaults",
+    "UIManager",
+    "InfoMessage",
+    "logger",
+    "util",
+    "ReaderUI",
+    "Screen",
+    "NetworkMgr",
+    "Device",
+    "DocSettings",
+    "Cache",
+    "Font",
+    "Event"
+  ]
+}

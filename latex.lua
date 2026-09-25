@@ -112,7 +112,6 @@ local ltx_sym = {
     square = "□",
     checkmark = "✓",
     degree = "°",
-    ell = "…",
     dagger = "†",
     dag = "†",
     ddagger = "‡",
