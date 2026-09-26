@@ -19,7 +19,7 @@ KOReader's `G_reader_settings` under `wikireader_*`.
 | `htmlclean.lua` | All HTML transformations: strip clutter (navboxes, hatnotes, timeline bars), unwrap article links, drop/keep infobox media cells, center infobox cells, border infobox/wikitable tables, merge quote attributions, rewrite `{{Multiple image}}` flexbox to tables. |
 | `qrimage.lua` | Replaces media with QR codes (renders QR via KOReader's `ffi/qrencode`, writes minimal PNGs, rewrites media boxes to placeholder `<img>`s). |
 | `latex.lua` | Math formulas: block formulas → fetched Wikipedia SVGs (cap 60, Unicode fallback), inline formulas → Unicode transcription (replaces `MathML`/images). |
-| `cladogram.lua` | Clade tables → Unicode box-drawing `<pre>` diagrams. |
+| `cladogram.lua` | Clade tables → ASCII tree `<pre>` diagrams. |
 | `wikiutil.lua` | Shared helpers: minimal HTTP JSON GET, Wikipedia URL parsing/encoding, HTML notice-tag constants, balanced-tag matching (`findMatchingClose`). |
 | `wikireader-cache.lua` | EPUB cache (10 entries / 24 h), stale-file removal, sidecar-aware delete, cache dir handling. |
 | `wikireader-history.lua` | Last-10-articles reading history (title/lang references persisted in `G_reader_settings`, no files). |

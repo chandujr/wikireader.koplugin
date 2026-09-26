@@ -536,16 +536,19 @@ pre, code {
   page-break-inside: avoid;
 }
 
-/* Cladogram (phylogeny tree) diagrams, converted to box-drawing text by
+/* Cladogram (phylogeny tree) diagrams, converted to ASCII tree text by
    cladogram.lua. The base stylesheet already keeps <pre> left-aligned;
    shrink the monospace a touch and keep lines from stretching across the
-   full page so the tree reads as one compact diagram. */
+   full page so the tree reads as one compact diagram; keep the whole
+   diagram on one page, since a tree split across a page turn loses its
+   root context. */
 pre.wikireader-cladogram {
-  font-size: 90%;
+  font-size: 80%;
   line-height: 1.25;
   border: 1px solid #888;
   padding: 0.6em 0.8em;
   margin: 0 0 1em 0;
+  page-break-inside: avoid;
 }
 
 /* |title= row of a {{cladogram}} box, re-emitted above the diagram by

@@ -10,9 +10,12 @@
 -- of text.
 --
 -- Like latex.lua's inline-formula transcription, this module re-parses the
--- clade tables and re-emits each diagram as a monospaced <pre> block drawn with Unicode
--- box-drawing characters, so the tree structure always shows regardless of
--- the CSS the renderer supports.
+-- clade tables and re-emits each diagram as a monospaced <pre> block drawn
+-- with ASCII connectors (|--, `--, |). Unicode box-drawing glyphs would be
+-- prettier, but KOReader's stock monospace fonts (e.g. Droid Sans Mono)
+-- lack them entirely, and the fallback glyphs render at a different advance
+-- width than the surrounding monospace text, visibly breaking column
+-- alignment. ASCII lives in every monospace font, so the tree always aligns.
 
 local util = require("util")
 local wutil = require("wikiutil")
@@ -82,6 +85,9 @@ local function plainText(frag)
     text = text:gsub("<link[^>]*/?>", " ")
     text = text:gsub("<[^>]*>", " ")
     text = util.htmlEntitiesToUtf8(text)
+    -- &nbsp; decodes to U+00A0, which %s does not match; normalize it so
+    -- blank filler cells read as empty below instead of as "non-empty".
+    text = text:gsub("\194\160", " ")
     text = text:gsub("%s+", " ")
     text = text:match("^%s*(.-)%s*$") or text
     return text
@@ -151,8 +157,14 @@ local function parseCladeTable(inner)
             -- child (holding only its clade-slabel) -- attach it there
             -- instead of losing it.
             local last = children[#children]
-            if last.kind == "node" and last.node.sublabel == "" then
-                last.node.sublabel = row_sublabel
+            if last.kind == "node" then
+                if last.node.sublabel == "" then
+                    last.node.sublabel = row_sublabel
+                end
+            else
+                -- Unlabeled leaf child: promote it so its sublabel has
+                -- somewhere to live.
+                children[#children] = { kind = "node", node = { label = "", sublabel = row_sublabel, children = { last } } }
             end
         end
     end
@@ -244,26 +256,28 @@ end
 -- indented by `cont`.
 local function emitLines(out, lead, text, cont)
     local lp = lead
-    for _, line in ipairs(wrapText(text, MAX_LINE_WIDTH - #lp)) do
+    -- Deep nesting can push the lead past MAX_LINE_WIDTH; wrapText would
+    -- never make progress at width <= 0, so keep at least 1 column.
+    for _, line in ipairs(wrapText(text, math.max(MAX_LINE_WIDTH - #lp, 1))) do
         out[#out + 1] = lp .. line
         lp = cont
     end
 end
 
 -- Renders a node's children as an indented tree. `prefix` is the already
--- drawn "│  " run for ancestors; `out` accumulates the lines.
+-- drawn "|  " run for ancestors; `out` accumulates the lines.
 --
 -- A child is a leaf, a named subtree, or an unnamed branch point (a real
 -- fork left unnamed by the source article). Unnamed branch points get a
--- bare connector ("├─┬" / "└─┬") and, like named nodes, have ALL of their
+-- bare connector ("|--+" / "`--+") and, like named nodes, have ALL of their
 -- children rendered one level deeper via a single recursive call -- there
 -- is no "first child inline, rest below" special case.
 local function renderChildren(kids, prefix, out)
     local n = #kids
     for i, kid in ipairs(kids) do
         local last = (i == n)
-        local branch = last and "\u{2514}\u{2500} " or "\u{251C}\u{2500} " -- └─ / ├─
-        local cont = last and "   " or "\u{2502}  "                        --      / │
+        local branch = last and "`-- " or "|-- "
+        local cont = last and "   " or "|  "
         if kid.kind == "leaf" then
             emitLines(out, prefix .. branch, kid.text, prefix .. cont)
         else
@@ -273,7 +287,7 @@ local function renderChildren(kids, prefix, out)
             if label == "" then
                 -- Unnamed branch point (flattenNode guarantees it has 2+
                 -- children, or it would have been folded away already).
-                out[#out + 1] = prefix .. branch:sub(1, -2) .. "\u{252C}" -- …└─┬ / …├─┬
+                out[#out + 1] = prefix .. branch:sub(1, -2) .. "+" -- |--+ / `--+
                 renderChildren(sub.children, prefix .. cont, out)
             else
                 emitLines(out, prefix .. branch, label, prefix .. cont)
@@ -383,7 +397,9 @@ function M.replaceCladograms(html)
             pos = ce + 1
         elseif inner:find('class%s*=%s*"[^"]*clade') then
             out[#out + 1] = html:sub(pos, os - 1)
-            if isCladogramWrapper(open_tag) then
+            -- A real cladogram wrapper has only td rows; a hand-written
+            -- wikitext table with <th> headers stays and gets recursed into.
+            if isCladogramWrapper(open_tag) and not inner:find("<th") then
                 local texts = {}
                 local cpos = 1
                 while true do
