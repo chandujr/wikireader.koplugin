@@ -374,7 +374,7 @@ table.wikireader-tmulti {
     margin: 0.5em 0 0.5em 0;
     padding: 0 0.5em 0 0.5em;
     text-align: center;
-    font-size: 90%;
+    font-size: 80%;
     page-break-inside: avoid;
 }
 
