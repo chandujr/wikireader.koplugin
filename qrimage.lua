@@ -6,11 +6,10 @@ photographs/diagrams are never downloaded, because an article can contain
 dozens of them and each can be several hundred KB, and without replacement
 the image box (image *and* caption) would be lost entirely.
 
-Instead, this module replaces each article image -- and each video/audio
-figure -- with a small QR code of the media's File: description page:
-the box (and its caption) stays in the document, and scanning the QR
-code with a phone opens that page (which shows the real image, or a
-transcoded player for video/audio instead of a huge original download).
+Instead, this module replaces each article image with a small QR code
+of the image's File: description page: the box (and its caption) stays
+in the document, and scanning the QR code with a phone opens that page
+(which shows the real image instead of a huge original download).
 Nothing is ever fetched; a tiny
 black-and-white PNG is embedded per figure.
 
@@ -173,12 +172,10 @@ end
 
 -- Builds the File: description-page URL for the upload.wikimedia.org media
 -- URL `mediaUrl` points at, on the wiki edition `lang`. The filename always
--- occurs in the file's upload path, so we can recover it from any of the
--- three forms (original, thumbnail, or transcoded derivative) and steer
--- every QR scan -- image, video or audio alike -- at the File: page, where
--- the description, the transcoded player (instead of the huge original
--- download), and attribution live. Returns nil if no filename could be
--- extracted (or no lang was given).
+-- occurs in the file's upload path, so we can recover it from the original
+-- or thumbnail URL. Some URLs point at a /transcoded/ derived form rather
+-- than the original; those are handled too. Returns nil if no filename
+-- could be extracted (or no lang was given).
 function M.filePageUrl(mediaUrl, lang)
     if not mediaUrl or not lang then
         return nil
@@ -262,9 +259,15 @@ local function classify(tag, attrs)
     if tag == "figure" then
         local typeof = (attrs:match([[typeof%s*=%s*"([^"]*)"]]) or ""):lower()
         if typeof:find("mw:file") ~= nil
-            or typeof:find("mw:image") ~= nil
-            or typeof:find("mw:video") ~= nil then
+            or typeof:find("mw:image") ~= nil then
             return { tag = tag, is_img = true }
+        end
+        -- Video/audio figures have no image to show or QR-encode; mark
+        -- the whole figure for the walker's locmap-style suppression so
+        -- it, its caption and its media all vanish (no empty dashed box).
+        if typeof:find("mw:video") ~= nil
+            or typeof:find("mw:audio") ~= nil then
+            return { tag = tag, is_dropped = true }
         end
     elseif tag == "div" then
         local cls = className(attrs)
@@ -364,58 +367,17 @@ local function qrImageTag(attrs, qr_images, qr_size, lang)
     return makeQr(url, qr_images, qr_size)
 end
 
--- Replaces a video or <audio> element found inside an image box with
--- a QR placeholder of the media's File: page. MediaWiki video/audio
--- figures put the actual streams in <source> children: a handful of
--- transcoded derivatives and usually the original full media file. The
--- QR points at the file's description page (recovering the filename from
--- the original file when one is present, or from the first usable
--- <source>/poster otherwise), so the scan opens the transcoded player
--- rather than a huge original download. Returns the marker HTML, or ""
--- if nothing usable was found (the caption survives).
-local function qrMediaTag(media_tag, media, qr_images, qr_size, lang)
-    -- <source> children carry the actual streams. <track> children are
-    -- subtitle metadata (timedtext API), not media, so ignore them.
-    local original_src
-    local first_src
-    for src in media:gmatch([[<source[^>]*src%s*=%s*"([^"]*)"[^>]*>]]) do
-        if src:sub(1, 5) ~= "data:" then
-            if not first_src then
-                first_src = src
-            end
-            if not src:find("transcoded", 1, true) then
-                original_src = src
-            end
-        end
-    end
-    local url = original_src or first_src
-    if not url then
-        -- No <source> children: a direct <video src="...">, else the
-        -- poster thumbnail as a last resort.
-        url = media_tag:match([[src%s*=%s*"([^"]*)"]])
-            or media_tag:match([[poster%s*=%s*"([^"]*)"]])
-    end
-    if not url then
-        return ""
-    end
-    url = M.filePageUrl(url, lang)
-    if not url then
-        return ""
-    end
-    return makeQr(url, qr_images, qr_size)
-end
-
--- Walks the article HTML and replaces every image, video or audio
--- element that sits inside an "image box" (figure, gallerybox, div.thumb)
--- with a placeholder span, via the img_fn/media_fn handlers. The
--- placeholders are later swapped for real <img> tags by the EPUB builder,
--- once it knows the final file layout. Any other <img>/<video>/<audio>
--- (inline symbols, timeline renderings, pronunciation players outside
--- boxes, ...) is left untouched for createEpub() to deal with as before.
+-- Walks the article HTML and replaces every <img> that sits inside an
+-- "image box" (figure, gallerybox, div.thumb) with a placeholder span
+-- via the img_fn handler. The placeholders are later swapped for real
+-- <img> tags by the EPUB builder, once it knows the final file layout.
+-- Any other tagged media (inline symbols, timeline renderings,
+-- pronunciation players outside boxes, ...) is left untouched for
+-- createEpub() to handle.
 -- img_fn also receives the number of h2-h6 headings seen so far, so the
 -- lazy-image mode can record which article section each image sits under
 -- (the TOC entry order matches the heading order).
-local function walkImageBoxes(html, img_fn, media_fn)
+local function walkImageBoxes(html, img_fn)
     -- HTML comments can contain arbitrary text that would confuse the tag
     -- walker (and are meaningless in the final document anyway).
     html = html:gsub("<!%-%-.-%-%->", "")
@@ -423,7 +385,8 @@ local function walkImageBoxes(html, img_fn, media_fn)
     local pos = 1
     local stack = {}
     local headings = 0
-    -- Depth of locmap containers currently being dropped (see below).
+    -- Depth of suppressed containers currently being dropped
+    -- (locmap divs and video/audio figures).
     local suppress = 0
     local tag_pat = "<(/?)%s*([a-zA-Z][a-zA-Z0-9]*)([^>]*)>"
     while true do
@@ -470,12 +433,13 @@ local function walkImageBoxes(html, img_fn, media_fn)
                 end
                 out[#out + 1] = full
             elseif (tagname == "video" or tagname == "audio") and inImageBox(stack) then
-                -- Inside an image box: replace the whole <video>…</video> /
-                -- <audio>…</audio> element, since its <source> children carry
-                -- the actual URLs.
+                -- Boxed video/audio is dropped: it has no image to encode.
+                -- Still consume through the close tag -- its <source>
+                -- children carry the actual URLs and would mispush the
+                -- stack and leak into the output if walked.
                 local close_start, close_end = html:find("</" .. tagname .. "%s*>", e + 1)
                 if close_start then
-                    out[#out + 1] = media_fn(full, html:sub(e + 1, close_start - 1))
+                    out[#out + 1] = ""
                     consumed_until = close_end + 1 -- discard up to </video>|</audio>
                 else
                     -- Malformed (no close tag): leave the tag as-is.
@@ -497,10 +461,16 @@ local function walkImageBoxes(html, img_fn, media_fn)
                 -- media images disabled we could only offer a bare, marker-
                 -- less map as a QR, which would be meaningless to the reader.
                 -- Drop the whole figure -- map, overlays and caption alike.
+                -- Video/audio figures are dropped the same way (no image to
+                -- keep, so no empty caption stub).
                 if tagname == "div" and hasClass(className(attrs), "locmap") then
                     entry.is_dropped = true
+                end
+                -- Suppression mode swallows the box and everything up to
+                -- its matching close tag (caption included).
+                if entry.is_dropped then
                     suppress = suppress + 1
-                    out[#out + 1] = "" -- drop the locmap's open tag
+                    out[#out + 1] = ""
                 else
                     out[#out + 1] = full
                 end
@@ -517,31 +487,24 @@ local function walkImageBoxes(html, img_fn, media_fn)
     return result
 end
 
--- QR mode: every boxed media element becomes a QR code of its File:
+-- QR mode: every boxed image becomes a QR code of its File:
 -- description page.
 function M.replaceImagesWithQr(html, qr_images, qr_size, lang)
     return walkImageBoxes(html,
         function(attrs)
             return qrImageTag(attrs, qr_images, qr_size, lang)
-        end,
-        function(media_tag, media)
-            return qrMediaTag(media_tag, media, qr_images, qr_size, lang)
         end)
 end
 
 -- Lazy-image mode: boxed <img>s become placeholders whose zip entries are
--- filled in later by lazyfetch.lua; video/audio (nothing to download into
--- a reflowable page) is dropped, its caption surviving. Each placeholder
--- records the index of the article section it sits in, which the
--- background scheduler maps to a page number via the document TOC.
+-- filled in later by lazyfetch.lua; each placeholder records the index of
+-- the article section it sits in, which the background scheduler maps to
+-- a page number via the document TOC.
 function M.replaceImagesWithLazy(html, lazy_images)
     local seen = {}
     return walkImageBoxes(html,
         function(attrs, section)
             return lazyImageTag(attrs, lazy_images, seen, section or 0)
-        end,
-        function()
-            return ""
         end)
 end
 

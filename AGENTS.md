@@ -17,7 +17,7 @@ KOReader's `G_reader_settings` under `wikireader_*`.
 | `main.lua` | Plugin entry point: menus, search/featured/category browsing, link handler, back-history nav, refetch/save/share/clear-cache actions. Start here for any UI or user-facing behavior change. |
 | `epub.lua` | Orchestrates article → EPUB: monkey-patches `Wikipedia` + `Archiver` hooks, sets per-feature HTML-cleaning options, injects stylesheet + metadata. Change here to alter the fetch/build pipeline or which passes run. |
 | `htmlclean.lua` | All HTML transformations: strip clutter (navboxes, hatnotes, timeline bars), unwrap article links, drop/keep infobox media cells, center infobox cells, border infobox/wikitable tables, merge quote attributions, rewrite `{{Multiple image}}` flexbox to tables. |
-| `qrimage.lua` | Replaces media with QR codes (renders QR via KOReader's `ffi/qrencode`, writes minimal PNGs, rewrites media boxes to placeholder `<img>`s). Also owns the shared image-box walker used by the lazy-image mode. |
+| `qrimage.lua` | Replaces each boxed image with a QR code of its File: page (renders QR via KOReader's `ffi/qrencode`, writes minimal PNGs, rewrites image boxes to placeholder `<img>`s). Also owns the shared image-box walker used by the lazy-image mode; drops non-image media (video/audio). |
 | `latex.lua` | Math formulas: block formulas → fetched Wikipedia SVGs (cap 60, Unicode fallback), inline formulas → Unicode transcription (replaces `MathML`/images). |
 | `cladogram.lua` | Clade tables → ASCII tree `<pre>` diagrams. |
 | `wikiutil.lua` | Shared helpers: minimal HTTP JSON GET, Wikipedia URL parsing/encoding, HTML notice-tag constants, balanced-tag matching (`findMatchingClose`). |

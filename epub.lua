@@ -32,11 +32,11 @@ Full article EPUB builder
 -- after cleaning the HTML: clutter tables (navbox/sidebar/rmbox, and infobox
 -- unless "Show infoboxes" is on) and the category list are stripped, math
 -- formulas become SVGs (block) or text (inline), cladograms become text diagrams,
--- leading hatnotes are boxed. With "media as QR codes" each media box
--- keeps its caption and gets a QR code of its File: page; with "background
--- images" (taking precedence) each boxed image keeps its box and footprint
--- but its bytes are downloaded after the article opens (lazyfetch.lua); with
--- both off the boxes are removed entirely. The resolved title and short
+-- leading hatnotes are boxed. With "images as QR codes" each image box
+-- keeps its caption and gets a QR code of the image's File: page; with
+-- "background images" (taking precedence) each boxed image keeps its box
+-- and footprint but its bytes are downloaded after the article opens
+-- (lazyfetch.lua); with both off the boxes are removed entirely. The resolved title and short
 -- description are recovered from the API response and written into the EPUB
 -- metadata. A kept infobox's media cells are dropped before the media pass.
 function M.buildEpub(epub_path, title, lang, callback)
@@ -226,9 +226,9 @@ function M.buildEpub(epub_path, title, lang, callback)
             if G_reader_settings:isTrue("wikireader_disable_hyperlinks") then
                 html = htmlclean.stripArticleLinks(html)
             end
-            -- Media figures: in QR mode qrimage turns each <img>/<video>/<audio>
-            -- into a QR code; in lazy mode boxed <img>s become placeholders and
-            -- video/audio is dropped; otherwise drop the media boxes and players.
+            -- Media figures: in QR mode qrimage turns each boxed <img>
+            -- into a QR code; in lazy mode boxed <img>s become placeholders;
+            -- otherwise the media boxes are dropped entirely.
             if not (qr_enabled or lazy_enabled) then
                 html = htmlclean.stripElementsByAttr(html, "figure", "typeof",
                     { "mw:file", "mw:image", "mw:video", "mw:audio" })

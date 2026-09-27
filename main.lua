@@ -13,13 +13,11 @@ Wikipedia conversion (ui/wikipedia.lua), so headings and the table of
 contents render normally. The last 10 distinct articles are cached on disk
 (for up to a day) as real EPUB files, which also backs the back-history.
 
-Media (images, audio/video) is never downloaded upfront. Each media box is
-replaced by a small QR code pointing at its File: description page, which
-you can scan with a phone (toggleable); alternatively images can be
-downloaded in the background while you read ("Fetch images in background":
-reserved boxes fill in via a flashless document reload); with both off the
-boxes are removed entirely.
-you can scan with a phone (toggleable; off removes the boxes entirely).
+Images are never downloaded upfront. Each image box can be replaced by a
+small QR code pointing at its File: description page (toggleable);
+alternatively images can be downloaded in the background while you read
+("Fetch images in background": reserved boxes fill in via a flashless
+document reload); with both off the boxes are removed entirely.
 
 Infoboxes, navboxes, sidebars, route-map tables, the short-description
 metadata, the category list, hatnotes/maintenance banners, and quote
@@ -415,7 +413,7 @@ function WikiReader:addToMainMenu(menu_items)
                         "Open the article immediately with reserved empty boxes, then download its images in the background while you read; they appear in place once ready (with a brief, flashless refresh). Takes precedence over QR codes."),
                     },
                     {
-                        text = _("Show media as QR codes"),
+                        text = _("Show images as QR codes"),
                         keep_menu_open = true,
                         checked_func = function()
                             return G_reader_settings:isTrue("wikireader_qr_media")
@@ -424,7 +422,7 @@ function WikiReader:addToMainMenu(menu_items)
                             G_reader_settings:flipNilOrFalse("wikireader_qr_media")
                         end,
                         help_text = _(
-                        "Replace images and other media in an article with small QR codes you can scan with your phone. Turn this off to remove the media boxes entirely. Ignored when \"Fetch images in background\" is on."),
+                        "Replace images in an article with small QR codes you can scan with your phone. Turn this off to remove the image boxes entirely. Ignored when \"Fetch images in background\" is on."),
                     },
                     {
                         text = _("Show infoboxes"),
