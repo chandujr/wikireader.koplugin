@@ -32,11 +32,13 @@ Full article EPUB builder
 -- after cleaning the HTML: clutter tables (navbox/sidebar/rmbox, and infobox
 -- unless "Show infoboxes" is on) and the category list are stripped, math
 -- formulas become SVGs (block) or text (inline), cladograms become text diagrams,
--- leading hatnotes are boxed. With "media as QR codes" (the default) each
--- media box keeps its caption and gets a QR code of its File: page; with it
--- off the boxes are removed entirely. The resolved title and short
+-- leading hatnotes are boxed. With "media as QR codes" each media box
+-- keeps its caption and gets a QR code of its File: page; with "background
+-- images" (taking precedence) each boxed image keeps its box and footprint
+-- but its bytes are downloaded after the article opens (lazyfetch.lua); with
+-- both off the boxes are removed entirely. The resolved title and short
 -- description are recovered from the API response and written into the EPUB
--- metadata. A kept infobox's media cells are dropped before the QR pass.
+-- metadata. A kept infobox's media cells are dropped before the media pass.
 function M.buildEpub(epub_path, title, lang, callback)
     local short_description = nil -- extracted from the HTML
     local resolved_title = nil    -- from the API response
@@ -46,6 +48,12 @@ function M.buildEpub(epub_path, title, lang, callback)
     local qr_enabled = G_reader_settings:isTrue("wikireader_qr_media")
     local qr_size = G_reader_settings:readSetting("wikireader_qr_size") or qrimage.DEFAULT_QR_SIZE
     local qr_images = {}
+    -- Lazy background images (takes precedence over QR mode): each boxed
+    -- image gets a placeholder <img> whose zip entry is missing at open
+    -- time; the URL list rides along in the EPUB (wikireader-pending.json)
+    -- for lazyfetch to complete after the article opens.
+    local lazy_enabled = G_reader_settings:isTrue("wikireader_lazy_media")
+    local lazy_images = {}
     -- Read once at build scope: both the HTML-cleaning hook and the Archiver
     -- stylesheet hook below need it, and the Archiver hook must not read a
     -- bare global (that bug silently disabled the full-width infobox CSS).
@@ -197,8 +205,9 @@ function M.buildEpub(epub_path, title, lang, callback)
             -- borderTableCells: crengine ignores descendant selectors, so
             -- stylesheet rules can't reach the cells).
             html = htmlclean.borderTableCells(html)
-            if qr_enabled then
-                -- Keep media boxes intact so their images can be QR-coded.
+            if qr_enabled or lazy_enabled then
+                -- Keep media boxes intact: their images become QR codes or
+                -- lazy placeholders.
                 html = htmlclean.stripElementsByClass(html, "div",
                     { "catlinks", "navbox", "vertical-navbox", "side-box", "spoken-wikipedia", "shortdescription" })
             else
@@ -218,8 +227,9 @@ function M.buildEpub(epub_path, title, lang, callback)
                 html = htmlclean.stripArticleLinks(html)
             end
             -- Media figures: in QR mode qrimage turns each <img>/<video>/<audio>
-            -- into a QR code; otherwise drop the media boxes and players.
-            if not qr_enabled then
+            -- into a QR code; in lazy mode boxed <img>s become placeholders and
+            -- video/audio is dropped; otherwise drop the media boxes and players.
+            if not (qr_enabled or lazy_enabled) then
                 html = htmlclean.stripElementsByAttr(html, "figure", "typeof",
                     { "mw:file", "mw:image", "mw:video", "mw:audio" })
                 html = html:gsub("<audio.-</audio%s*>", "")
@@ -228,10 +238,15 @@ function M.buildEpub(epub_path, title, lang, callback)
             -- Render cladograms (Template:Clade phylogeny trees) as text
             -- diagrams, since crengine cannot draw their CSS border lines.
             html = cladogram.replaceCladograms(html)
-            -- Replace each media element with a QR placeholder; PNGs are
-            -- stitched in from the Archiver hooks below.
+            -- Replace each media element with a QR or lazy placeholder;
+            -- QR PNGs are stitched in from the Archiver hooks below, lazy
+            -- placeholders reference zip entries filled in later.
             if qr_enabled then
                 html = qrimage.replaceImagesWithQr(html, qr_images, qr_size, lang)
+            elseif lazy_enabled then
+                html = qrimage.replaceImagesWithLazy(html, lazy_images)
+            end
+            if qr_enabled or lazy_enabled then
                 -- Figures' mw-halign-* classes select base-stylesheet rules
                 -- (floats, wide margins) that outrank the injected
                 -- attribute-only selectors; drop them so the full-width
@@ -295,6 +310,19 @@ function M.buildEpub(epub_path, title, lang, callback)
                     original_addFileFromMemory(self, "OEBPS/" .. qr.path, qr.png, mtime)
                 end
             end
+            -- Swap each lazy placeholder for a real <img> whose zip entry
+            -- doesn't exist yet; lazyfetch.lua adds the files (or, on
+            -- failure, removes these tags) after the article opens.
+            if next(lazy_images) then
+                content = content:gsub('<span class="wikireader%-lazyimg" data%-lazyindex="(%d+)"[^>]*></span>',
+                    function(idx)
+                        local img = lazy_images[tonumber(idx)]
+                        if not img then
+                            return ""
+                        end
+                        return string.format('<img src="%s" style="%s" alt=""/>', img.imgpath, img.style or "")
+                    end)
+            end
             -- Swap each block-formula marker back to a real <img>, carrying
             -- the original SVG's inline style (..height/vertical-align:)
             -- from Wikipedia, and register the SVG files.
@@ -336,6 +364,26 @@ function M.buildEpub(epub_path, title, lang, callback)
                         idx, idx))
                 end
             end
+            if next(lazy_images) then
+                for idx, img in ipairs(lazy_images) do
+                    content = content:gsub("</manifest>", string.format(
+                        '<item id="wrimg%05d" href="%s" media-type="%s"/>\n  </manifest>',
+                        idx, img.imgpath, img.mimetype))
+                end
+                -- The download URL list rides inside the EPUB, so an open
+                -- interrupted before the images arrive can still be
+                -- completed later (lazyfetch drops the entry once nothing
+                -- remains). `section` records which article section each
+                -- image is in, so lazyfetch can map it to a page via the
+                -- document TOC and only fetch images near the position.
+                local JSON = require("json")
+                local pending = {}
+                for _, img in ipairs(lazy_images) do
+                    pending[#pending + 1] =
+                        { src = img.src, imgpath = img.imgpath, mimetype = img.mimetype, section = img.section or 0 }
+                end
+                original_addFileFromMemory(self, "OEBPS/wikireader-pending.json", JSON.encode(pending), mtime)
+            end
         elseif entry_path == "OEBPS/toc.ncx" then
             if resolved_title then
                 content = content:gsub('(<docTitle>%s*<text>).-(</text>%s*</docTitle>)', '%1' .. resolved_title .. '%2')
@@ -351,7 +399,10 @@ function M.buildEpub(epub_path, title, lang, callback)
             -- it would sit flush against the top border. The base stylesheet
             -- also boxes thumbnails with "border: dotted 1px black"; restyle
             -- all QR boxes to a lighter dashed border to match the notices.
-            if qr_enabled then
+            -- Lazy mode reuses the same figure/gallery styling: the base
+            -- stylesheet was built with images off, so the same padding fix
+            -- applies while the placeholder has no image yet.
+            if qr_enabled or lazy_enabled then
                 content = content .. [[
 
 figure[typeof~='mw:File/Thumb'],

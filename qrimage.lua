@@ -42,6 +42,21 @@ local M = {}
 -- Exposed so the EPUB builder can use it as the fallback display size.
 M.DEFAULT_QR_SIZE = DEFAULT_QR_SIZE
 
+-- Image formats we are willing to background-download (lazy-image mode),
+-- with the mimetype their EPUB manifest item needs.
+local EXT_MIMETYPE = {
+    png = "image/png",
+    jpg = "image/jpeg",
+    jpeg = "image/jpeg",
+    gif = "image/gif",
+    webp = "image/webp",
+    svg = "image/svg+xml",
+}
+
+-- Placeholder ceiling: an article can carry dozens of gallery images, and
+-- every reserved box is a download plus reserved zip/memory space.
+local MAX_LAZY_IMAGES = 60
+
 --[[-------------------------------------------------------------------------
 Minimal PNG writer (8-bit greyscale, zlib-compressed)
 --]]
@@ -286,10 +301,58 @@ local function makeQr(url, qr_images, qr_size)
     return string.format('<span class="wikireader-qrimg" data-qrindex="%d"></span>', index)
 end
 
+-- Replaces one <img> tag with a lazy-image placeholder span recording
+-- the image's download URL and displayed footprint. The EPUB builder
+-- later swaps markers for real <img> tags whose zip entries don't exist
+-- yet; lazyfetch.lua downloads them and swaps the zip in place. Returns
+-- "" if the image has no usable URL/format (the caption survives).
+local function lazyImageTag(attrs, lazy_images, seen, section)
+    local src = attrs:match([[src%s*=%s*"([^"]*)"]])
+    if not src or src:sub(1, 5) == "data:" then
+        return ""
+    end
+    if src:sub(1, 2) == "//" then
+        src = "https:" .. src
+    end
+    local ext = src:gsub("%?.*$", ""):match(".*%.(%S%S%S?%S?%S?)$")
+    ext = ext and ext:lower()
+    if not ext or not EXT_MIMETYPE[ext] then
+        return ""
+    end
+    if seen[src] then
+        local hit = seen[src]
+        return string.format('<span class="wikireader-lazyimg" data-lazyindex="%d" style="%s"></span>',
+            hit.index, hit.style)
+    end
+    if #lazy_images >= MAX_LAZY_IMAGES then
+        return ""
+    end
+    -- Same style-carrying trick as KOReader's createEpub: crengine ignores
+    -- width/height attributes but honors them in a style, and reserving
+    -- the real footprint keeps the post-reload reflow minimal.
+    local style_props = {}
+    local width = tonumber(attrs:match([[width%s*=%s*"([^"]*)"]]))
+    local height = tonumber(attrs:match([[height%s*=%s*"([^"]*)"]]))
+    if width then style_props[#style_props + 1] = string.format("width:%dpx", width) end
+    if height then style_props[#style_props + 1] = string.format("height:%dpx", height) end
+    local style = table.concat(style_props, "; ")
+    local index = #lazy_images + 1
+    lazy_images[index] = {
+        src = src,
+        imgpath = string.format("images/wrimg%05d.%s", index, ext),
+        mimetype = EXT_MIMETYPE[ext],
+        style = style,
+        section = section,
+    }
+    seen[src] = { index = index, style = style }
+    return string.format('<span class="wikireader-lazyimg" data-lazyindex="%d" style="%s"></span>',
+        index, style)
+end
+
 -- Replaces one <img> tag with a QR placeholder span, appending the
 -- generated PNG to `qr_images`. Returns the marker HTML, or "" if the
 -- image had no usable URL / could not be QR-coded (the caption survives).
-local function qrImageTag(img_tag, attrs, qr_images, qr_size, lang)
+local function qrImageTag(attrs, qr_images, qr_size, lang)
     local src = attrs:match([[src%s*=%s*"([^"]*)"]])
     if not src or src:sub(1, 5) == "data:" then
         return ""
@@ -344,18 +407,22 @@ end
 
 -- Walks the article HTML and replaces every image, video or audio
 -- element that sits inside an "image box" (figure, gallerybox, div.thumb)
--- with a QR placeholder span. The placeholders are later swapped for real
--- <img> tags by the EPUB builder, once it knows the final file layout.
--- Any other <img>/<video>/<audio> (inline symbols, timeline renderings,
--- pronunciation players outside boxes, ...) is left untouched for
--- createEpub() to deal with as before.
-function M.replaceImagesWithQr(html, qr_images, qr_size, lang)
+-- with a placeholder span, via the img_fn/media_fn handlers. The
+-- placeholders are later swapped for real <img> tags by the EPUB builder,
+-- once it knows the final file layout. Any other <img>/<video>/<audio>
+-- (inline symbols, timeline renderings, pronunciation players outside
+-- boxes, ...) is left untouched for createEpub() to deal with as before.
+-- img_fn also receives the number of h2-h6 headings seen so far, so the
+-- lazy-image mode can record which article section each image sits under
+-- (the TOC entry order matches the heading order).
+local function walkImageBoxes(html, img_fn, media_fn)
     -- HTML comments can contain arbitrary text that would confuse the tag
     -- walker (and are meaningless in the final document anyway).
     html = html:gsub("<!%-%-.-%-%->", "")
     local out = {}
     local pos = 1
     local stack = {}
+    local headings = 0
     -- Depth of locmap containers currently being dropped (see below).
     local suppress = 0
     local tag_pat = "<(/?)%s*([a-zA-Z][a-zA-Z0-9]*)([^>]*)>"
@@ -393,7 +460,7 @@ function M.replaceImagesWithQr(html, qr_images, qr_size, lang)
             local consumed_until
             if tagname == "img" then
                 if inImageBox(stack) then
-                    out[#out + 1] = qrImageTag(full, attrs, qr_images, qr_size, lang)
+                    out[#out + 1] = img_fn(attrs, headings)
                 else
                     out[#out + 1] = full
                 end
@@ -408,7 +475,7 @@ function M.replaceImagesWithQr(html, qr_images, qr_size, lang)
                 -- the actual URLs.
                 local close_start, close_end = html:find("</" .. tagname .. "%s*>", e + 1)
                 if close_start then
-                    out[#out + 1] = qrMediaTag(full, html:sub(e + 1, close_start - 1), qr_images, qr_size, lang)
+                    out[#out + 1] = media_fn(full, html:sub(e + 1, close_start - 1))
                     consumed_until = close_end + 1 -- discard up to </video>|</audio>
                 else
                     -- Malformed (no close tag): leave the tag as-is.
@@ -419,6 +486,12 @@ function M.replaceImagesWithQr(html, qr_images, qr_size, lang)
                 out[#out + 1] = full
             else
                 local entry = classify(tagname, attrs)
+                -- Headings index the article's sections (in the same order
+                -- as the TOC entries), so lazy images can record their own
+                -- section for the page-windowed download scheduler.
+                if tagname:match("^h[2-6]$") then
+                    headings = headings + 1
+                end
                 -- A location map (<div class="locmap">) is meant to be seen as
                 -- its base map with marker overlays composited on top. With
                 -- media images disabled we could only offer a bare, marker-
@@ -438,9 +511,38 @@ function M.replaceImagesWithQr(html, qr_images, qr_size, lang)
     end
     local result = table.concat(out)
     -- Some layouts wrap the image in a link to the file page; drop that
-    -- wrapper around our QR marker so the QR isn't a confusing tap target.
+    -- wrapper around our markers so they aren't a confusing tap target.
     result = result:gsub('(<a[^>]*>%s*)(<span class="wikireader%-qrimg"[^>]*></span>)(%s*</a>)', '%2')
+    result = result:gsub('(<a[^>]*>%s*)(<span class="wikireader%-lazyimg"[^>]*></span>)(%s*</a>)', '%2')
     return result
+end
+
+-- QR mode: every boxed media element becomes a QR code of its File:
+-- description page.
+function M.replaceImagesWithQr(html, qr_images, qr_size, lang)
+    return walkImageBoxes(html,
+        function(attrs)
+            return qrImageTag(attrs, qr_images, qr_size, lang)
+        end,
+        function(media_tag, media)
+            return qrMediaTag(media_tag, media, qr_images, qr_size, lang)
+        end)
+end
+
+-- Lazy-image mode: boxed <img>s become placeholders whose zip entries are
+-- filled in later by lazyfetch.lua; video/audio (nothing to download into
+-- a reflowable page) is dropped, its caption surviving. Each placeholder
+-- records the index of the article section it sits in, which the
+-- background scheduler maps to a page number via the document TOC.
+function M.replaceImagesWithLazy(html, lazy_images)
+    local seen = {}
+    return walkImageBoxes(html,
+        function(attrs, section)
+            return lazyImageTag(attrs, lazy_images, seen, section or 0)
+        end,
+        function()
+            return ""
+        end)
 end
 
 return M

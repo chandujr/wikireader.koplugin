@@ -13,8 +13,12 @@ Wikipedia conversion (ui/wikipedia.lua), so headings and the table of
 contents render normally. The last 10 distinct articles are cached on disk
 (for up to a day) as real EPUB files, which also backs the back-history.
 
-Media (images, audio/video) is never downloaded. Instead each media box is
+Media (images, audio/video) is never downloaded upfront. Each media box is
 replaced by a small QR code pointing at its File: description page, which
+you can scan with a phone (toggleable); alternatively images can be
+downloaded in the background while you read ("Fetch images in background":
+reserved boxes fill in via a flashless document reload); with both off the
+boxes are removed entirely.
 you can scan with a phone (toggleable; off removes the boxes entirely).
 
 Infoboxes, navboxes, sidebars, route-map tables, the short-description
@@ -54,6 +58,7 @@ local bookmarks = require("wikireader-bookmarks")
 local cache = require("wikireader-cache")
 local categories = require("categories")
 local epub = require("epub")
+local lazyfetch = require("lazyfetch")
 local history = require("wikireader-history")
 local mainpage = require("mainpage")
 local wutil = require("wikiutil")
@@ -398,6 +403,18 @@ function WikiReader:addToMainMenu(menu_items)
                         "Wikipedia reading don't pollute your normal book reading stats or history. Untick to count WikiReader articles like any other book."),
                     },
                     {
+                        text = _("Fetch images in background"),
+                        keep_menu_open = true,
+                        checked_func = function()
+                            return G_reader_settings:isTrue("wikireader_lazy_media")
+                        end,
+                        callback = function()
+                            G_reader_settings:flipNilOrFalse("wikireader_lazy_media")
+                        end,
+                        help_text = _(
+                        "Open the article immediately with reserved empty boxes, then download its images in the background while you read; they appear in place once ready (with a brief, flashless refresh). Takes precedence over QR codes."),
+                    },
+                    {
                         text = _("Show media as QR codes"),
                         keep_menu_open = true,
                         checked_func = function()
@@ -407,7 +424,7 @@ function WikiReader:addToMainMenu(menu_items)
                             G_reader_settings:flipNilOrFalse("wikireader_qr_media")
                         end,
                         help_text = _(
-                        "Replace images and other media in an article with small QR codes you can scan with your phone. Turn this off to remove the media boxes entirely."),
+                        "Replace images and other media in an article with small QR codes you can scan with your phone. Turn this off to remove the media boxes entirely. Ignored when \"Fetch images in background\" is on."),
                     },
                     {
                         text = _("Show infoboxes"),
@@ -643,7 +660,7 @@ function WikiReader:buildHistoryMenu()
     local items = {}
     -- Not `for _, entry`: that would shadow gettext's `_` with a number,
     -- breaking the translated string in the hold callback below.
-    for _i, entry in ipairs(list) do
+    for _, entry in ipairs(list) do
         local text = entry.title
         if entry.lang and entry.lang ~= self.lang then
             text = T("%1 (%2)", text, entry.lang:upper())
@@ -687,7 +704,7 @@ function WikiReader:buildBookmarksMenu()
         })
     end
     -- Not `for _, entry`: see buildHistoryMenu.
-    for _i, entry in ipairs(bookmarks.getList()) do
+    for _, entry in ipairs(bookmarks.getList()) do
         local text = entry.title
         if entry.lang and entry.lang ~= self.lang then
             text = T("%1 (%2)", text, entry.lang:upper())
@@ -1122,6 +1139,9 @@ function WikiReader:fetchAndOpen(title, lang, open_fn)
         -- Cache hit: buildEpub() renamed the file to the resolved title on
         -- first fetch, so `title` is already casing-correct.
         open_fn(cached_path, title)
+        -- A cache hit from an interrupted lazy build still carries its
+        -- pending entry; complete ones are a cheap no-op.
+        self:maybeCompleteLazyImages(cached_path)
         return
     end
 
@@ -1136,8 +1156,17 @@ function WikiReader:fetchAndOpen(title, lang, open_fn)
             end
             cache.pruneCache(keep_path)
             open_fn(used_path or epub_path, resolved_title)
+            self:maybeCompleteLazyImages(used_path or epub_path)
         end)
     end)
+end
+
+-- Kicks off the position-windowed background buffering for a lazily-built
+-- EPUB (no-op unless the feature is on; lazyfetch checks for pending work).
+function WikiReader:maybeCompleteLazyImages(epub_path)
+    if G_reader_settings:isTrue("wikireader_lazy_media") then
+        lazyfetch.scheduleCompletion(epub_path)
+    end
 end
 
 function WikiReader:openArticle(title, lang)
@@ -1382,6 +1411,7 @@ function WikiReader:refetchCurrentArticle()
                 local ReaderUI = require("apps/reader/readerui")
                 ReaderUI:showReader(used_path)
             end
+            self:maybeCompleteLazyImages(used_path)
         end)
     end)
 end
@@ -1402,6 +1432,7 @@ function WikiReader:onWikiReaderGoBack()
             local ReaderUI = require("apps/reader/readerui")
             ReaderUI:showReader(prev.path)
         end
+        self:maybeCompleteLazyImages(prev.path)
         return
     end
 
@@ -1419,7 +1450,7 @@ end
 
 -- Returns the directory where the built-in Wikipedia feature saves its EPUBs.
 function WikiReader:getWikipediaSaveDir()
-    local filemanagerutil = require("apps/filemanager/filemanagerutil")
+    -- (used via an inline require below; no module-level need)
     local DictQuickLookup = require("ui/widget/dictquicklookup")
     local dir = G_reader_settings:readSetting("wikipedia_save_dir")
         or DictQuickLookup.getWikiSaveEpubDefaultDir()
