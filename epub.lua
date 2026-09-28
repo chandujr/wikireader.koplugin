@@ -24,6 +24,17 @@ local wutil = require("wikiutil")
 
 local M = {}
 
+-- Hourglass "loading" icon shown inside an image box until lazyfetch swaps
+-- the real bitmap in. One copy per image (each pending img points at its
+-- own ".loading.svg" path). Sand drawn half-drained: a pile left in the
+-- top bulb's lower half, the bottom bulb filled to its midline.
+local LOADING_SVG = [[<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" stroke="#888" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+<g transform="translate(12 12)">
+<path d="M5 2h14M5 22h14M17 2v4.172a2 2 0 0 1-.586 1.414L12 12l-4.414-4.414A2 2 0 0 1 7 6.172V2M7 22v-4.172a2 2 0 0 1 .586-1.414L12 12l4.414 4.414a2 2 0 0 1 .586 1.414V22"/>
+<path fill="#888" stroke="none" d="M8 8h8L12 12ZM7.5 17h9l.5 5H7Z"/>
+</g>
+</svg>]]
+
 --[[-------------------------------------------------------------------------
 Full article EPUB builder
 --]]
@@ -317,17 +328,26 @@ function M.buildEpub(epub_path, title, lang, callback)
                     original_addFileFromMemory(self, "OEBPS/" .. qr.path, qr.png, mtime)
                 end
             end
-            -- Swap each lazy placeholder for a real <img> whose zip entry
-            -- doesn't exist yet; lazyfetch.lua adds the files (or, on
-            -- failure, removes these tags) after the article opens.
+            -- Swap each lazy placeholder for a pending <img> pointing at a
+            -- per-image copy of the loading icon, keeping the real footprint
+            -- reserved on the img so the box never changes size. The unique
+            -- path embeds the real imgpath (what lazyfetch's page partition
+            -- matches on) and is what its src rewrite keys on.
             if next(lazy_images) then
+                local loading_written = {}
                 content = content:gsub('<span class="wikireader%-lazyimg" data%-lazyindex="(%d+)"[^>]*></span>',
                     function(idx)
                         local img = lazy_images[tonumber(idx)]
                         if not img then
                             return ""
                         end
-                        return string.format('<img src="%s" style="%s" alt=""/>', img.imgpath, img.style or "")
+                        local loading_src = img.imgpath .. ".loading.svg"
+                        if not loading_written[loading_src] then
+                            loading_written[loading_src] = true
+                            original_addFileFromMemory(self, "OEBPS/" .. loading_src, LOADING_SVG, mtime)
+                        end
+                        return string.format('<img src="%s" style="%s" alt=""/>',
+                            loading_src, img.style or "")
                     end)
             end
             -- Swap each block-formula marker back to a real <img>, carrying
@@ -376,6 +396,9 @@ function M.buildEpub(epub_path, title, lang, callback)
                     content = content:gsub("</manifest>", string.format(
                         '<item id="wrimg%05d" href="%s" media-type="%s"/>\n  </manifest>',
                         idx, img.imgpath, img.mimetype))
+                    content = content:gsub("</manifest>", string.format(
+                        '<item id="wrload%05d" href="%s.loading.svg" media-type="image/svg+xml"/>\n  </manifest>',
+                        idx, img.imgpath))
                 end
                 -- The download URL list rides inside the EPUB, so an open
                 -- interrupted before the images arrive can still be

@@ -94,15 +94,31 @@ local function swapInImages(epub_path, images, results)
     local remaining = {}
     local ok_count = 0
     for i, img in ipairs(images) do
+        -- The hint span and OPF id are keyed by the BUILD index, which
+        -- outlives the pending list: every swap rewrites the pending JSON
+        -- with only the remaining images, so from the second batch on the
+        -- loop position no longer matches the index burned into the HTML.
+        -- Derive it from the imgpath instead.
+        local idx = tonumber(img.imgpath:match("wrimg(%d+)")) or i
+        local path_pat = img.imgpath:gsub("%.", "%%.")
+        -- Pending <img>s point at their per-image ".loading.svg" icon copy;
+        -- cached EPUBs from earlier plugin versions point straight at the
+        -- real path (handled by the plain path patterns below).
+        local loading_pat = (img.imgpath .. ".loading.svg"):gsub("%.", "%%.")
         local content = results[i]
         if content then
             ok_count = ok_count + 1
+            -- Image arrived: point the img at the real file, and drop any
+            -- "loading" hint span left by earlier plugin versions.
+            html = html:gsub('src="' .. loading_pat .. '"', 'src="' .. img.imgpath .. '"')
+            html = html:gsub('<span class="wikireader%-loading" data%-lazyindex="' .. idx .. '"[^>]*>.-</span>', "")
         elseif content == false then
             -- Attempted and failed: remove the placeholder <img> and its
             -- manifest item so no blank square remains.
-            local path_pat = img.imgpath:gsub("%.", "%%.")
-            html = html:gsub('<img src="' .. path_pat .. '"[^>]*>', "")
-            local id = "wrimg" .. string.format("%05d", i)
+            html = html:gsub('<img src="' .. loading_pat .. '"[^>]*/>', "")
+            html = html:gsub('<img src="' .. path_pat .. '"[^>]*/>', "")
+            html = html:gsub('<span class="wikireader%-loading" data%-lazyindex="' .. idx .. '"[^>]*>.-</span>', "")
+            local id = "wrimg" .. string.format("%05d", idx)
             opf = opf:gsub('<item id="' .. id .. '"[^>]*/>%s*', "")
         else
             -- Not scheduled this cycle: keep the placeholder and the entry.
