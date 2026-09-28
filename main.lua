@@ -396,6 +396,7 @@ function WikiReader:addToMainMenu(menu_items)
                             {
                                 text = _("No images"),
                                 keep_menu_open = true,
+                                radio = true,
                                 checked_func = function()
                                     return G_reader_settings:readSetting("wikireader_image_mode") == "none"
                                 end,
@@ -406,6 +407,7 @@ function WikiReader:addToMainMenu(menu_items)
                             {
                                 text = _("Show images"),
                                 keep_menu_open = true,
+                                radio = true,
                                 checked_func = function()
                                     local mode = G_reader_settings:readSetting("wikireader_image_mode")
                                     return not mode or mode == "show"
@@ -418,6 +420,7 @@ function WikiReader:addToMainMenu(menu_items)
                                 text = _("Show images as QR codes"),
                                 keep_menu_open = true,
                                 separator = true,
+                                radio = true,
                                 checked_func = function()
                                     return G_reader_settings:readSetting("wikireader_image_mode") == "qr"
                                 end,
