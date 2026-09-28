@@ -1,7 +1,6 @@
 -- Shared utilities for WikiReader.
 -- These are functions needed by multiple modules (htmlclean, latex, epub, main).
 
-local socket_url = require("socket.url")
 local logger = require("logger")
 
 local M = {}
@@ -50,7 +49,6 @@ HTTP helpers
 -- timeout flows through that same path — no caller changes needed.
 function M.httpGetJSON(url)
     local http = require("socket.http")
-    local ltn12 = require("ltn12")
     local socketutil = require("socketutil")
 
     local sink = {}
