@@ -376,9 +376,7 @@ function M.buildEpub(epub_path, title, lang, callback)
                 -- The download URL list rides inside the EPUB, so an open
                 -- interrupted before the images arrive can still be
                 -- completed later (lazyfetch drops the entry once nothing
-                -- remains). `section` records which article section each
-                -- image is in, so lazyfetch can map it to a page via the
-                -- document TOC and only fetch images near the position.
+                -- remains).
                 local JSON = require("json")
                 local pending = {}
                 for _, img in ipairs(lazy_images) do

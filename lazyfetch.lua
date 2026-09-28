@@ -12,6 +12,16 @@ placeholders already were. A cached article that was interrupted
 mid-download still carries its pending entry, so the next open finishes
 it the same way. Failed downloads are removed from content.html and
 content.opf so no blank squares remain.
+
+Only the images on the CURRENT reading page are fetched: the page is
+bracketed with XPointers and its HTML is matched against each pending
+image's placeholder src path. Page turns re-trigger completion via
+main.lua's onPageUpdate handler; the periodic re-check only covers a
+not-yet-determinable position and the tail of an in-flight download,
+stopping once a page is confirmed image-free. Any failure to determine
+the current page or its HTML fetches nothing that cycle; there is no
+fetch-all fallback, so an API failure can only delay fetching, never
+widen the batch.
 ]]
 
 local Archiver = require("ffi/archiver")
@@ -209,23 +219,6 @@ local function downloadAll(images, on_all_done)
     end
 end
 
--- Position-windowed background buffering, like a video player pre-loading
--- ahead of the playhead:
---
---   W_AHEAD_PAGES   fetch images whose article section starts up to this
---                   many pages past the reading position.
---   W_BEHIND_PAGES  also fetch images this many pages back (TOC jumps
---                   otherwise leave everything behind the new position
---                   unfetched). Images further behind than this stay
---                   unfetched until the position moves near them again.
---   CHECK_INTERVAL  how often the window is re-evaluated while the article
---                   is open. Each cycle only downloads newly-in-window
---                   images; every swap costs one flashless reload, so the
---                   window trades buffering against reload frequency.
-local W_AHEAD_PAGES = 10
-local W_BEHIND_PAGES = 3
-local CHECK_INTERVAL = 20
-
 -- Returns the live cre document while it is still showing `epub_path`.
 local function liveDocument(epub_path)
     local ReaderUI = require("apps/reader/readerui")
@@ -247,75 +240,94 @@ local function currentPage(doc)
     return nil
 end
 
--- Section index -> page, resolved through the document TOC (its entries are
--- in the same order as the sections recorded at build time; entry 1 covers
--- everything before the first heading). Cached pages shift slightly after
--- failed downloads remove placeholders, which only costs a bit of window
--- precision.
-local function sectionPages(doc)
-    local ok, toc = pcall(function() return doc:getToc() end)
-    if not ok or type(toc) ~= "table" then
+-- HTML of the current page, found by bracketing its XPointer range. Any
+-- failure here (empty/nil on either side) yields nil rather than any
+-- approximate page content. cf. koassistant.koplugin's context extractor
+-- for the same getPageXPointer(page)/getPageXPointer(page+1) pattern.
+local function currentPageHtml(doc, page)
+    local xp_start = doc:getPageXPointer(page)
+    if not xp_start or xp_start == "" then
         return nil
     end
-    local pages = {}
-    for i, entry in ipairs(toc) do
-        local ok2, page = pcall(function() return doc:getPageFromXPointer(entry.xpointer) end)
-        if ok2 and page and page > 0 then
-            pages[i] = page
-        end
+    local xp_end = doc:getPageXPointer(page + 1)
+    if not xp_end or xp_end == "" then
+        return nil
     end
-    return pages
+    local ok_html, html = pcall(function()
+        if doc.getHTMLFromXPointers then
+            return doc:getHTMLFromXPointers(xp_start, xp_end)
+        end
+    end)
+    if not ok_html or not html or html == "" then
+        return nil
+    end
+    return html
 end
 
--- Splits the pending list into the images worth fetching now and the rest.
-local function partition(images, doc)
-    if not doc then
-        -- No live reader (e.g. completion of a cached file without one):
-        -- fetch everything, like the pre-buffering behavior.
-        return images, {}
-    end
-    local pos = currentPage(doc)
-    if not pos then
-        -- Document still loading; wait for a later check rather than
-        -- assuming the start and over-fetching.
+-- Splits the pending list into the images appearing on the current page
+-- (their placeholder src path, e.g. "images/wrimg01234.ext", shows up in
+-- the page's HTML) and the rest. On the last page the page+1 bracket
+-- fails, so everything left is fetched at once (and this build completes):
+-- koassistant's screen-selection document-end probe exists but navigates
+-- the live document, too intrusive for a background tick. Other unusable
+-- brackets fetch nothing, so an API failure can only delay fetching,
+-- never widen the batch (no fetch-all fallback).
+local function partition(images, doc, page)
+    if not doc or not page then
         return {}, images
     end
-    local pages = sectionPages(doc)
-    if not pages then
-        -- No usable TOC: cannot map images to pages; fetch everything.
+    local ok, page_count = pcall(function() return doc:getPageCount() end)
+    if ok and page_count and page >= page_count then
+        -- Last page: no page+1 bracket exists; the user is done reading,
+        -- so finish the article instead of stranding its final images.
         return images, {}
+    end
+    local page_html = currentPageHtml(doc, page)
+    if not page_html then
+        return {}, images
     end
     local batch, remaining = {}, {}
     for _, img in ipairs(images) do
-        local page = pages[(img.section or 0) + 1]
-        if page and page >= pos - W_BEHIND_PAGES and page <= pos + W_AHEAD_PAGES then
-            batch[#batch + 1] = img
-        elseif not page then
-            -- Unmappable section: fetch it rather than leave a gap.
+        if page_html:find(img.imgpath, 1, true) then
             batch[#batch + 1] = img
         else
             remaining[#remaining + 1] = img
         end
     end
-    logger.dbg("WikiReader lazy: position page", pos, "-",
-        #batch, "in window,", #remaining, "out of window")
+    logger.dbg("WikiReader lazy: current page", page, "-",
+        #batch, "on page,", #remaining, "elsewhere")
     return batch, remaining
 end
 
+-- How often a not-yet-determinable position is re-probed while the
+-- article stays open; page turns make this rare (see _step).
+local CHECK_INTERVAL = 20
+
+-- Coalescing, per EPUB: scheduleCompletion is called on article open and
+-- again on every page turn, and a batch download can outlive several of
+-- those triggers; step_running[path] marks that path's download as in
+-- flight so overlapping _step passes (stacked timers) can't double-fetch
+-- the same images or race the same zip rewrite.
+local step_running = {}
+
 function M.scheduleCompletion(epub_path)
     NetworkMgr:runWhenOnline(function()
-        -- Small delay so the article's first render is never contending
-        -- with the first image request.
+        -- Small delay so an article-open-triggered first render is never
+        -- contending with the first image request.
         UIManager:scheduleIn(1, function()
+            -- A download in flight absorbs the trigger; the cycle's own
+            -- completion-time re-check covers the fresh position.
+            if step_running[epub_path] then return end
             M._step(epub_path)
         end)
     end)
 end
 
--- One buffering cycle: read what's pending, download the images inside the
--- window, swap them into the EPUB, seamlessly reload the reader, and
--- schedule the next window check. Exposed only for the offline checks.
+-- Exposed only for the offline checks.
 function M._step(epub_path)
+    if step_running[epub_path] then
+        return -- a batch for this EPUB is already downloading
+    end
     local images = readPending(epub_path)
     if not images then
         return -- nothing pending: build is complete (or not a lazy build)
@@ -328,15 +340,23 @@ function M._step(epub_path)
         logger.dbg("WikiReader lazy: article no longer open, pausing completion")
         return
     end
-    local batch, remaining = partition(images, doc)
-    if #batch == 0 then
-        -- Window not full yet: keep watching while the user reads.
+    local page = currentPage(doc)
+    if not page then
+        -- Document still rendering/positioning itself; wait for a later
+        -- check rather than assuming the start and over-fetching.
         UIManager:scheduleIn(CHECK_INTERVAL, function() M._step(epub_path) end)
+        return
+    end
+    local batch = partition(images, doc, page)
+    if #batch == 0 then
+        -- Page and its HTML confirmed image-free: stop polling; the next
+        -- page turn (main.lua onPageUpdate) or the next open re-triggers.
         return
     end
     -- Map batch items back to their indexes in the full pending list.
     local index_of = {}
     for i, img in ipairs(images) do index_of[img] = i end
+    step_running[epub_path] = true
     downloadAll(batch, function(results)
         local results_all = {}
         for j, content in pairs(results) do
@@ -355,9 +375,11 @@ function M._step(epub_path)
                 ui:reloadDocument(nil, true)
             end
         end
-        if #remaining > 0 then
-            UIManager:scheduleIn(CHECK_INTERVAL, function() M._step(epub_path) end)
-        end
+        step_running[epub_path] = false
+        -- The position may have moved while the batch ran (and the reload
+        -- re-renders the page); one re-check either fetches the new page's
+        -- images or confirms it image-free and stops the loop.
+        UIManager:scheduleIn(0, function() M._step(epub_path) end)
     end)
 end
 

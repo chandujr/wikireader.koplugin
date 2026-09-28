@@ -8,7 +8,10 @@ strips/transforms everything that doesn't survive reflow (media, infobox
 clutter, flexbox layouts, cladograms, formulas), then delegates EPUB
 building to KOReader's own `ui/wikipedia.lua` (`Wikipedia.createEpub`).
 Articles are cached as real EPUB files (10 files, 24 h). Settings live in
-KOReader's `G_reader_settings` under `wikireader_*`.
+KOReader's `G_reader_settings` under `wikireader_*`; image handling is one
+setting, `wikireader_image_mode`: `none` (images dropped), `show`
+(default; images lazy-fetch in the background, current page only), or
+`qr` (placeholders become QR codes).
 
 ## Files — which one to touch
 
@@ -24,7 +27,7 @@ KOReader's `G_reader_settings` under `wikireader_*`.
 | `wikireader-cache.lua` | EPUB cache (10 entries / 24 h), stale-file removal, sidecar-aware delete, cache dir handling. |
 | `wikireader-history.lua` | Last-10-articles reading history (title/lang references persisted in `G_reader_settings`, no files). |
 | `wikireader-bookmarks.lua` | User-bookmarked articles (max 50, newest first), stored as title/lang references in `G_reader_settings` (`wikireader_bookmarks`); never evicts automatically, only via explicit remove/clear. |
-| `lazyfetch.lua` | Position-windowed background buffering for "Fetch images in background": downloads the URLs listed in an EPUB's `OEBPS/wikireader-pending.json` (only images near the reading position — sections are mapped to pages via the document TOC, window = pos−3..pos+10 pages, re-checked every 20 s), rewrites the zip in place (`.tmp` + rename), keeps the pending entry until nothing remains, and seamlessly reloads the open document after each batch. |
+| `lazyfetch.lua` | Current-page background image completion for "Show images": triggered by article opens and by page turns (`main.lua`'s `onPageUpdate`, coalesced per EPUB so overlapping checks can't stack), it resolves the current page via XPointer bracketing (`getPageXPointer(page)`/`(page+1)` + `getHTMLFromXPointers`) and downloads only pending images whose placeholder path appears in that page's HTML; on the last page it fetches all remaining images and completes the article. Failures never widen the batch to fetch-all. Rewrites the zip in place (`.tmp` + rename), keeps the pending entry until nothing remains, and seamlessly reloads the open document after each batch. |
 | `categories.lua` | Featured-articles category tree built from the API's flat section list; module-level lookup used by the link handler. |
 | `mainpage.lua` | Scrapes today's English Wikipedia main page for its "In the news" / "Did you know" / "On this day" boxes (by their stable `mp-*` ids), cleans them, and absolutizes the article links. English-only: other wikis have different main-page titles and id-less markup. |
 | `_meta.lua` | Plugin name/version metadata shown in the About dialog. |
@@ -39,8 +42,9 @@ KOReader's `G_reader_settings` under `wikireader_*`.
 4. `Wikipedia.createEpub` builds the EPUB; patched `Archiver` hooks inject
    QR PNGs, block-formula math SVGs, stylesheet, metadata.
 5. Result cached as `<lang> - <Title>.epub`; opened via ReaderUI.
-6. In lazy-image mode, `lazyfetch` then buffers images around the reading
-   position in the background (zip swap + seamless reload per batch).
+6. In "Show images" mode, `lazyfetch` then downloads the images on the
+   current page in the background and re-triggers on every page turn
+   (zip swap + seamless reload per batch).
 
 The "Wikipedia main page" flow skips steps 2–4: `mainpage.fetchSections`
 scrapes and cleans the three main-page boxes itself, and

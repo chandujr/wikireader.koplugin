@@ -304,6 +304,18 @@ function WikiReader:onCloseDocument()
     end
 end
 
+-- Every page turn in an open lazy EPUB re-triggers image completion for
+-- the images now on the current page; lazyfetch coalesces overlapping
+-- checks (no-op in no-image mode, and a cheap no-pending-exit otherwise,
+-- so it can fire on any turn in any wiki EPUB).
+function WikiReader:onPageUpdate()
+    if G_reader_settings:readSetting("wikireader_image_mode") == "none" then return end
+    local path = currentDocumentPath(self)
+    if isWikiEpubPath(path) then
+        lazyfetch.scheduleCompletion(path)
+    end
+end
+
 -- Whether the quick-add entry belongs in the Bookmarks menu: needs a real
 -- article (not a helper page) that isn't bookmarked yet.
 local function canBookmarkCurrentArticle()
@@ -1173,8 +1185,8 @@ function WikiReader:fetchAndOpen(title, lang, open_fn)
     end)
 end
 
--- Kicks off the position-windowed background buffering for a lazily-built
--- EPUB (no-op in no-image/QR mode; lazyfetch checks for pending work).
+-- Kicks off background image completion for a lazily-built EPUB
+-- (no-op in no-image/QR mode; lazyfetch checks for pending work).
 function WikiReader:maybeCompleteLazyImages(epub_path)
     if G_reader_settings:readSetting("wikireader_image_mode") ~= "none" then
         lazyfetch.scheduleCompletion(epub_path)
