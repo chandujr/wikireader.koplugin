@@ -1025,14 +1025,48 @@ local function multiImageColumnCount(inner)
     return max_cols
 end
 
+-- Width (px) declared on a tsingle open tag, or nil. Matches the
+-- "width" declaration specifically, so "max-width" (or other -width
+-- neighbors) can't yield the wrong value.
+local function tsingleWidth(open_tag)
+    local style = open_tag:match('style%s*=%s*"([^"]*)"') or ""
+    for decl in style:gmatch("[^;]+") do
+        local w = decl:match("^%s*width%s*:%s*(%d+)px")
+        if w then
+            return tonumber(w)
+        end
+    end
+end
+
 -- Rewrites the inside of one <tr> (the content of a .trow div): every
--- tsingle div becomes <td> (keeping its inline width), every theader div a
--- full-width centered <td colspan=N>. Everything else -- the
--- thumbimage/thumbcaption divs nested inside a tsingle, QR markers, links,
--- text -- passes through untouched.
+-- tsingle div becomes <td>, every theader div a full-width centered <td
+-- colspan=N>. Everything else -- the thumbimage/thumbcaption divs nested
+-- inside a tsingle, QR markers, links, text -- passes through untouched.
+-- Each tsingle's inline "width:NNNpx" is converted to its share of that
+-- row's total width: the injected stylesheet drops the table to 100% but
+-- px cells would keep the slack to the right of the last cell (the row
+-- never looked centered). Rows whose cells aren't all px-widthed keep the
+-- template's own declarations.
 local function multiImageTransformRow(content, n_cols)
+    local wx = {}
+    local total = 0
+    local all_px = true
+    for tag in content:gmatch("<div[^>]*>") do
+        if tokenInClass(openTagClass(tag), "tsingle") then
+            local w = tsingleWidth(tag)
+            if w then
+                wx[#wx + 1] = w
+                total = total + w
+            else
+                all_px = false
+                break
+            end
+        end
+    end
+    if not all_px then wx, total = nil, nil end
     local out = {}
     local pos = 1
+    local cell = 0
     while true do
         local o_start, o_end = content:find("<div[^>]*>", pos)
         if not o_start then
@@ -1056,6 +1090,28 @@ local function multiImageTransformRow(content, n_cols)
                 -- the rewrite already provides the alignment via the
                 -- table's text-align:center, so the class must not survive.
                 :gsub('%s*class%s*=%s*"[^"]*"', '')
+            -- Replace the cell's fixed width with its percentage share of
+            -- the row (two decimals keeps the row sum at ~100 after
+            -- rounding); the inline width would otherwise defeat the
+            -- table's 100% reflow. Rows whose cells aren't all px-widthed
+            -- keep the template's own scaling behavior.
+            if total then
+                cell = cell + 1
+                local pct = string.format("%.2f", wx[cell] / total * 100)
+                local kept = {}
+                local style = td:match('style%s*=%s*"([^"]*)"') or ""
+                for decl in style:gmatch("[^;]+") do
+                    if not decl:match('^%s*max%-width%s*:')
+                        and not decl:match('^%s*width%s*:') then
+                        kept[#kept + 1] = decl
+                    end
+                end
+                td = td:gsub('(style%s*=%s*")([^"]*)(")', function(p, _, s)
+                    local rebuilt = table.concat(kept, ";")
+                    if rebuilt ~= "" then rebuilt = rebuilt .. ";" end
+                    return p .. rebuilt .. "width:" .. pct .. "%" .. s
+                end, 1)
+            end
             table.insert(out, addStyleProp(td, "vertical-align:top"))
             table.insert(out, inner)
             table.insert(out, "</td>")
@@ -1179,6 +1235,20 @@ function M.stripFigureHalign(html)
     return html:gsub('(<figure[^>]-class%s*=%s*")([^"]*)(")', function(prefix, cls, suffix)
         return prefix .. cls:gsub('%s*mw%-halign%-%a+', '') .. suffix
     end)
+end
+
+-- Gallery boxes: each gallerybox's div.thumb carries Parsoid's inline
+-- "width:NNNpx;height:NNNpx". The box itself is forced to the page width
+-- by the injected stylesheet, and a fixed-width block inside it always
+-- sits flush left (text-align:center only positions inline content, never
+-- the block). Drop the inline footprint so the thumb spans the box and
+-- the placeholder image centers inside it. Modern Parsoid uses div.thumb
+-- only for gallery thumbs (single thumbs are <figure>, multi-image cells
+-- are .thumbimage), so a bare class="thumb" match is gallery-only in
+-- practice; a stray legacy thumb just loses its outer footprint to its
+-- own .thumbinner's width, which is what sized it anyway.
+function M.centerGalleryThumbs(html)
+    return (html:gsub('(<div[^>]*class%s*=%s*"thumb")%s+style%s*=%s*"[^"]*"', "%1"))
 end
 
 function M.restructureMultiImages(html)

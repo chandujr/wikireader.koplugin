@@ -273,6 +273,9 @@ function M.buildEpub(epub_path, title, lang, callback)
                 -- {{Multiple image}} uses flexbox, unsupported by crengine;
                 -- rewrite the box into a native <table>.
                 html = htmlclean.restructureMultiImages(html)
+                -- Gallery thumbs' inline width would pin the image to the
+                -- left edge of the full-width box (see htmlclean.lua).
+                html = htmlclean.centerGalleryThumbs(html)
             end
 
             -- Extract hatnotes and wrap section notices
@@ -451,14 +454,26 @@ li.gallerybox {
    (no page split, and -- unlike the floated article layout -- full width),
    but with the dashed QR-box border. The template's inline width
    (e.g. 492px) is overridden below so very wide boxes never overflow the
-   page; the cells then shrink proportionally. */
+   page; the rewrite turns each cell's inline "width:NNNpx" into a
+   proportional percentage so the row of images fills the table
+   symmetrically, and margin auto centers the table itself (same pattern
+   as html5.css's table[align=center] presentational hint). */
 table.wikireader-tmulti {
     border: 1px dashed #aaa;
-    margin: 0.5em 0 0.5em 0;
+    margin-left: auto !important;
+    margin-right: auto !important;
+    margin-top: 0.5em !important;
+    margin-bottom: 0.5em !important;
     padding: 0 0.5em 0 0.5em;
     text-align: center;
     font-size: 80%;
     page-break-inside: avoid;
+}
+/* Belt-and-braces per-cell centering, not relying on inheritance from
+   the table rule. */
+table.wikireader-tmulti > tbody > tr > td,
+table.wikireader-tmulti > tr > td {
+    text-align: center;
 }
 
 /* Image boxes span the full text width instead of keeping the article's
@@ -487,6 +502,19 @@ li.gallerybox {
     border: 1px dashed #aaa;
     width: 100% !important;
     margin: 0.5em 0 0.5em 0 !important;
+    /* The base stylesheet's gallery centering lives only in child-
+       selectors (body > div > ul.gallery > *) that the article's own
+       wrapper div can defeat via the stronger body { text-align: justify }
+       (inheritance loses to any matching rule). Centering on the box
+       itself covers captions and any gallery nesting shape. The
+       rewritten tmulti table also carries .thumbcaption, whose alignment
+       the rewrite is expected to provide (the class is kept so the
+       template's TemplateStyles cannot reach it). */
+    text-align: center;
+}
+div.gallerytext,
+div.thumbcaption {
+    text-align: center;
 }
 /* The thumbinner's inline "width:NNNpx;max-width:NNNpx" lands on the
    rewritten table; max-width is what actually shrinks the box (width
@@ -495,7 +523,10 @@ li.gallerybox {
 table.wikireader-tmulti {
     width: 100% !important;
     max-width: 100% !important;
-    margin: 0.5em 0 0.5em 0 !important;
+    margin-top: 0.5em !important;
+    margin-bottom: 0.5em !important;
+    margin-left: auto !important;
+    margin-right: auto !important;
 }
 ]]
             end
