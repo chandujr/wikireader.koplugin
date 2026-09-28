@@ -57,6 +57,10 @@ function M.buildEpub(epub_path, title, lang, callback)
     -- to complete after the article opens.
     local lazy_enabled = image_mode == "show"
     local lazy_images = {}
+    -- Hi-res downloads (only in show mode): lazy images use the srcset's 2x
+    -- derivative instead of the 1x src. Default on: nilOrTrue, so the first
+    -- flip persists an explicit false rather than an opt-in true.
+    local hi_res = lazy_enabled and G_reader_settings:nilOrTrue("wikireader_hi_res")
     -- Read once at build scope: both the HTML-cleaning hook and the Archiver
     -- stylesheet hook below need it, and the Archiver hook must not read a
     -- bare global (that bug silently disabled the full-width infobox CSS).
@@ -247,7 +251,7 @@ function M.buildEpub(epub_path, title, lang, callback)
             if qr_enabled then
                 html = qrimage.replaceImagesWithQr(html, qr_images, qr_size, lang)
             elseif lazy_enabled then
-                html = qrimage.replaceImagesWithLazy(html, lazy_images)
+                html = qrimage.replaceImagesWithLazy(html, lazy_images, hi_res)
             end
             if qr_enabled or lazy_enabled then
                 -- Figures' mw-halign-* classes select base-stylesheet rules
@@ -380,8 +384,12 @@ function M.buildEpub(epub_path, title, lang, callback)
                 local JSON = require("json")
                 local pending = {}
                 for _, img in ipairs(lazy_images) do
-                    pending[#pending + 1] =
+                    local record =
                         { src = img.src, imgpath = img.imgpath, mimetype = img.mimetype, section = img.section or 0 }
+                    if img.fallback then
+                        record.fallback = img.fallback
+                    end
+                    pending[#pending + 1] = record
                 end
                 original_addFileFromMemory(self, "OEBPS/wikireader-pending.json", JSON.encode(pending), mtime)
             end

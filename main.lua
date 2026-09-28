@@ -342,14 +342,14 @@ function WikiReader:addToMainMenu(menu_items)
                     self:openMainPage()
                 end,
                 help_text = _(
-                "Today's English Wikipedia main page with its \"In the news\", \"Did you know\" and \"On this day\" sections, as a readable book. Tapping an article opens it like any other WikiReader article."),
+                    "Today's English Wikipedia main page with its \"In the news\", \"Did you know\" and \"On this day\" sections, as a readable book. Tapping an article opens it like any other WikiReader article."),
             },
             {
                 text = _("Featured Articles"),
                 keep_menu_open = true,
                 separator = true,
                 help_text = _(
-                "Read Wikipedia's featured article for today or a past date, or browse featured articles by category. This relies on the \"featured article of the day\" feed, which may be missing or unreliable for languages other than English."),
+                    "Read Wikipedia's featured article for today or a past date, or browse featured articles by category. This relies on the \"featured article of the day\" feed, which may be missing or unreliable for languages other than English."),
                 sub_item_table = {
                     {
                         text = _("Today's Featured Article"),
@@ -391,7 +391,7 @@ function WikiReader:addToMainMenu(menu_items)
                     {
                         text = _("Image settings"),
                         help_text = _(
-                        "Choose what happens to article images: dropped entirely for a text-only read, downloaded in the background while you read (they appear in place once ready), or replaced by small QR codes linking to their file pages."),
+                            "Choose what happens to article images: dropped entirely for a text-only read, downloaded in the background while you read (they appear in place once ready), or replaced by small QR codes linking to their file pages."),
                         sub_item_table = {
                             {
                                 text = _("No images"),
@@ -417,12 +417,29 @@ function WikiReader:addToMainMenu(menu_items)
                             {
                                 text = _("Show images as QR codes"),
                                 keep_menu_open = true,
+                                separator = true,
                                 checked_func = function()
                                     return G_reader_settings:readSetting("wikireader_image_mode") == "qr"
                                 end,
                                 callback = function()
                                     G_reader_settings:saveSetting("wikireader_image_mode", "qr")
                                 end,
+                            },
+                            {
+                                text = _("Higher resolution images"),
+                                keep_menu_open = true,
+                                enabled_func = function()
+                                    local mode = G_reader_settings:readSetting("wikireader_image_mode")
+                                    return not mode or mode == "show"
+                                end,
+                                checked_func = function()
+                                    return G_reader_settings:nilOrTrue("wikireader_hi_res")
+                                end,
+                                callback = function()
+                                    G_reader_settings:flipNilOrTrue("wikireader_hi_res")
+                                end,
+                                help_text = _(
+                                    "Downloads the 2x (double resolution) source of each image instead of the thumbnail - sharper when zoomed in, at the cost of larger downloads and EPUB files. Uncheck it for the smaller thumbnail-quality downloads. Applies to articles opened or refetched after the change, and only while Show images is active."),
                             },
                         },
                     },
@@ -436,7 +453,7 @@ function WikiReader:addToMainMenu(menu_items)
                             G_reader_settings:flipNilOrTrue("wikireader_skip_link_dialog")
                         end,
                         help_text = _(
-                        "Whenever you tap a Wikipedia link inside an article, show a short preview of that article instead of the intermediate dialog box, with a button to open it fully."),
+                            "Whenever you tap a Wikipedia link inside an article, show a short preview of that article instead of the intermediate dialog box, with a button to open it fully."),
                     },
                     {
                         text = _("Exclude from KOReader statistics and history"),
@@ -448,7 +465,7 @@ function WikiReader:addToMainMenu(menu_items)
                             G_reader_settings:flipNilOrFalse("wikireader_count_in_stats")
                         end,
                         help_text = _(
-                        "Wikipedia reading don't pollute your normal book reading stats or history. Untick to count WikiReader articles like any other book."),
+                            "Wikipedia reading don't pollute your normal book reading stats or history. Untick to count WikiReader articles like any other book."),
                     },
                     {
                         text = _("Show infoboxes"),
@@ -460,7 +477,7 @@ function WikiReader:addToMainMenu(menu_items)
                             G_reader_settings:flipNilOrFalse("wikireader_show_infoboxes")
                         end,
                         help_text = _(
-                        "Keep the summary tables (infoboxes) that appear at the top of many articles. Their images are still removed for a cleaner reading view."),
+                            "Keep the summary tables (infoboxes) that appear at the top of many articles. Their images are still removed for a cleaner reading view."),
                     },
                     {
                         text = _("Disable hyperlinks"),
@@ -473,7 +490,7 @@ function WikiReader:addToMainMenu(menu_items)
                             G_reader_settings:flipNilOrFalse("wikireader_disable_hyperlinks")
                         end,
                         help_text = _(
-                        "Remove links to other Wikipedia articles from downloaded EPUBs, keeping their text. Links to references, footnotes and external sites are kept."),
+                            "Remove links to other Wikipedia articles from downloaded EPUBs, keeping their text. Links to references, footnotes and external sites are kept."),
                     },
                     {
                         text = _("Clear history"),
@@ -493,7 +510,7 @@ function WikiReader:addToMainMenu(menu_items)
                             })
                         end,
                         help_text = _(
-                        "Forget the list of the last 10 articles shown in the History menu. Cached EPUB files are not deleted."),
+                            "Forget the list of the last 10 articles shown in the History menu. Cached EPUB files are not deleted."),
                     },
                     {
                         text = _("Clear bookmarks"),
@@ -530,7 +547,7 @@ function WikiReader:addToMainMenu(menu_items)
                             })
                         end,
                         help_text = _(
-                        "Remove all cached WikiReader EPUB files and their reading progress. Closes the current article if one is open, so no leftover files remain."),
+                            "Remove all cached WikiReader EPUB files and their reading progress. Closes the current article if one is open, so no leftover files remain."),
                     },
                     {
                         text = _("Gestures"),
@@ -580,7 +597,7 @@ function WikiReader:addToMainMenu(menu_items)
                 keep_menu_open = true,
                 enabled_func = function()
                     return nav_reader_alive and nav_current ~= nil and nav_current.path ~= nil and not nav_current
-                    .helper
+                        .helper
                 end,
                 callback = function()
                     self:saveCurrentArticle()
@@ -592,25 +609,25 @@ function WikiReader:addToMainMenu(menu_items)
                 keep_menu_open = true,
                 enabled_func = function()
                     return nav_reader_alive and nav_current ~= nil and nav_current.title ~= nil and
-                    not nav_current.helper
+                        not nav_current.helper
                 end,
                 callback = function()
                     self:shareCurrentArticleLink()
                 end,
                 help_text = _(
-                "Copies the current article's Wikipedia link to the clipboard and shows a QR code of it that you can scan from another device."),
+                    "Copies the current article's Wikipedia link to the clipboard and shows a QR code of it that you can scan from another device."),
             },
             {
                 text = _("Refetch current article"),
                 enabled_func = function()
                     return nav_reader_alive and nav_current ~= nil and nav_current.title ~= nil and
-                    not nav_current.helper
+                        not nav_current.helper
                 end,
                 callback = function()
                     self:refetchCurrentArticle()
                 end,
                 help_text = _(
-                "Delete the cached copy of the article you are reading and download it again, so the media, infobox and hyperlink settings in \"Settings\" also apply to it. Your reading position is kept."),
+                    "Delete the cached copy of the article you are reading and download it again, so the media, infobox and hyperlink settings in \"Settings\" also apply to it. Your reading position is kept."),
             },
             {
                 text_func = function()

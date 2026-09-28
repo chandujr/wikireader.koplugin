@@ -309,7 +309,7 @@ end
 -- later swaps markers for real <img> tags whose zip entries don't exist
 -- yet; lazyfetch.lua downloads them and swaps the zip in place. Returns
 -- "" if the image has no usable URL/format (the caption survives).
-local function lazyImageTag(attrs, lazy_images, seen, section)
+local function lazyImageTag(attrs, lazy_images, seen, section, hi_res)
     local src = attrs:match([[src%s*=%s*"([^"]*)"]])
     if not src or src:sub(1, 5) == "data:" then
         return ""
@@ -317,13 +317,45 @@ local function lazyImageTag(attrs, lazy_images, seen, section)
     if src:sub(1, 2) == "//" then
         src = "https:" .. src
     end
-    local ext = src:gsub("%?.*$", ""):match(".*%.(%S%S%S?%S?%S?)$")
+    -- Hi-res mode: download the srcset's 2x (or 1.5x) derivative like
+    -- KOReader's own highres option, keeping the reserved 1x footprint so
+    -- layout doesn't change (crengine just scales the sharper bitmap).
+    -- The 1x URL is recorded as a fallback for lazyfetch to retry when the
+    -- bigger variant fails (derivatives can fail where the 1x succeeds).
+    local download_src = src
+    local fallback
+    if hi_res then
+        local srcset = attrs:match([[srcset%s*=%s*"([^"]*)"]])
+        if srcset then
+            -- " " and trailing ", " make the match patterns work for the
+            -- first/last srcset item too (same trick as ui/wikipedia.lua).
+            srcset = " " .. srcset .. ", "
+            local variant = srcset:match([[ (%S+) 2x, ]])
+            if not variant then
+                variant = srcset:match([[ (%S+) 1.5x, ]])
+            end
+            if variant then
+                if variant:sub(1, 2) == "//" then
+                    variant = "https:" .. variant
+                end
+                if variant ~= src then
+                    local vext = variant:gsub("%?.*$", ""):match(".*%.(%S%S%S?%S?%S?)$")
+                    vext = vext and vext:lower()
+                    if vext and EXT_MIMETYPE[vext] then
+                        download_src = variant
+                        fallback = src
+                    end
+                end
+            end
+        end
+    end
+    local ext = download_src:gsub("%?.*$", ""):match(".*%.(%S%S%S?%S?%S?)$")
     ext = ext and ext:lower()
     if not ext or not EXT_MIMETYPE[ext] then
         return ""
     end
-    if seen[src] then
-        local hit = seen[src]
+    if seen[download_src] then
+        local hit = seen[download_src]
         return string.format('<span class="wikireader-lazyimg" data-lazyindex="%d" style="%s"></span>',
             hit.index, hit.style)
     end
@@ -341,13 +373,14 @@ local function lazyImageTag(attrs, lazy_images, seen, section)
     local style = table.concat(style_props, "; ")
     local index = #lazy_images + 1
     lazy_images[index] = {
-        src = src,
+        src = download_src,
         imgpath = string.format("images/wrimg%05d.%s", index, ext),
         mimetype = EXT_MIMETYPE[ext],
         style = style,
         section = section,
+        fallback = fallback,
     }
-    seen[src] = { index = index, style = style }
+    seen[download_src] = { index = index, style = style }
     return string.format('<span class="wikireader-lazyimg" data-lazyindex="%d" style="%s"></span>',
         index, style)
 end
@@ -500,11 +533,11 @@ end
 -- filled in later by lazyfetch.lua; each placeholder records the index of
 -- the article section it sits in, which the background scheduler maps to
 -- a page number via the document TOC.
-function M.replaceImagesWithLazy(html, lazy_images)
+function M.replaceImagesWithLazy(html, lazy_images, hi_res)
     local seen = {}
     return walkImageBoxes(html,
         function(attrs, section)
-            return lazyImageTag(attrs, lazy_images, seen, section or 0)
+            return lazyImageTag(attrs, lazy_images, seen, section or 0, hi_res)
         end)
 end
 

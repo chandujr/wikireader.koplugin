@@ -172,11 +172,26 @@ local function downloadAll(images, on_all_done)
             client:request({ url = images[i].src }, function(res)
                 if res and res.code == 200 and res.body and #res.body > 0 then
                     results[i] = res.body
+                    UIManager:scheduleIn(0.05, nextImage)
+                elseif images[i].fallback then
+                    -- One retry with the original 1x URL: the 2x derivative
+                    -- can fail where the 1x serves fine, and without it the
+                    -- image would be lost entirely.
+                    logger.warn("WikiReader lazy: retrying failed image with 1x fallback:", images[i].fallback)
+                    client:request({ url = images[i].fallback }, function(fb)
+                        if fb and fb.code == 200 and fb.body and #fb.body > 0 then
+                            results[i] = fb.body
+                        else
+                            results[i] = false
+                            logger.warn("WikiReader lazy: image download failed:", images[i].src, res and res.code)
+                        end
+                        UIManager:scheduleIn(0.05, nextImage)
+                    end)
                 else
                     results[i] = false
                     logger.warn("WikiReader lazy: image download failed:", images[i].src, res and res.code)
+                    UIManager:scheduleIn(0.05, nextImage)
                 end
-                UIManager:scheduleIn(0.05, nextImage)
             end)
         end
         nextImage()
@@ -207,6 +222,23 @@ local function downloadAll(images, on_all_done)
                 -- Must run even after a pcall'd error, or all later
                 -- LuaSocket traffic keeps the patched (tight) timeouts.
                 socketutil:reset_timeout()
+                if results[i] == nil and img.fallback then
+                    -- One retry with the original 1x URL: the 2x derivative
+                    -- can fail where the 1x serves fine, and without it the
+                    -- image would be lost entirely.
+                    logger.warn("WikiReader lazy: retrying failed image with 1x fallback:", img.fallback)
+                    local fb_sink = {}
+                    pcall_ok = pcall(function()
+                        local _, code = socket_http.request {
+                            url = img.fallback,
+                            sink = socketutil.table_sink(fb_sink),
+                        }
+                        if code == 200 then
+                            results[i] = table.concat(fb_sink)
+                        end
+                    end)
+                    socketutil:reset_timeout()
+                end
                 if results[i] == nil then
                     results[i] = false
                     logger.warn("WikiReader lazy: image download failed:",

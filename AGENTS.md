@@ -11,7 +11,9 @@ Articles are cached as real EPUB files (10 files, 24 h). Settings live in
 KOReader's `G_reader_settings` under `wikireader_*`; image handling is one
 setting, `wikireader_image_mode`: `none` (images dropped), `show`
 (default; images lazy-fetch in the background, current page only), or
-`qr` (placeholders become QR codes).
+`qr` (placeholders become QR codes), plus `wikireader_hi_res` (default on;
+downloads the 2x srcset variant instead of the 1x src; only active in
+show mode).
 
 ## Files — which one to touch
 
