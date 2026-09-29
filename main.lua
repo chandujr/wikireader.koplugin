@@ -480,7 +480,7 @@ function WikiReader:addToMainMenu(menu_items)
                             G_reader_settings:flipNilOrFalse("wikireader_show_infoboxes")
                         end,
                         help_text = _(
-                            "Keep the summary tables (infoboxes) that appear at the top of many articles. Their images are still removed for a cleaner reading view."),
+                            "Keep the summary tables (infoboxes) that appear at the top of many articles. With Show images or QR codes their pictures follow the image settings; with No images they are removed for a cleaner reading view."),
                     },
                     {
                         text = _("Disable hyperlinks"),

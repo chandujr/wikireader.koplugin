@@ -254,7 +254,12 @@ Media removal inside kept infobox tables and inline flags
 -- class "infobox-image"/"infobox-caption" are dropped even without media.
 -- Only tables matching class_patterns are touched; everything else is
 -- returned unchanged.
-function M.stripImageCells(html, class_patterns)
+-- opts.keep_images: lazy mode with kept infoboxes routes their media into
+-- the lazy-image pipeline instead: only non-image media (video/audio/
+-- mapframe) drops the cell; large <img>s and image/caption cells stay for
+-- the qrimage walker to turn into lazy placeholders. Inline icons are
+-- still removed, so only genuine media survives inside the box.
+function M.stripImageCells(html, class_patterns, opts)
     class_patterns = class_patterns or { "infobox" }
     local out = {}
     local pos = 1
@@ -284,7 +289,7 @@ function M.stripImageCells(html, class_patterns)
             end
             table.insert(out, html:sub(pos, t_start - 1))
             table.insert(out, open_tag)
-            table.insert(out, M.stripImageCellsInBlock(html:sub(t_open_end + 1, close_start - 1)))
+            table.insert(out, M.stripImageCellsInBlock(html:sub(t_open_end + 1, close_start - 1), opts))
             table.insert(out, html:sub(close_start, close_end))
             pos = close_end + 1
         end
@@ -441,7 +446,7 @@ function M.cellHasMedia(content)
         if not img then break end
         local close = content:find(">", img, true)
         if close then
-            local w = content:sub(img, close):match('width%s*=%s*"(%d+)"')
+            local w = content:sub(img, close):match('[%s]width%s*=%s*"(%d+)"')
             if not w then
                 -- MediaWiki always sets width on a rendered image; a bare
                 -- <img ...> without it is unusual -- treat as media.
@@ -459,8 +464,10 @@ end
 -- Inner helper: given the content between the <table ...> and </table> of
 -- a matching table, drop the media from genuine image/caption cells, but
 -- keep the text (names, links, footnotes, ...) of cells that merely carry
--- a small inline flag beside their real content. Exposed for testing.
-function M.stripImageCellsInBlock(block)
+-- a small inline flag beside their real content. With opts.keep_images,
+-- non-image media only; image cells stay for the lazy walker. Exposed for
+-- testing.
+function M.stripImageCellsInBlock(block, opts)
     local out = {}
     local pos = 1
     -- Set when a genuine media cell has just been dropped: a Speciesbox-style
@@ -512,9 +519,17 @@ function M.stripImageCellsInBlock(block)
             end
         end
 
-        local drop_cell = cell_class:find("infobox-image", 1, true)
-            or cell_class:find("infobox-caption", 1, true)
-            or M.cellHasMedia(stripped:lower())
+        local keep_images = opts and opts.keep_images
+        local drop_cell = not keep_images
+            and (cell_class:find("infobox-image", 1, true)
+                or cell_class:find("infobox-caption", 1, true)
+                or M.cellHasMedia(stripped:lower()))
+        if not drop_cell and keep_images then
+            local lower = stripped:lower()
+            drop_cell = lower:find("<video", 1, true) ~= nil
+                or lower:find("<audio", 1, true)
+                or lower:find("<mapframe", 1, true)
+        end
 
         if drop_cell then
             table.insert(out, block:sub(pos, open_start - 1))
@@ -528,9 +543,11 @@ function M.stripImageCellsInBlock(block)
             media_dropped = false
         else
             media_dropped = false
-            -- Icon-only row: drop the empty cell; keep the text cell otherwise.
+            -- Icon-only row: drop the empty cell (unless lazy mode kept a
+            -- media img in it, which the walker still turns into a
+            -- placeholder); keep the text cell otherwise.
             local plain = stripped:gsub("<[^>]*>", ""):gsub("&[^;]+;", ""):gsub("%s", "")
-            if plain == "" then
+            if plain == "" and not (keep_images and stripped:find("<img", 1, true)) then
                 table.insert(out, block:sub(pos, open_start - 1))
             else
                 table.insert(out, block:sub(pos, open_start - 1))
@@ -1198,8 +1215,12 @@ local function multiImageToTable(wrapper)
     end
     local wrapper_open = wrapper:sub(o_start, o_end)
     local ti_start, ti_end = wrapper:find("<div[^>]*>", o_end)
+    -- Modern Infobox settlement uses .multiimageinner instead of the
+    -- legacy .thumbinner for the same inner-box role.
+    local inner_cls = ti_start and openTagClass(wrapper:sub(ti_start, ti_end)) or ""
     if not ti_start
-        or not tokenInClass(openTagClass(wrapper:sub(ti_start, ti_end)), "thumbinner") then
+        or not (tokenInClass(inner_cls, "thumbinner")
+            or tokenInClass(inner_cls, "multiimageinner")) then
         return wrapper
     end
     local ti_close_start, ti_close_end = wutil.findMatchingClose(wrapper, "div", ti_end)

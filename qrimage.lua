@@ -238,9 +238,13 @@ local VOID_TAGS = {
 -- MediaWiki uses those spans for small inline icons in the prose (moon
 -- phase symbols, flags, ...), which would be silly as QR codes. Images in
 -- galleries are covered anyway via their div.thumb/li.gallerybox parents.
--- Kept infoboxes (the "Show infoboxes" option) are NOT an
--- image-box context either: their media is stripped entirely before this
--- pass runs (see htmlclean.stripImageCells), so nothing inside them should
+-- Kept infoboxes (the "Show infoboxes" option) are not an image-box
+-- context by default: in QR/none mode their media is stripped entirely
+-- before this pass runs (htmlclean.stripImageCells), and in lazy mode
+-- stripImageCells only runs with keep_images, leaving the (big) infobox
+-- images in place -- there opts.treat_infobox_as_imagebox makes the
+-- walker treat infobox subtrees as image-box context so those imgs get
+-- lazy placeholders too. Either way, nothing inside an infobox should
 -- become a QR code.
 local function hasClass(cls, token)
     for w in cls:gmatch("[^%s]+") do
@@ -292,6 +296,15 @@ local function inImageBox(stack)
     return false
 end
 
+local function inInfobox(stack)
+    for i = 1, #stack do
+        if stack[i].is_infobox then
+            return true
+        end
+    end
+    return false
+end
+
 -- Generates the QR PNG for `url`, appends it to `qr_images` and returns
 -- the marker span. Returns "" if the URL could not be QR-coded.
 local function makeQr(url, qr_images, qr_size)
@@ -309,7 +322,9 @@ end
 -- later swaps markers for real <img> tags whose zip entries don't exist
 -- yet; lazyfetch.lua downloads them and swaps the zip in place. Returns
 -- "" if the image has no usable URL/format (the caption survives).
-local function lazyImageTag(attrs, lazy_images, seen, section, hi_res)
+-- Exposed for locmap.lua: its failure fallback emits the bare base map
+-- as an ordinary lazy placeholder through the same mechanics.
+local function lazyImageTag(attrs, lazy_images, seen, section, hi_res, centered)
     local src = attrs:match([[src%s*=%s*"([^"]*)"]])
     if not src or src:sub(1, 5) == "data:" then
         return ""
@@ -366,10 +381,18 @@ local function lazyImageTag(attrs, lazy_images, seen, section, hi_res)
     -- width/height attributes but honors them in a style, and reserving
     -- the real footprint keeps the post-reload reflow minimal.
     local style_props = {}
-    local width = tonumber(attrs:match([[width%s*=%s*"([^"]*)"]]))
-    local height = tonumber(attrs:match([[height%s*=%s*"([^"]*)"]]))
+    -- Anchored on whitespace so data-file-width/height can't match.
+    local width = tonumber(attrs:match([[%swidth%s*=%s*"([^"]*)"]]))
+    local height = tonumber(attrs:match([[%sheight%s*=%s*"([^"]*)"]]))
     if width then style_props[#style_props + 1] = string.format("width:%dpx", width) end
     if height then style_props[#style_props + 1] = string.format("height:%dpx", height) end
+    -- crengine doesn't center inline imgs via the parent cell's text-align;
+    -- block + auto margins also stacks multiple infobox images vertically,
+    -- each centered.
+    if centered then
+        style_props[#style_props + 1] = "display:block"
+        style_props[#style_props + 1] = "margin:0 auto"
+    end
     local style = table.concat(style_props, "; ")
     local index = #lazy_images + 1
     lazy_images[index] = {
@@ -410,7 +433,13 @@ end
 -- img_fn also receives the number of h2-h6 headings seen so far, so the
 -- lazy-image mode can record which article section each image sits under
 -- (the TOC entry order matches the heading order).
-local function walkImageBoxes(html, img_fn)
+-- opts (all optional):
+--   drop_locmap: suppress div.locmap blocks entirely (qr mode; in lazy
+--     mode locmaps are composited to marker spans by locmap.lua first).
+--   treat_infobox_as_imagebox: also treat class=infobox subtrees as
+--     image-box context (lazy mode with "Show infoboxes": their kept
+--     media imgs become lazy placeholders).
+local function walkImageBoxes(html, img_fn, opts)
     -- HTML comments can contain arbitrary text that would confuse the tag
     -- walker (and are meaningless in the final document anyway).
     html = html:gsub("<!%-%-.-%-%->", "")
@@ -456,7 +485,7 @@ local function walkImageBoxes(html, img_fn)
             local consumed_until
             if tagname == "img" then
                 if inImageBox(stack) then
-                    out[#out + 1] = img_fn(attrs, headings)
+                    out[#out + 1] = img_fn(attrs, headings, inInfobox(stack))
                 else
                     out[#out + 1] = full
                 end
@@ -496,8 +525,13 @@ local function walkImageBoxes(html, img_fn)
                 -- Drop the whole figure -- map, overlays and caption alike.
                 -- Video/audio figures are dropped the same way (no image to
                 -- keep, so no empty caption stub).
-                if tagname == "div" and hasClass(className(attrs), "locmap") then
+                if opts.drop_locmap and tagname == "div"
+                    and hasClass(className(attrs), "locmap") then
                     entry.is_dropped = true
+                elseif opts.treat_infobox_as_imagebox
+                    and className(attrs):find("infobox", 1, true) then
+                    entry.is_img = true
+                    entry.is_infobox = true
                 end
                 -- Suppression mode swallows the box and everything up to
                 -- its matching close tag (caption included).
@@ -526,19 +560,30 @@ function M.replaceImagesWithQr(html, qr_images, qr_size, lang)
     return walkImageBoxes(html,
         function(attrs)
             return qrImageTag(attrs, qr_images, qr_size, lang)
-        end)
+        end,
+        { drop_locmap = true })
 end
 
 -- Lazy-image mode: boxed <img>s become placeholders whose zip entries are
 -- filled in later by lazyfetch.lua; each placeholder records the index of
 -- the article section it sits in, which the background scheduler maps to
--- a page number via the document TOC.
-function M.replaceImagesWithLazy(html, lazy_images, hi_res)
+-- a page number via the document TOC. With "Show infoboxes", kept
+-- infobox media (htmlclean keeps the image cells here) is routed through
+-- the same placeholders. locmap divs are already gone by now: locmap.lua
+-- replaces them with composite/lazy markers before this runs.
+function M.replaceImagesWithLazy(html, lazy_images, hi_res, opts)
     local seen = {}
     return walkImageBoxes(html,
-        function(attrs, section)
-            return lazyImageTag(attrs, lazy_images, seen, section or 0, hi_res)
-        end)
+        function(attrs, section, centered)
+            return lazyImageTag(attrs, lazy_images, seen, section or 0, hi_res, centered)
+        end,
+        { treat_infobox_as_imagebox = opts and opts.treat_infobox_as_imagebox })
+end
+
+-- Exposed for locmap.lua: builds a lazy placeholder span for arbitrary
+-- <img> attrs, registering it in `lazy_images` like the walker does.
+function M.makeLazyImageTag(attrs, lazy_images, seen, section, hi_res, centered)
+    return lazyImageTag(attrs, lazy_images, seen, section or 0, hi_res, centered)
 end
 
 return M

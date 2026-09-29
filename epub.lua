@@ -20,6 +20,7 @@ local cladogram = require("cladogram")
 local htmlclean = require("htmlclean")
 local latex = require("latex")
 local qrimage = require("qrimage")
+local locmap = require("locmap")
 local wutil = require("wikiutil")
 
 local M = {}
@@ -49,7 +50,9 @@ Full article EPUB builder
 -- and footprint but its bytes are downloaded after the article opens
 -- (lazyfetch.lua); in "none" mode the boxes are removed entirely. The resolved title and short
 -- description are recovered from the API response and written into the EPUB
--- metadata. A kept infobox's media cells are dropped before the media pass.
+-- metadata. A kept infobox's media cells are dropped before the media pass,
+-- except in "show" mode, where their images join the lazy pipeline and
+-- locator maps become composited images.
 function M.buildEpub(epub_path, title, lang, callback)
     local short_description = nil -- extracted from the HTML
     local resolved_title = nil    -- from the API response
@@ -79,6 +82,10 @@ function M.buildEpub(epub_path, title, lang, callback)
     -- Block-formula SVGs fetched by latex.replaceMathElements; stitched in
     -- from the Archiver hooks below, like the QR images.
     local math_images = {}
+    -- Locator maps composited by locmap.replaceLocMaps (lazy mode only):
+    -- base map PNG with the red marker dots drawn in; stitched in from the
+    -- same Archiver hooks as the formula SVGs.
+    local locmap_composites = {}
 
     -- Patch redirects support
     local original_phtml_redirects = Wikipedia.wiki_phtml_params.redirects
@@ -211,9 +218,12 @@ function M.buildEpub(epub_path, title, lang, callback)
                 -- TemplateStyles/CSS art crengine can't render; drop it
                 -- (with its header row) before the other infobox passes.
                 html = htmlclean.stripElementPeriodicTable(html)
-                -- Kept infobox: drop media cells, keep text data and inline
-                -- names. Must run before the QR pass.
-                html = htmlclean.stripImageCells(html)
+                -- Kept infobox: in lazy mode keep the media cells -- their
+                -- images become lazy placeholders and locmaps become
+                -- composites -- and only drop non-image media; otherwise
+                -- drop media cells, keep text data and inline names.
+                -- Must run before the media passes.
+                html = htmlclean.stripImageCells(html, nil, { keep_images = lazy_enabled })
                 -- Center full-width infobox rows inline (the base stylesheet
                 -- has no .infobox rules and crengine ignores descendant
                 -- selectors), mirroring Wikipedia's own alignment.
@@ -251,18 +261,31 @@ function M.buildEpub(epub_path, title, lang, callback)
                 html = htmlclean.stripElementsByAttr(html, "figure", "typeof",
                     { "mw:file", "mw:image", "mw:video", "mw:audio" })
                 html = html:gsub("<audio.-</audio%s*>", "")
+                -- Location maps are absolute-positioned overlays crengine
+                -- can't draw; with no image pass to transform them, drop
+                -- them whole (composites only exist in lazy mode).
+                html = htmlclean.stripElementsByClass(html, "div", { "locmap" })
             end
             html = latex.replaceMathElements(html, math_images)
             -- Render cladograms (Template:Clade phylogeny trees) as text
             -- diagrams, since crengine cannot draw their CSS border lines.
             html = cladogram.replaceCladograms(html)
+            -- Locator maps (Template:Location map) become ONE composited
+            -- image (base map + drawn marker dots) in lazy mode, fetched at
+            -- build time like the formula SVGs. Must run before the walker
+            -- below, which has no locmap handling in this mode.
+            if lazy_enabled then
+                html = locmap.replaceLocMaps(html, locmap_composites,
+                    { hi_res = hi_res, lazy_images = lazy_images })
+            end
             -- Replace each media element with a QR or lazy placeholder;
             -- QR PNGs are stitched in from the Archiver hooks below, lazy
             -- placeholders reference zip entries filled in later.
             if qr_enabled then
                 html = qrimage.replaceImagesWithQr(html, qr_images, qr_size, lang)
             elseif lazy_enabled then
-                html = qrimage.replaceImagesWithLazy(html, lazy_images, hi_res)
+                html = qrimage.replaceImagesWithLazy(html, lazy_images, hi_res,
+                    { treat_infobox_as_imagebox = infobox_full_width })
             end
             if qr_enabled or lazy_enabled then
                 -- Figures' mw-halign-* classes select base-stylesheet rules
@@ -353,6 +376,26 @@ function M.buildEpub(epub_path, title, lang, callback)
                             loading_src, img.style or "")
                     end)
             end
+            -- Locator map composites (locmap.lua): swap each marker span
+            -- for a real <img> carrying the 1x footprint (the PNG may be a
+            -- hi-res variant), and register the PNG files.
+            if next(locmap_composites) then
+                content = content:gsub(
+                    '<span class="wikireader%-locmap" data%-locindex="(%d+)" style="([^"]*)"></span>',
+                    function(idx, style)
+                        local composite = locmap_composites[tonumber(idx)]
+                        if not composite then
+                            return ""
+                        end
+                        return string.format(
+                            '<img src="%s" style="display:block; margin:0.6em auto; %s" class="wikireader-locmap" alt=""/>',
+                            composite.path, style)
+                    end)
+                for _, composite in ipairs(locmap_composites) do
+                    original_addFileFromMemory(self,
+                        "OEBPS/" .. composite.path, composite.png, mtime)
+                end
+            end
             -- Swap each block-formula marker back to a real <img>, carrying
             -- the original SVG's inline style (..height/vertical-align:)
             -- from Wikipedia, and register the SVG files.
@@ -391,6 +434,13 @@ function M.buildEpub(epub_path, title, lang, callback)
                 for idx in ipairs(math_images) do
                     content = content:gsub("</manifest>", string.format(
                         '<item id="math%05d" href="images/math%05d.svg" media-type="image/svg+xml"/>\n  </manifest>',
+                        idx, idx))
+                end
+            end
+            if next(locmap_composites) then
+                for idx in ipairs(locmap_composites) do
+                    content = content:gsub("</manifest>", string.format(
+                        '<item id="locmap%05d" href="images/locmap%05d.png" media-type="image/png"/>\n  </manifest>',
                         idx, idx))
                 end
             end

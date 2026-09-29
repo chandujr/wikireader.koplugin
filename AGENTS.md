@@ -21,8 +21,9 @@ show mode).
 |---|---|
 | `main.lua` | Plugin entry point: menus, search/featured/category browsing, link handler, back-history nav, refetch/save/share/clear-cache actions. Start here for any UI or user-facing behavior change. |
 | `epub.lua` | Orchestrates article → EPUB: monkey-patches `Wikipedia` + `Archiver` hooks, sets per-feature HTML-cleaning options, injects stylesheet + metadata. Change here to alter the fetch/build pipeline or which passes run. |
-| `htmlclean.lua` | All HTML transformations: strip clutter (navboxes, hatnotes, timeline bars), unwrap article links, drop/keep infobox media cells, center infobox cells, border infobox/wikitable tables, merge quote attributions, rewrite `{{Multiple image}}` flexbox to tables. |
-| `qrimage.lua` | Replaces each boxed image with a QR code of its File: page (renders QR via KOReader's `ffi/qrencode`, writes minimal PNGs, rewrites image boxes to placeholder `<img>`s). Also owns the shared image-box walker used by the lazy-image mode; drops non-image media (video/audio). |
+| `htmlclean.lua` | All HTML transformations: strip clutter (navboxes, hatnotes, timeline bars), unwrap article links, drop infobox media cells (or, in lazy mode, keep image cells for the lazy pipeline and drop only video/audio/mapframe), center infobox cells, border infobox/wikitable tables, merge quote attributions, rewrite `{{Multiple image}}` flexbox to tables. |
+| `qrimage.lua` | Replaces each boxed image with a QR code of its File: page (renders QR via KOReader's `ffi/qrencode`, writes minimal PNGs, rewrites image boxes to placeholder `<img>`s). Also owns the shared image-box walker used by the lazy-image mode (kept infoboxes join as image boxes there, their placeholders centered via `display:block; margin:0 auto`); drops non-image media (video/audio) and, in QR mode only, locator maps. |
+| `locmap.lua` | Locator maps (Template:Location map): in lazy mode composites each `div.locmap` into ONE PNG — base map thumb downloaded and decoded (`ffi/png`/`ffi/jpeg`) with red marker dots drawn at the template's percentages — and keeps the caption; failures fall back to a plain lazy placeholder of the bare base map. Other modes drop locmaps. |
 | `latex.lua` | Math formulas: block formulas → fetched Wikipedia SVGs (cap 60, Unicode fallback), inline formulas → Unicode transcription (replaces `MathML`/images). |
 | `cladogram.lua` | Clade tables → ASCII tree `<pre>` diagrams. |
 | `wikiutil.lua` | Shared helpers: minimal HTTP JSON GET, Wikipedia URL parsing/encoding, HTML notice-tag constants, balanced-tag matching (`findMatchingClose`). |
@@ -39,10 +40,13 @@ show mode).
 1. `main.lua` resolves title/lang → `epub.buildEpub`.
 2. `epub.lua` checks cache → fetches Parsoid HTML from the MediaWiki API.
 3. HTML cleaning passes run in sequence (`htmlclean`, `latex`, `cladogram`,
-   QR or lazy-image placeholders via `qrimage`); `latex` also fetches
-   block-formula SVGs (capped, Unicode fallback on failure).
+   locmap composites + QR or lazy-image placeholders via `qrimage`); `latex`
+   also fetches block-formula SVGs (capped, Unicode fallback on failure),
+   `locmap` fetches+composites locator maps (capped, lazy fallback on
+   failure; lazy mode only).
 4. `Wikipedia.createEpub` builds the EPUB; patched `Archiver` hooks inject
-   QR PNGs, block-formula math SVGs, stylesheet, metadata.
+   QR PNGs, locator-map composites, block-formula math SVGs, stylesheet,
+   metadata.
 5. Result cached as `<lang> - <Title>.epub`; opened via ReaderUI.
 6. In "Show images" mode, `lazyfetch` then downloads the images on the
    current page in the background and re-triggers on every page turn
