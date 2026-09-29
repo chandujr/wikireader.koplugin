@@ -498,23 +498,23 @@ function M.stripImageCellsInBlock(block, opts)
         -- any other tag (media elements especially) stops the scan, so
         -- genuine media cells are untouched.
         if stripped ~= content then
-            local pos = 1
+            local p = 1
             while true do
-                local _, ws_end = stripped:find("^%s*", pos)
-                pos = ws_end + 1
+                local _, ws_end = stripped:find("^%s*", p)
+                p = ws_end + 1
                 -- The () position capture is the second (and last) value
                 -- returned, right behind the captured tag text.
-                local inner, after_tag = stripped:match("^<([^<>]*)>()", pos)
+                local inner, after_tag = stripped:match("^<([^<>]*)>()", p)
                 if not inner then break end
                 local name = inner:lower():match("^%s*(%a+)")
                 if name == "br" then
                     -- Drop just this break; rescan from the same position.
-                    stripped = stripped:sub(1, pos - 1) .. stripped:sub(after_tag)
+                    stripped = stripped:sub(1, p - 1) .. stripped:sub(after_tag)
                 elseif name == "div" or name == "span" or name == "p"
                     or name == "center" then
-                    pos = after_tag -- cross the bare wrapper tag, keep it
+                    p = after_tag    -- cross the bare wrapper tag, keep it
                 else
-                    break           -- anything else (media, close tags, text): stop
+                    break            -- anything else (media, close tags, text): stop
                 end
             end
         end
@@ -527,8 +527,8 @@ function M.stripImageCellsInBlock(block, opts)
         if not drop_cell and keep_images then
             local lower = stripped:lower()
             drop_cell = lower:find("<video", 1, true) ~= nil
-                or lower:find("<audio", 1, true)
-                or lower:find("<mapframe", 1, true)
+                or lower:find("<audio", 1, true) ~= nil
+                or lower:find("<mapframe", 1, true) ~= nil
         end
 
         if drop_cell then
@@ -1080,7 +1080,6 @@ local function multiImageTransformRow(content, n_cols)
             end
         end
     end
-    if not all_px then wx, total = nil, nil end
     local out = {}
     local pos = 1
     local cell = 0
@@ -1112,7 +1111,7 @@ local function multiImageTransformRow(content, n_cols)
             -- rounding); the inline width would otherwise defeat the
             -- table's 100% reflow. Rows whose cells aren't all px-widthed
             -- keep the template's own scaling behavior.
-            if total then
+            if all_px then
                 cell = cell + 1
                 local pct = string.format("%.2f", wx[cell] / total * 100)
                 local kept = {}
