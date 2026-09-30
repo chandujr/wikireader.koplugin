@@ -250,7 +250,12 @@ function M.buildEpub(epub_path, title, lang, callback)
             html = htmlclean.stripElementsByClass(html, "span", { "geo-inline-hidden" })
             html = htmlclean.mergeQuoteCites(html)
             -- "Disable hyperlinks": unwrap internal article links, keep
-            -- reference/external ones. Runs before the QR pass.
+            -- reference/external ones. Runs before the QR pass. Editor-junk
+            -- links ([citation needed] markers, section "[edit]" links)
+            -- are unwrapped unconditionally: their targets are editor pages
+            -- no reader wants to open.
+            html = htmlclean.stripMaintenanceLinks(html)
+            html = htmlclean.stripEditSectionLinks(html)
             if G_reader_settings:isTrue("wikireader_disable_hyperlinks") then
                 html = htmlclean.stripArticleLinks(html)
             end

@@ -78,6 +78,8 @@ Wikipedia article hyperlink removal ("Disable hyperlinks" option)
 --   <a href="/w/index.php?title=X&action=edit&redlink=1"> dead (red) links
 -- Everything else -- <a href="#cite_note-..."> reference/footnote anchors,
 -- and genuine external http(s) links -- is deliberately NOT matched.
+-- Matches hrefs in both raw and entity-encoded form: Parsoid escapes
+-- "&" as "&amp;" (e.g. "action=edit&redlink=1" -> "action=edit&amp;redlink=1").
 local function anchorIsWikiArticleLink(open_tag)
     local href = open_tag:match([[href%s*=%s*"([^"]*)"]])
     if not href then
@@ -89,7 +91,7 @@ local function anchorIsWikiArticleLink(open_tag)
     if href:find("^https?://%w+%.wikipedia%.org/wiki/") then
         return true
     end
-    if href:find("redlink=1", 1, true) then
+    if href:find("redlink=1", 1, true) or href:find("action=edit", 1, true) then
         return true
     end
     return false
@@ -126,6 +128,70 @@ function M.stripArticleLinks(html)
             -- Kept anchor: advance only past its open tag.
             table.insert(out, html:sub(pos, open_end))
             pos = open_end + 1
+        end
+    end
+    return table.concat(out)
+end
+
+-- Unwraps every <a> inside "noprint" sups: the inline maintenance
+-- markers ([citation needed], [unreliable medical source], ...), all
+-- <sup class="noprint Inline-Template ...">, whose links lead to editor
+-- pages (Wikipedia:Citation_needed, action=edit URLs) that are
+-- meaningless for readers. Always unwrapped, regardless of the
+-- hyperlinks setting; the visible text stays.
+function M.stripMaintenanceLinks(html)
+    local out = {}
+    local pos = 1
+    while true do
+        local open_start, open_end = html:find("<sup[^>]*>", pos)
+        if not open_start then
+            table.insert(out, html:sub(pos))
+            break
+        end
+        local open_tag = html:sub(open_start, open_end)
+        local class = open_tag:match([[class%s*=%s*"([^"]*)"]]) or ""
+        if class:find("noprint", 1, true) then
+            local close_start, close_end = wutil.findMatchingClose(html, "sup", open_end)
+            if not close_end then
+                table.insert(out, html:sub(pos, open_end))
+                pos = open_end + 1
+            else
+                table.insert(out, html:sub(pos, open_start - 1))
+                table.insert(out, open_tag)
+                table.insert(out, M.stripArticleLinks(html:sub(open_end + 1, close_start - 1)))
+                table.insert(out, html:sub(close_start, close_end))
+                pos = close_end + 1
+            end
+        else
+            table.insert(out, html:sub(pos, open_end))
+            pos = open_end + 1
+        end
+    end
+    return table.concat(out)
+end
+
+-- Unwraps the "[edit]" links MediaWiki puts in <span class="mw-editsection">
+-- beside every heading. The span and brackets/text are kept (the anchor
+-- itself is unwrapped by stripArticleLinks' action=edit/redlink match),
+-- so headings keep their normal shape.
+function M.stripEditSectionLinks(html)
+    local out = {}
+    local pos = 1
+    while true do
+        local open_start, open_end = html:find('<span[^>]*class="mw%-editsection"[^>]*>', pos)
+        if not open_start then
+            table.insert(out, html:sub(pos))
+            break
+        end
+        local close_start, close_end = wutil.findMatchingClose(html, "span", open_end)
+        if not close_end then
+            table.insert(out, html:sub(pos, open_end))
+            pos = open_end + 1
+        else
+            table.insert(out, html:sub(pos, open_start - 1))
+            table.insert(out, M.stripArticleLinks(html:sub(open_end + 1, close_start - 1)))
+            table.insert(out, html:sub(close_start, close_end))
+            pos = close_end + 1
         end
     end
     return table.concat(out)
