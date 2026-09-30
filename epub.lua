@@ -29,7 +29,8 @@ local M = {}
 -- the real bitmap in. One copy per image (each pending img points at its
 -- own ".loading.svg" path). Sand drawn half-drained: a pile left in the
 -- top bulb's lower half, the bottom bulb filled to its midline.
-local LOADING_SVG = [[<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" stroke="#888" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+local LOADING_SVG =
+[[<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" stroke="#888" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
 <g transform="translate(12 12)">
 <path d="M5 2h14M5 22h14M17 2v4.172a2 2 0 0 1-.586 1.414L12 12l-4.414-4.414A2 2 0 0 1 7 6.172V2M7 22v-4.172a2 2 0 0 1 .586-1.414L12 12l4.414 4.414a2 2 0 0 1 .586 1.414V22"/>
 <path fill="#888" stroke="none" d="M8 8h8L12 12ZM7.5 17h9l.5 5H7Z"/>
@@ -466,7 +467,7 @@ function M.buildEpub(epub_path, title, lang, callback)
                 local pending = {}
                 for _, img in ipairs(lazy_images) do
                     local record =
-                        { src = img.src, imgpath = img.imgpath, mimetype = img.mimetype, section = img.section or 0 }
+                    { src = img.src, imgpath = img.imgpath, mimetype = img.mimetype, section = img.section or 0 }
                     if img.fallback then
                         record.fallback = img.fallback
                     end
@@ -625,6 +626,16 @@ table.infobox {
 ]]
             end
             content = content .. [[
+
+/* Editor furniture stays visible but recedes next to body prose:
+   reference marks ([12], [b]) and inline maintenance markers
+   ([citation needed]) are annotations, not article content. Gray is
+   also what makes them less prominent on grayscale e-ink. */
+sup.reference,
+sup.noprint,
+span.mw-editsection {
+  color: #888;
+}
 
 .wikireader-notices {
   border: 1px solid #aaa;
