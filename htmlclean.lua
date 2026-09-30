@@ -578,9 +578,9 @@ function M.stripImageCellsInBlock(block, opts)
                     stripped = stripped:sub(1, p - 1) .. stripped:sub(after_tag)
                 elseif name == "div" or name == "span" or name == "p"
                     or name == "center" then
-                    p = after_tag    -- cross the bare wrapper tag, keep it
+                    p = after_tag -- cross the bare wrapper tag, keep it
                 else
-                    break            -- anything else (media, close tags, text): stop
+                    break         -- anything else (media, close tags, text): stop
                 end
             end
         end

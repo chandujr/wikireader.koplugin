@@ -38,7 +38,7 @@ local M = {}
 -- Returns the pending image list from `epub_path`, or nil if the EPUB has
 -- none (already completed, or not a lazy build).
 local function readPending(epub_path)
-    local reader = Archiver.Reader:new{}
+    local reader = Archiver.Reader:new {}
     if not reader:open(epub_path) then
         logger.warn("WikiReader lazy: cannot open EPUB to read pending list:", epub_path)
         return nil
@@ -72,7 +72,7 @@ end
 -- with whatever remains. Drops the pending entry once nothing remains:
 -- this build is then complete.
 local function swapInImages(epub_path, images, results)
-    local reader = Archiver.Reader:new{}
+    local reader = Archiver.Reader:new {}
     if not reader:open(epub_path) then
         logger.warn("WikiReader lazy: swap failed opening EPUB:", reader.err)
         return false
@@ -136,7 +136,7 @@ local function swapInImages(epub_path, images, results)
     -- crengine holds open is safe (it keeps reading the old inode), and a
     -- failed write never destroys the good EPUB.
     local tmp_path = epub_path .. ".tmp"
-    local writer = Archiver.Writer:new{}
+    local writer = Archiver.Writer:new {}
     if not writer:open(tmp_path, "epub") then
         logger.warn("WikiReader lazy: swap failed opening writer:", writer.err)
         return false
@@ -178,7 +178,7 @@ local function downloadAll(images, on_all_done)
     local i = 0
     if UIManager.looper then
         -- Turbo looper available: fully asynchronous requests.
-        local client = HTTPClient:new{}
+        local client = HTTPClient:new {}
         local function nextImage()
             i = i + 1
             if i > #images then
