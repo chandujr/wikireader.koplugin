@@ -784,7 +784,11 @@ Single-page EPUB writer (shared by the standalone builders)
 -- which don't go through Wikipedia.createEpub(). Returns true on success.
 -- chapters (optional): { label=..., anchor=... } in display order; anchor
 -- must be an element id already present in html_content. Adds TOC entries.
-local function writeSinglePageEpub(epub_path, title, lang, bookid_prefix, html_content, css, chapters, toc_label)
+-- extras (optional, main page only): image data collected by
+-- mainpage.fetchSections and stitched by buildMainPageEpub:
+--   files          { path = "OEBPS/...", content = bytes }
+--   manifest_items { "<item .../>" } appended to the package manifest
+local function writeSinglePageEpub(epub_path, title, lang, bookid_prefix, html_content, css, chapters, toc_label, extras)
     local mtime = os.time()
 
     local epub = Archiver.Writer:new {}
@@ -827,9 +831,21 @@ local function writeSinglePageEpub(epub_path, title, lang, bookid_prefix, html_c
   </spine>
 </package>
 ]], title, bookid, lang)
+    if extras then
+        -- Function replacement: % chars in the generated markup must
+        -- survive the gsub splice.
+        for _, item in ipairs(extras.manifest_items or {}) do
+            opf = opf:gsub("</manifest>", function() return item .. "\n  </manifest>" end)
+        end
+    end
     epub:addFileFromMemory("OEBPS/content.opf", opf, mtime)
     epub:addFileFromMemory("OEBPS/content.html", html_content, mtime)
     epub:addFileFromMemory("OEBPS/stylesheet.css", css, mtime)
+    if extras then
+        for _, file in ipairs(extras.files or {}) do
+            epub:addFileFromMemory(file.path, file.content, mtime)
+        end
+    end
 
     local escape = function(s)
         return (s:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"):gsub('"', "&quot;"))
@@ -1083,7 +1099,12 @@ Main page EPUB builder
 -- Builds the "Wikipedia main page" EPUB from mainpage.fetchSections()
 -- output. The date is part of the cache key and title: each day is its
 -- own cache entry, so a cached copy never outlives the day's news.
-function M.buildMainPageEpub(date_str, lang, sections)
+-- image_mode / qr_images / lazy_images come from the fetchSections call
+-- that produced `sections`: in QR mode the placeholder spans become
+-- embedded QR PNGs, in "show" mode loading placeholders plus a
+-- wikireader-pending.json entry that lazyfetch.lua completes in the
+-- background (same mechanics as the article EPUBs).
+function M.buildMainPageEpub(date_str, lang, sections, image_mode, qr_images, lazy_images)
     local year, month, day = date_str:match("^(%d+)%-(%d+)%-(%d+)$")
     local display_date = date_str
     if year then
@@ -1125,6 +1146,52 @@ function M.buildMainPageEpub(date_str, lang, sections)
 
     local html_content = endDoc(html_parts)
 
+    -- Same stitching as the article flow's Archiver hooks, passed as plain
+    -- parameters since writeSinglePageEpub writes the EPUB itself.
+    local extras
+    if image_mode == "qr" and qr_images and next(qr_images) then
+        local qr_size = G_reader_settings:readSetting("wikireader_qr_size") or qrimage.DEFAULT_QR_SIZE
+        html_content = html_content:gsub('<span class="wikireader%-qrimg" data%-qrindex="(%d+)"></span>', function(idx)
+            local qr = qr_images[tonumber(idx)]
+            if not qr then return "" end
+            local file_title = qr.url:gsub("&", "&amp;"):gsub('"', "&quot;")
+            return string.format(
+                '<img src="%s" width="%d" height="%d" class="wikireader-qr" alt="QR code for image" title="%s"/>',
+                qr.path, qr_size, qr_size, file_title)
+        end)
+        extras = { files = {}, manifest_items = {} }
+        for i, qr in ipairs(qr_images) do
+            table.insert(extras.files, { path = "OEBPS/" .. qr.path, content = qr.png })
+            table.insert(extras.manifest_items, string.format(
+                '<item id="qr%05d" href="%s" media-type="image/png"/>', i, qr.path))
+        end
+    elseif image_mode == "show" and lazy_images and next(lazy_images) then
+        extras = { files = {}, manifest_items = {} }
+        local seen_loading = {}
+        html_content = html_content:gsub('<span class="wikireader%-lazyimg" data%-lazyindex="(%d+)"[^>]*></span>', function(idx)
+            local img = lazy_images[tonumber(idx)]
+            if not img then return "" end
+            local loading_src = img.imgpath .. ".loading.svg"
+            if not seen_loading[loading_src] then
+                seen_loading[loading_src] = true
+                table.insert(extras.files, { path = "OEBPS/" .. loading_src, content = LOADING_SVG })
+            end
+            return string.format('<img src="%s" style="%s" alt=""/>', loading_src, img.style or "")
+        end)
+        local pending = {}
+        for i, img in ipairs(lazy_images) do
+            table.insert(extras.manifest_items, string.format(
+                '<item id="wrimg%05d" href="%s" media-type="%s"/>', i, img.imgpath, img.mimetype))
+            table.insert(extras.manifest_items, string.format(
+                '<item id="wrload%05d" href="%s.loading.svg" media-type="image/svg+xml"/>', i, img.imgpath))
+            local record = { src = img.src, imgpath = img.imgpath, mimetype = img.mimetype, section = 0 }
+            if img.fallback then record.fallback = img.fallback end
+            pending[#pending + 1] = record
+        end
+        table.insert(extras.files, { path = "OEBPS/wikireader-pending.json",
+            content = require("json").encode(pending) })
+    end
+
     local css = FRONTPAGE_CSS .. [[
 h2.wikireader-mainpage-section {
   font-size: 120%;
@@ -1133,9 +1200,35 @@ h2.wikireader-mainpage-section {
   margin-top: 1em;
 }
 ]]
+    if extras then
+        css = css .. [[
+
+/* Image boxes full-width and centered, like the article figures (their
+   TemplateStyles floats are stripped with the other <style> blocks, and
+   the wrappers' inline floats/widths are stripped in mainpage.lua). */
+div.itn-img, div.dyk-img, #mp-otd-img {
+  float: none;
+  width: 100%;
+  margin: 0.5em 0;
+}
+div.thumbinner {
+  border: 1px dashed #aaa;
+  padding: 4px;
+  width: 100%;
+  text-align: center;
+}
+div.thumbcaption {
+  text-align: center;
+}
+img.wikireader-qr {
+  display: block;
+  margin: 0.2em auto;
+}
+]]
+    end
 
     local epub_path = cache.getHelperCachePath("__mainpage__", date_str, lang)
-    if not writeSinglePageEpub(epub_path, display_title, lang, "mainpage", html_content, css, chapters) then
+    if not writeSinglePageEpub(epub_path, display_title, lang, "mainpage", html_content, css, chapters, nil, extras) then
         return false
     end
     return true, epub_path

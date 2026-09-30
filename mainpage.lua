@@ -2,14 +2,16 @@
 -- page" menu entry. Fetches the rendered main page once and cuts out its
 -- three news boxes ("In the news", "Did you know", "On this day") by their
 -- long-stable element ids, then strips everything that doesn't survive
--- reflow or leads to project-space pages. Only the English edition is
--- supported: other wikis use localized titles with different, often
--- id-less markup.
+-- reflow or leads to project-space pages. The boxes' floated thumbnails
+-- are routed through qrimage per the image settings (QR codes / lazy
+-- placeholders); only the English edition is supported: other wikis use
+-- localized titles with different, often id-less markup.
 
 local socket_url = require("socket.url")
 local logger = require("logger")
 
 local htmlclean = require("htmlclean")
+local qrimage = require("qrimage")
 local wutil = require("wikiutil")
 
 local M = {}
@@ -46,32 +48,66 @@ local function extractBox(html, id)
     return html:sub(open_tag_end + 1, close_start - 1)
 end
 
-local function cleanBoxHtml(html)
+local function cleanBoxHtml(html, image_transform)
     -- TemplateStyles blocks and their dedup <link> stubs.
     html = html:gsub("<style[^>]*>.-</style>", "")
     html = html:gsub("<link[^>]*>", "")
 
-    -- Box images (float-right thumbs, "(pictured)") are dropped wholesale,
-    -- wrappers included; same for the footer nav boxes, which MediaWiki
-    -- marks noprint -- stripping them whole keeps their labels from
-    -- surviving as dangling text once their anchors are removed below.
-    html = htmlclean.stripElementsByClass(html, "div", {
-        "dyk-img", "itn-img", "otd-img", "thumb", "thumbinner", "mp-thumb",
-        "dyk-footer", "itn-footer", "otd-footer", "noprint",
-    })
+    if not image_transform then
+        -- Box images (float-right thumbs, "(pictured)") are dropped
+        -- wholesale, wrappers included; same for the footer nav boxes,
+        -- which MediaWiki marks noprint -- stripping them whole keeps
+        -- their labels from surviving as dangling text once their anchors
+        -- are removed below.
+        html = htmlclean.stripElementsByClass(html, "div", {
+            "dyk-img", "itn-img", "otd-img", "thumb", "thumbinner", "mp-thumb",
+            "dyk-footer", "itn-footer", "otd-footer", "noprint",
+        })
 
-    -- Every anchor that doesn't lead to a readable article: project-space
-    -- pages, redlinks (/w/index.php?...redlink=1), external sites (the
-    -- mailing-list "By email" link), and any leftover <img> icons.
-    for _, ns in ipairs(JUNK_NAMESPACES) do
-        html = html:gsub('<a[^>]-href="/wiki/' .. ns .. ':[^"]*"[^>]->.-</a>', "")
+        -- Every anchor that doesn't lead to a readable article:
+        -- project-space pages, redlinks (/w/index.php?...redlink=1),
+        -- external sites (the mailing-list "By email" link), and any
+        -- leftover <img> icons.
+        for _, ns in ipairs(JUNK_NAMESPACES) do
+            html = html:gsub('<a[^>]-href="/wiki/' .. ns .. ':[^"]*"[^>]->.-</a>', "")
+        end
+        html = html:gsub('<a[^>]-href="/w/index%.php[^"]*"[^>]->.-</a>', "")
+        html = html:gsub('<a[^>]-href="https?:[^"]*"[^>]->.-</a>', "")
+        html = html:gsub("<img[^>]*>", "")
+
+        -- <span typeof="mw:File"> wrappers left empty by the image removal.
+        html = html:gsub('<span[^>]-typeof="mw:File[^"]*"[^>]->.-</span>', "")
+    else
+        -- The image pass replaces each thumbnail with a QR/lazy placeholder
+        -- span, unwrapping its File: host anchor. It must run before the
+        -- junk-anchor removal below, which would otherwise delete those
+        -- File: anchors whole, host image included. The walker treats
+        -- div.thumbinner as an image-box context (the same "thumb"
+        -- classification articles use).
+        html = image_transform(html)
+
+        -- Inline styles would out-rank the builder's stylesheet (thumbinner
+        -- border/full-width, wrapper floats, caption centering), so they
+        -- go; the footer nav boxes go as in drop mode. The thumb wrappers
+        -- stay around the placeholder for the builder's CSS.
+        html = html:gsub('(<div class="thumbinner[^"]*") style="[^"]*"', "%1")
+        html = html:gsub('(<div class="thumbcaption[^"]*") style="[^"]*"', "%1")
+        html = html:gsub('(<div[^>]-class="[^"]*%-img[^"]*") style="[^"]*"', "%1")
+        html = html:gsub('(<div) style="[^"]*"([^>]-id="mp%-otd%-img")', "%1%2")
+        html = htmlclean.stripElementsByClass(html, "div", {
+            "dyk-footer", "itn-footer", "otd-footer", "noprint",
+        })
+
+        -- Same anchor cleanup as drop mode. Images are placeholders now, so
+        -- no blanket <img> removal and no mw:File span stripping (the span
+        -- now holds the placeholder). "(pictured)"/File: text links still
+        -- vanish with their labels; the real thumb was unwrapped above.
+        for _, ns in ipairs(JUNK_NAMESPACES) do
+            html = html:gsub('<a[^>]-href="/wiki/' .. ns .. ':[^"]*"[^>]->.-</a>', "")
+        end
+        html = html:gsub('<a[^>]-href="/w/index%.php[^"]*"[^>]->.-</a>', "")
+        html = html:gsub('<a[^>]-href="https?:[^"]*"[^>]->.-</a>', "")
     end
-    html = html:gsub('<a[^>]-href="/w/index%.php[^"]*"[^>]->.-</a>', "")
-    html = html:gsub('<a[^>]-href="https?:[^"]*"[^>]->.-</a>', "")
-    html = html:gsub("<img[^>]*>", "")
-
-    -- <span typeof="mw:File"> wrappers left empty by the image removal.
-    html = html:gsub('<span[^>]-typeof="mw:File[^"]*"[^>]->.-</span>', "")
 
     -- The link handler only recognises absolute wiki URLs (see
     -- wikiutil.parseWikiLink); fragments can stay, the handler opens
@@ -85,7 +121,15 @@ end
 -- keyed itn/dyk/otd (sections whose box can't be found are omitted), or
 -- nil with an error kind ("network"/"parse"/"layout") like
 -- categories.fetchSections().
-function M.fetchSections()
+--
+-- image_mode / opts: when image_mode is "qr" or "show", the boxes'
+-- thumbnails are routed through the qrimage pipeline using
+-- opts.qr_size / opts.hi_res, collected into opts.qr_images /
+-- opts.lazy_images ("none" drops them, as before). The collected QR PNGs /
+-- lazy download records are stitched into the EPUB by
+-- epub.buildMainPageEpub; lazyfetch.lua then completes the lazy ones.
+function M.fetchSections(image_mode, opts)
+    if image_mode == "none" then image_mode = nil end
     local url = string.format(
         "https://en.wikipedia.org/w/api.php?action=parse&page=%s&format=json&formatversion=2&prop=text",
         socket_url.escape(M.MAIN_PAGE_TITLE)
@@ -104,7 +148,19 @@ function M.fetchSections()
     for _, spec in ipairs(SECTION_IDS) do
         local box = extractBox(html, spec.id)
         if box then
-            sections[spec.key] = cleanBoxHtml(box)
+            local transform
+            if image_mode == "qr" then
+                transform = function(box_html)
+                    return qrimage.replaceImagesWithQr(box_html, opts.qr_images,
+                        opts.qr_size, "en")
+                end
+            elseif image_mode == "show" then
+                transform = function(box_html)
+                    return qrimage.replaceImagesWithLazy(box_html, opts.lazy_images,
+                        opts.hi_res)
+                end
+            end
+            sections[spec.key] = cleanBoxHtml(box, transform)
             found = found + 1
         else
             logger.warn("wikireader: main page box not found:", spec.id)

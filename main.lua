@@ -59,6 +59,7 @@ local epub = require("epub")
 local lazyfetch = require("lazyfetch")
 local history = require("wikireader-history")
 local mainpage = require("mainpage")
+local qrimage = require("qrimage")
 local wutil = require("wikiutil")
 
 local WikiReader = WidgetContainer:extend {
@@ -1141,7 +1142,19 @@ function WikiReader:openMainPage()
         UIManager:show(info)
 
         UIManager:scheduleIn(0, function()
-            local sections, err = mainpage.fetchSections()
+            local image_mode = G_reader_settings:readSetting("wikireader_image_mode") or "show"
+            local qr_images, lazy_images
+            if image_mode == "qr" then
+                qr_images = {}
+            elseif image_mode == "show" then
+                lazy_images = {}
+            end
+            local sections, err = mainpage.fetchSections(image_mode, {
+                qr_images = qr_images,
+                lazy_images = lazy_images,
+                qr_size = G_reader_settings:readSetting("wikireader_qr_size") or qrimage.DEFAULT_QR_SIZE,
+                hi_res = G_reader_settings:nilOrTrue("wikireader_hi_res"),
+            })
             UIManager:close(info)
 
             if not sections then
@@ -1153,7 +1166,8 @@ function WikiReader:openMainPage()
                 return
             end
 
-            local ok_build, epub_path = epub.buildMainPageEpub(os.date("%Y-%m-%d"), "en", sections)
+            local ok_build, epub_path = epub.buildMainPageEpub(os.date("%Y-%m-%d"), "en", sections,
+                image_mode, qr_images, lazy_images)
             if not ok_build then
                 UIManager:show(InfoMessage:new {
                     text = _("Couldn't build the main page."),
@@ -1165,6 +1179,7 @@ function WikiReader:openMainPage()
             nav_current = { title = _("Wikipedia main page"), lang = "en", path = epub_path, helper = true }
             local ReaderUI = require("apps/reader/readerui")
             ReaderUI:showReader(epub_path)
+            self:maybeCompleteLazyImages(epub_path)
         end)
     end)
 end
