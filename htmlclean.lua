@@ -904,12 +904,15 @@ end
 -- "current event"-family banners whose text also contains editor-facing
 -- sentences; English phrases catch the remaining ambox-notice leftovers
 -- ({{Under construction}}, {{In use}}, untyped protection tags).
+-- Second return: true when the banner was kept via the keep list
+-- (those banners carry their editor-facing sentences in hide-when-compact
+-- spans, which stripEditingSpans then removes).
 local function noticeInvitesEditing(open_tag, content)
     local class_attr = (open_tag:match([[class%s*=%s*"([^"]*)"]]) or "")
         :gsub("&#95;", "_"):lower()
     for _, pat in ipairs(wutil.NOTICE_KEEP_BOX_CLASSES) do
         if class_attr:find(pat, 1, true) then
-            return false
+            return false, true
         end
     end
     for _, pat in ipairs(wutil.EDITING_MBOX_CLASSES) do
@@ -925,6 +928,34 @@ local function noticeInvitesEditing(open_tag, content)
         end
     end
     return false
+end
+
+-- Drops the hide-when-compact spans holding the editor-facing sentences
+-- of a kept current-event-family banner (the "Please update ..." call to
+-- action and the "Learn how and when to remove this message" tail) so
+-- only the reader-relevant text stays. Matched conservatively by link
+-- target/text: those spans may in principle carry reader content too.
+local function stripEditingSpans(content)
+    local out, pos = {}, 1
+    while true do
+        local open_s, open_e = content:find(
+            '<span[^>]-class="[^"]*hide%-when%-compact[^"]*"[^>]*>', pos)
+        if not open_s then break end
+        local close_s, close_e = content:find("</span>", open_e + 1)
+        if not close_s then break end
+        -- the span itself may wrap <i>/<small>/<a> but never another span
+        local span = content:sub(open_s, close_e):lower()
+        if span:find("action=edit", 1, true)
+            or span:find("maintenance_template_removal", 1, true)
+            or span:find("remove this template", 1, true) then
+            table.insert(out, content:sub(pos, open_s - 1))
+        else
+            table.insert(out, content:sub(pos, close_e))
+        end
+        pos = close_e + 1
+    end
+    table.insert(out, content:sub(pos))
+    return table.concat(out)
 end
 
 -- Skips whitespace, HTML comments, <style>/<link>/<meta> tags and empty
@@ -974,9 +1005,15 @@ local function extractLeadingNoticesInner(html)
         end
         -- Editor-facing banners (expansion/citation/... requests) are
         -- dropped, not extracted into the notices block.
-        if not noticeInvitesEditing(html:sub(open_start, open_end),
-                html:sub(open_end + 1, close_start - 1)) then
-            table.insert(notices, html:sub(pos, close_end))
+        local invites, is_fluid = noticeInvitesEditing(
+            html:sub(open_start, open_end),
+            html:sub(open_end + 1, close_start - 1))
+        if not invites then
+            local kept = html:sub(pos, close_end)
+            if is_fluid then
+                kept = stripEditingSpans(kept)
+            end
+            table.insert(notices, kept)
         end
         pos = skipLeadingCruft(html, close_end + 1)
     end
@@ -1011,9 +1048,10 @@ end
 -- Wraps section-level notices (hatnotes, maintenance banners) not caught
 -- by extractLeadingNotices() -- e.g. "This section needs more citations..."
 -- in <div class="wikireader-notices"> boxes. Editor-facing banners are
--- dropped outright instead (see noticeInvitesEditing). Deliberately a
--- second pass on the "rest" HTML, so front-of-article notices aren't
--- double-wrapped.
+-- dropped outright instead, and kept current-event banners lose their
+-- editor-facing spans (see noticeInvitesEditing / stripEditingSpans).
+-- Deliberately a second pass on the "rest" HTML, so front-of-article
+-- notices aren't double-wrapped.
 function M.wrapSectionNotices(html)
     local pos = 1
     local out = {}
@@ -1038,10 +1076,16 @@ function M.wrapSectionNotices(html)
                 table.insert(out, html:sub(open_start))
                 break
             end
-            if not noticeInvitesEditing(open_tag, html:sub(open_end + 1, close_start - 1)) then
+            local invites, is_fluid = noticeInvitesEditing(
+                open_tag, html:sub(open_end + 1, close_start - 1))
+            if not invites then
+                local kept = html:sub(open_start, close_end)
+                if is_fluid then
+                    kept = stripEditingSpans(kept)
+                end
                 table.insert(out, string.format(
                     [[<div class="wikireader-notices">%s</div>]],
-                    html:sub(open_start, close_end)
+                    kept
                 ))
             end
             pos = close_end + 1
