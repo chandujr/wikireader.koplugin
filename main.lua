@@ -703,8 +703,10 @@ end
 function WikiReader:buildHistoryMenu()
     local list = history.getList()
     local items = {}
-    -- Not `for _, entry`: that would shadow gettext's `_` with a number,
-    -- breaking the translated string in the hold callback below.
+    local forget_fmt = _("Forget \"%1\" in the WikiReader history?")
+    local forget_text = _("Forget")
+    -- Loop var is the idiomatic `_` on purpose: the gettext calls above are
+    -- hoisted so nothing in the loop body references the shadowed `_`.
     for _, entry in ipairs(list) do
         local text = entry.title
         if entry.lang and entry.lang ~= self.lang then
@@ -717,8 +719,8 @@ function WikiReader:buildHistoryMenu()
             end,
             hold_callback = function(touchmenu_instance)
                 UIManager:show(ConfirmBox:new {
-                    text = T(_("Forget \"%1\" in the WikiReader history?"), entry.title),
-                    ok_text = _("Forget"),
+                    text = T(forget_fmt, entry.title),
+                    ok_text = forget_text,
                     ok_callback = function()
                         history.remove(entry.title, entry.lang)
                         refreshLiveMenuItems(touchmenu_instance, self:buildHistoryMenu())
@@ -748,7 +750,8 @@ function WikiReader:buildBookmarksMenu()
             separator = true,
         })
     end
-    -- Not `for _, entry`: see buildHistoryMenu.
+    local remove_fmt = _("Remove \"%1\" from bookmarks?")
+    local remove_text = _("Remove")
     for _, entry in ipairs(bookmarks.getList()) do
         local text = entry.title
         if entry.lang and entry.lang ~= self.lang then
@@ -761,8 +764,8 @@ function WikiReader:buildBookmarksMenu()
             end,
             hold_callback = function(touchmenu_instance)
                 UIManager:show(ConfirmBox:new {
-                    text = T(_("Remove \"%1\" from bookmarks?"), entry.title),
-                    ok_text = _("Remove"),
+                    text = T(remove_fmt, entry.title),
+                    ok_text = remove_text,
                     ok_callback = function()
                         bookmarks.remove(entry.title, entry.lang)
                         refreshLiveMenuItems(touchmenu_instance, self:buildBookmarksMenu())
