@@ -809,13 +809,38 @@ Quote attribution (Template:Quote) merging
 -- *inside* the blockquote as a trailing <div class="wikireader-cite">
 -- (right-aligned attribution line, styled by the EPUB stylesheet).
 --
+-- Template:Quote box renders the same <cite> attribution as a plain <div>
+-- sibling of the box's inner <blockquote>: the div sits inside the outer
+-- .quotebox, but ours styles the box on <blockquote>, so the name would
+-- hang below it. Same fix applies: merge into wikireader-cite.
+--
 -- MediaWiki output handled here looks like:
 --   <blockquote class="templatequote"><p>...</p></blockquote>
 --   <div class="templatequotecite"><p style="display:inline;padding-left:2.3em;">— Person</p></div>
+-- or:
+--   <blockquote class="quotebox-quote"><p>...</p></blockquote>
+--   <div style="padding-bottom: 0; ..."><cite>— Person</cite></div>
 function M.mergeQuoteCites(html)
     local function skipWs(pos)
         local _, e = html:find('^%s*', pos)
         return (e or pos - 1) + 1
+    end
+
+    -- Attribution <div> directly following </blockquote>: either the known
+    -- templatequotecite form or any div holding a <cite> line (the Quote box
+    -- wrapper). Returns the div's span and content, or nothing.
+    local function findCiteDiv(after_close)
+        local div_open_start, div_open_end = html:find('<div[^>]*>', after_close)
+        if div_open_start ~= after_close then return end
+        local div_close_start, div_close_end = wutil.findMatchingClose(html, "div", div_open_end)
+        if not div_close_end then return end
+        local open_tag = html:sub(div_open_start, div_open_end)
+        local content = html:sub(div_open_end + 1, div_close_start - 1)
+        -- templatequotecite may carry extra attrs (about/id) besides the class.
+        if open_tag:find('"templatequotecite', 1, true)
+            or content:find('^%s*<cite[%s>]') then
+            return div_open_start, div_close_end, content
+        end
     end
 
     local out = {}
@@ -835,29 +860,22 @@ function M.mergeQuoteCites(html)
         -- The attribution div must directly follow </blockquote> for it to
         -- belong to this quote.
         local after_close = skipWs(bq_close_end + 1)
-        local cite_open_start, cite_open_end = html:find('<div class="templatequotecite">', after_close)
-        if cite_open_start ~= after_close then
+        local _, cite_close_end, cite_content = findCiteDiv(after_close)
+        if not cite_content then
             table.insert(out, html:sub(pos, bq_close_end))
             pos = bq_close_end + 1
         else
-            local cite_close_start, cite_close_end = wutil.findMatchingClose(html, "div", cite_open_end)
-            if not cite_close_end then
-                table.insert(out, html:sub(pos, bq_close_end))
-                pos = bq_close_end + 1
-            else
-                local cite_content = html:sub(cite_open_end + 1, cite_close_start - 1)
-                -- Drop the web-layout inline style on the inner <p>.
-                cite_content = cite_content:gsub('(<p[^>]*%s)style%s*=%s*"[^"]*"', '%1')
-                cite_content = cite_content:gsub('<p style="[^"]*">', '<p>')
-                cite_content = cite_content:gsub('<p%s+>', '<p>')
+            -- Drop the web-layout inline style on the inner <p>.
+            cite_content = cite_content:gsub('(<p[^>]*%s)style%s*=%s*"[^"]*"', '%1')
+            cite_content = cite_content:gsub('<p style="[^"]*">', '<p>')
+            cite_content = cite_content:gsub('<p%s+>', '<p>')
 
-                table.insert(out, html:sub(pos, bq_start - 1))
-                table.insert(out, html:sub(bq_start, bq_open_end))
-                table.insert(out, html:sub(bq_open_end + 1, bq_close_start - 1))
-                table.insert(out, '<div class="wikireader-cite">' .. cite_content .. '</div>')
-                table.insert(out, '</blockquote>')
-                pos = cite_close_end + 1
-            end
+            table.insert(out, html:sub(pos, bq_start - 1))
+            table.insert(out, html:sub(bq_start, bq_open_end))
+            table.insert(out, html:sub(bq_open_end + 1, bq_close_start - 1))
+            table.insert(out, '<div class="wikireader-cite">' .. cite_content .. '</div>')
+            table.insert(out, '</blockquote>')
+            pos = cite_close_end + 1
         end
     end
     return table.concat(out)
