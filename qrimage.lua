@@ -27,6 +27,7 @@ deflated by KOReader's zlib binding (ffi/zlib).
 local bit = require("bit")
 local zlib = require("ffi/zlib")
 local qrencode = require("ffi/qrencode")
+local wutil = require("wikiutil")
 
 -- Display width/height, in CSS pixels, each QR image is given in the EPUB.
 -- (The embedded PNG is generated at a slightly higher resolution and scaled
@@ -43,11 +44,13 @@ M.DEFAULT_QR_SIZE = DEFAULT_QR_SIZE
 
 -- Image formats we are willing to background-download (lazy-image mode),
 -- with the mimetype their EPUB manifest item needs.
+-- webp thumbs exist, but crengine can't decode them, so they fall back to
+-- the 1x URL. GIFs are excluded on purpose: crengine renders them as a
+-- static first frame, which loses the only thing a GIF is there for.
 local EXT_MIMETYPE = {
     png = "image/png",
     jpg = "image/jpeg",
     jpeg = "image/jpeg",
-    gif = "image/gif",
     webp = "image/webp",
     svg = "image/svg+xml",
 }
@@ -317,17 +320,14 @@ local function makeQr(url, qr_images, qr_size)
     return string.format('<span class="wikireader-qrimg" data-qrindex="%d"></span>', index)
 end
 
--- Replaces one <img> tag with a lazy-image placeholder span recording
--- the image's download URL and displayed footprint. The EPUB builder
--- later swaps markers for real <img> tags whose zip entries don't exist
--- yet; lazyfetch.lua downloads them and swaps the zip in place. Returns
--- "" if the image has no usable URL/format (the caption survives).
--- Exposed for locmap.lua: its failure fallback emits the bare base map
--- as an ordinary lazy placeholder through the same mechanics.
-local function lazyImageTag(attrs, lazy_images, seen, section, hi_res, centered, infobox)
+-- Picks the URL lazyfetch should download for an <img> with these attrs:
+-- in hi-res mode the srcset's 2x/1.5x derivative (the 1x URL is returned
+-- as a failure fallback), else the 1x src. Returns the URL or nil if the
+-- tag has no usable src.
+local function pickDownloadSrc(attrs, hi_res)
     local src = attrs:match([[src%s*=%s*"([^"]*)"]])
     if not src or src:sub(1, 5) == "data:" then
-        return ""
+        return nil
     end
     if src:sub(1, 2) == "//" then
         src = "https:" .. src
@@ -337,8 +337,7 @@ local function lazyImageTag(attrs, lazy_images, seen, section, hi_res, centered,
     -- layout doesn't change (crengine just scales the sharper bitmap).
     -- The 1x URL is recorded as a fallback for lazyfetch to retry when the
     -- bigger variant fails (derivatives can fail where the 1x succeeds).
-    local download_src = src
-    local fallback
+    local download_src, fallback = src
     if hi_res then
         local srcset = attrs:match([[srcset%s*=%s*"([^"]*)"]])
         if srcset then
@@ -364,9 +363,31 @@ local function lazyImageTag(attrs, lazy_images, seen, section, hi_res, centered,
             end
         end
     end
-    local ext = download_src:gsub("%?.*$", ""):match(".*%.(%S%S%S?%S?%S?)$")
+    return download_src, fallback
+end
+
+-- True if an <img> with these attrs is both downloadable and displayable
+-- by crengine (the same rules lazyImageTag enforces before reserving a
+-- placeholder).
+local function usableLazyImg(attrs, hi_res)
+    local src = pickDownloadSrc(attrs, hi_res)
+    if not src then return false end
+    local ext = src:gsub("%?.*$", ""):match(".*%.(%S%S%S?%S?%S?)$")
     ext = ext and ext:lower()
-    if not ext or not EXT_MIMETYPE[ext] then
+    return ext ~= nil and EXT_MIMETYPE[ext] ~= nil
+end
+
+-- Replaces one <img> tag with a lazy-image placeholder span recording
+-- the image's download URL and displayed footprint. The EPUB builder
+-- later swaps markers for real <img> tags whose zip entries don't exist
+-- yet; lazyfetch.lua downloads them and swaps the zip in place. Returns
+-- "" for an image with no usable src/format; with the walker's
+-- drop_unsupported predicate the whole box is removed then, otherwise
+-- only the <img> vanishes (caption-only box). Returns "" for over-cap
+-- images in either case.
+local function lazyImageTag(attrs, lazy_images, seen, section, hi_res, centered, infobox)
+    local download_src, fallback = pickDownloadSrc(attrs, hi_res)
+    if not download_src then
         return ""
     end
     if seen[download_src] then
@@ -440,6 +461,12 @@ end
 --   treat_infobox_as_imagebox: also treat class=infobox subtrees as
 --     image-box context (lazy mode with "Show infoboxes": their kept
 --     media imgs become lazy placeholders).
+--   drop_unsupported: predicate over <img> attrs; before emitting an
+--     image box, the box's region is scanned and if ANY contained <img>
+--     fails the predicate, the whole box (caption included) is
+--     suppressed instead of leaving a caption-only stub. Infobox entries
+--     are exempt: losing an entire infobox over one bad image is worse
+--     than an empty cell.
 local function walkImageBoxes(html, img_fn, opts)
     -- HTML comments can contain arbitrary text that would confuse the tag
     -- walker (and are meaningless in the final document anyway).
@@ -534,6 +561,20 @@ local function walkImageBoxes(html, img_fn, opts)
                     entry.is_img = true
                     entry.is_infobox = true
                 end
+                -- Unusable-image boxes are suppressed whole, so their
+                -- captions don't dangle without the image they describe.
+                if opts.drop_unsupported and entry.is_img and not entry.is_infobox then
+                    local close_start = wutil.findMatchingClose(html, tagname, e)
+                    if close_start then
+                        local region = html:sub(e + 1, close_start - 1)
+                        for img_attrs in region:gmatch("<img([^>]*)>") do
+                            if opts.drop_unsupported(img_attrs) then
+                                entry.is_dropped = true
+                                break
+                            end
+                        end
+                    end
+                end
                 -- Suppression mode swallows the box and everything up to
                 -- its matching close tag (caption included).
                 if entry.is_dropped then
@@ -579,7 +620,10 @@ function M.replaceImagesWithLazy(html, lazy_images, hi_res, opts)
             return lazyImageTag(attrs, lazy_images, seen, section or 0, hi_res,
                 infobox, infobox)
         end,
-        { treat_infobox_as_imagebox = opts and opts.treat_infobox_as_imagebox })
+        { treat_infobox_as_imagebox = opts and opts.treat_infobox_as_imagebox,
+            drop_unsupported = function(attrs)
+                return not usableLazyImg(attrs, hi_res)
+            end })
 end
 
 -- Exposed for locmap.lua: builds a lazy placeholder span for arbitrary
