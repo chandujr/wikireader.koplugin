@@ -246,8 +246,8 @@ function M.buildEpub(epub_path, title, lang, callback)
                         "shortdescription" })
                 html = htmlclean.stripElementsByClass(html, "ul", { "gallery" })
             end
-            html = htmlclean.cleanElementClasses(html, "div", { "quotebox", "pullquote" }, { "floatleft", "floatright" },
-                true)
+            html = htmlclean.cleanElementClasses(html, "div", { "quotebox", "pullquote", "rquote" },
+                { "floatleft", "floatright" }, true)
             html = htmlclean.stripElementsByClass(html, "span", { "geo-inline-hidden" })
             html = htmlclean.mergeQuoteCites(html)
             -- "Disable hyperlinks": unwrap internal article links, keep
