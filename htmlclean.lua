@@ -1130,25 +1130,36 @@ end
 -- px cells would keep the slack to the right of the last cell (the row
 -- never looked centered). Rows whose cells aren't all px-widthed keep the
 -- template's own declarations.
+-- The share is equal for every cell in the row (e.g. 3 cells -> 33.33%
+-- each), not proportional to the template's px widths: crengine honors
+-- per-cell percentage widths in its table algorithm, and equal shares
+-- give the columns equal widths with captions wrapping inside them --
+-- proportional shares would keep the template's uneven layout (e.g. a
+-- wide first cell's longer caption holding its column wide).
 local function multiImageTransformRow(content, n_cols)
-    local wx = {}
-    local total = 0
+    local n_tsingle = 0
     local all_px = true
     for tag in content:gmatch("<div[^>]*>") do
         if tokenInClass(openTagClass(tag), "tsingle") then
-            local w = tsingleWidth(tag)
-            if w then
-                wx[#wx + 1] = w
-                total = total + w
-            else
+            if not tsingleWidth(tag) then
                 all_px = false
                 break
             end
+            n_tsingle = n_tsingle + 1
         end
     end
+    -- Cells whose px widths the engine can't use as a unit keep the
+    -- template's own declarations (which sizes the cell relative to
+    -- siblings via "max-width", crengine's next-widest driver).
+    -- A row with a single image spans the whole box: emit colspan instead
+    -- of a width:100% cell. crengine keeps the widest percent any cell
+    -- deposits on a column and rescales the others to fit, so a lone
+    -- 100% cell would double its column's share for every other row
+    -- (the unequal-columns bug); colspan cells don't feed the column
+    -- width algorithm.
+    local span_all = all_px and n_cols > 1 and n_tsingle == 1
     local out = {}
     local pos = 1
-    local cell = 0
     while true do
         local o_start, o_end = content:find("<div[^>]*>", pos)
         if not o_start then
@@ -1172,15 +1183,12 @@ local function multiImageTransformRow(content, n_cols)
                 -- the rewrite already provides the alignment via the
                 -- table's text-align:center, so the class must not survive.
                 :gsub('%s*class%s*=%s*"[^"]*"', '')
-            -- Replace the cell's fixed width with its percentage share of
-            -- the row (two decimals keeps the row sum at ~100 after
-            -- rounding); the inline width would otherwise defeat the
-            -- table's 100% reflow. Rows whose cells aren't all px-widthed
-            -- keep the template's own scaling behavior.
+            -- Replace the cell's fixed width with its equal share of the
+            -- row (two decimals); the inline width would otherwise defeat
+            -- the table's 100% reflow. Rows whose cells aren't all px-
+            -- widthed keep the template's own scaling behavior.
+            local kept = {}
             if all_px then
-                cell = cell + 1
-                local pct = string.format("%.2f", wx[cell] / total * 100)
-                local kept = {}
                 local style = td:match('style%s*=%s*"([^"]*)"') or ""
                 for decl in style:gmatch("[^;]+") do
                     if not decl:match('^%s*max%-width%s*:')
@@ -1188,11 +1196,16 @@ local function multiImageTransformRow(content, n_cols)
                         kept[#kept + 1] = decl
                     end
                 end
+                local rebuilt = table.concat(kept, ";")
+                if rebuilt ~= "" then rebuilt = rebuilt .. ";" end
+                local width_decl = span_all and ""
+                    or ("width:" .. string.format("%.2f", 100 / n_tsingle) .. "%")
                 td = td:gsub('(style%s*=%s*")([^"]*)(")', function(p, _, s)
-                    local rebuilt = table.concat(kept, ";")
-                    if rebuilt ~= "" then rebuilt = rebuilt .. ";" end
-                    return p .. rebuilt .. "width:" .. pct .. "%" .. s
+                    return p .. rebuilt .. width_decl .. s
                 end, 1)
+                if span_all then
+                    td = td:gsub("^<td", '<td colspan="' .. n_cols .. '"')
+                end
             end
             table.insert(out, addStyleProp(td, "vertical-align:top"))
             table.insert(out, inner)

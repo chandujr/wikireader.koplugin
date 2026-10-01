@@ -513,10 +513,11 @@ li.gallerybox {
    (no page split, and -- unlike the floated article layout -- full width),
    but with the dashed QR-box border. The template's inline width
    (e.g. 492px) is overridden below so very wide boxes never overflow the
-   page; the rewrite turns each cell's inline "width:NNNpx" into a
-   proportional percentage so the row of images fills the table
-   symmetrically, and margin auto centers the table itself (same pattern
-   as html5.css's table[align=center] presentational hint). */
+   page; the rewrite turns each cell's inline "width:NNNpx" into an
+   equal percentage share of its row so the columns come out of equal
+   width (captions then just wrap inside them), and margin auto centers
+   the table itself (same pattern as html5.css's table[align=center]
+   presentational hint). */
 table.wikireader-tmulti {
     border: 1px dashed #aaa;
     margin-left: auto !important;
