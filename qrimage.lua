@@ -324,7 +324,7 @@ end
 -- "" if the image has no usable URL/format (the caption survives).
 -- Exposed for locmap.lua: its failure fallback emits the bare base map
 -- as an ordinary lazy placeholder through the same mechanics.
-local function lazyImageTag(attrs, lazy_images, seen, section, hi_res, centered)
+local function lazyImageTag(attrs, lazy_images, seen, section, hi_res, centered, infobox)
     local src = attrs:match([[src%s*=%s*"([^"]*)"]])
     if not src or src:sub(1, 5) == "data:" then
         return ""
@@ -402,6 +402,7 @@ local function lazyImageTag(attrs, lazy_images, seen, section, hi_res, centered)
         style = style,
         section = section,
         fallback = fallback,
+        infobox = infobox,
     }
     seen[download_src] = { index = index, style = style }
     return string.format('<span class="wikireader-lazyimg" data-lazyindex="%d" style="%s"></span>',
@@ -574,16 +575,19 @@ end
 function M.replaceImagesWithLazy(html, lazy_images, hi_res, opts)
     local seen = {}
     return walkImageBoxes(html,
-        function(attrs, section, centered)
-            return lazyImageTag(attrs, lazy_images, seen, section or 0, hi_res, centered)
+        function(attrs, section, infobox)
+            return lazyImageTag(attrs, lazy_images, seen, section or 0, hi_res,
+                infobox, infobox)
         end,
         { treat_infobox_as_imagebox = opts and opts.treat_infobox_as_imagebox })
 end
 
 -- Exposed for locmap.lua: builds a lazy placeholder span for arbitrary
 -- <img> attrs, registering it in `lazy_images` like the walker does.
-function M.makeLazyImageTag(attrs, lazy_images, seen, section, hi_res, centered)
-    return lazyImageTag(attrs, lazy_images, seen, section or 0, hi_res, centered)
+-- (centered only centers the placeholder; infobox marks infobox media,
+-- which lazyfetch sizes differently.)
+function M.makeLazyImageTag(attrs, lazy_images, seen, section, hi_res, centered, infobox)
+    return lazyImageTag(attrs, lazy_images, seen, section or 0, hi_res, centered, infobox)
 end
 
 return M

@@ -33,6 +33,40 @@ local logger = require("logger")
 
 local PENDING_ENTRY = "OEBPS/wikireader-pending.json"
 
+-- Approximation for "enlargement would break the half-page height cap":
+-- the exact threshold is the device's page height/width ratio (~1.3-1.7),
+-- unknowable at build time. Images taller than this are never enlarged.
+local TALL_RATIO = 1.5
+
+-- Final inline style for a real image, derived from its reserved px
+-- footprint (style) and its context: the px height is dropped so crengine
+-- keeps the aspect ratio, and the height stays within half the page via a
+-- width limit of 50vh*(w/h) -- vh always resolves against the page height,
+-- even on a width property (crengine has no calc()/min() to express the
+-- height cap directly). Width rules:
+--   infobox media: at most 33% of the (full-width) cell, no floor;
+--   very tall images: no enlargement (the floor would fight the cap);
+--   everything else: at least 50% of the page width.
+local function realImageSizeStyle(style, infobox)
+    local w = tonumber(style:match("width%s*:%s*(%d+)px"))
+    local h = tonumber(style:match("height%s*:%s*(%d+)px"))
+    local size
+    if not (w and h and h > 0) then
+        size = infobox and "max-width:33%" or "min-width:50%"
+    elseif infobox then
+        size = "max-width:33%; max-height:50vh"
+    elseif h / w > TALL_RATIO then
+        size = string.format("max-width:%.2fvh", 50 * w / h)
+    else
+        size = string.format("min-width:50%%; max-width:%.2fvh", 50 * w / h)
+    end
+    style = style:gsub("height%s*:%s*%d+px%s*;?%s*", "")
+    style = style:gsub(";[%s]*;[%s]*", "; ")
+    style = style:gsub(";[%s]*$", ""):gsub("^;[%s]*", "")
+    if style ~= "" then style = style .. "; " end
+    return style .. size
+end
+
 local M = {}
 
 -- Returns the pending image list from `epub_path`, or nil if the EPUB has
@@ -109,7 +143,15 @@ local function swapInImages(epub_path, images, results)
         if content then
             ok_count = ok_count + 1
             -- Image arrived: point the img at the real file, and drop any
-            -- "loading" hint span left by earlier plugin versions.
+            -- "loading" hint span left by earlier plugin versions. The
+            -- reserved footprint swaps for the real sizing (see
+            -- realImageSizeStyle); the plain src swap below is a fallback
+            -- for tags without a style attribute right after src.
+            html = html:gsub('src="' .. loading_pat .. '" style="([^"]*)"',
+                function(style)
+                    return 'src="' .. img.imgpath .. '" style="'
+                        .. realImageSizeStyle(style, img.infobox) .. '"'
+                end)
             html = html:gsub('src="' .. loading_pat .. '"', 'src="' .. img.imgpath .. '"')
             html = html:gsub('<span class="wikireader%-loading" data%-lazyindex="' .. idx .. '"[^>]*>.-</span>', "")
         elseif content == false then

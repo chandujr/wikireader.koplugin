@@ -471,6 +471,9 @@ function M.buildEpub(epub_path, title, lang, callback)
                     if img.fallback then
                         record.fallback = img.fallback
                     end
+                    if img.infobox then
+                        record.infobox = true
+                    end
                     pending[#pending + 1] = record
                 end
                 original_addFileFromMemory(self, "OEBPS/wikireader-pending.json", JSON.encode(pending), mtime)
