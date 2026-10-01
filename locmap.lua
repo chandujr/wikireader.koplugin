@@ -294,7 +294,11 @@ local function compositeLocMap(block, composites, opts)
         local srcset = " " .. (base_attrs:match([[srcset%s*=%s*"([^"]*)"]]) or "") .. ", "
         local variant = srcset:match([[ (%S+) 2x, ]]) or srcset:match([[ (%S+) 1.5x, ]])
         local vurl = variant and absoluteUrl(variant)
-        if vurl and vurl ~= src then
+        -- Thumb URLs carry the rendered width ("/960px-..."); if the
+        -- variant exceeds MAX_DECODED_WIDTH it would be refused at decode
+        -- time, so use the 1x src instead of wasting the download.
+        local vw = variant and tonumber(variant:match("/(%d+)px%-"))
+        if vurl and vurl ~= src and (not vw or vw <= MAX_DECODED_WIDTH) then
             url = vurl
         end
     end
