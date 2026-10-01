@@ -337,7 +337,7 @@ local function pickDownloadSrc(attrs, hi_res)
     -- layout doesn't change (crengine just scales the sharper bitmap).
     -- The 1x URL is recorded as a fallback for lazyfetch to retry when the
     -- bigger variant fails (derivatives can fail where the 1x succeeds).
-    local download_src, fallback = src
+    local download_src, fallback = src, nil
     if hi_res then
         local srcset = attrs:match([[srcset%s*=%s*"([^"]*)"]])
         if srcset then
@@ -388,6 +388,11 @@ end
 local function lazyImageTag(attrs, lazy_images, seen, section, hi_res, centered, infobox)
     local download_src, fallback = pickDownloadSrc(attrs, hi_res)
     if not download_src then
+        return ""
+    end
+    local ext = download_src:gsub("%?.*$", ""):match(".*%.(%S%S%S?%S?%S?)$")
+    ext = ext and ext:lower()
+    if not ext or not EXT_MIMETYPE[ext] then
         return ""
     end
     if seen[download_src] then
