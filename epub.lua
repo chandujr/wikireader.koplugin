@@ -1172,16 +1172,17 @@ function M.buildMainPageEpub(date_str, lang, sections, image_mode, qr_images, la
     elseif image_mode == "show" and lazy_images and next(lazy_images) then
         extras = { files = {}, manifest_items = {} }
         local seen_loading = {}
-        html_content = html_content:gsub('<span class="wikireader%-lazyimg" data%-lazyindex="(%d+)"[^>]*></span>', function(idx)
-            local img = lazy_images[tonumber(idx)]
-            if not img then return "" end
-            local loading_src = img.imgpath .. ".loading.svg"
-            if not seen_loading[loading_src] then
-                seen_loading[loading_src] = true
-                table.insert(extras.files, { path = "OEBPS/" .. loading_src, content = LOADING_SVG })
-            end
-            return string.format('<img src="%s" style="%s" alt=""/>', loading_src, img.style or "")
-        end)
+        html_content = html_content:gsub('<span class="wikireader%-lazyimg" data%-lazyindex="(%d+)"[^>]*></span>',
+            function(idx)
+                local img = lazy_images[tonumber(idx)]
+                if not img then return "" end
+                local loading_src = img.imgpath .. ".loading.svg"
+                if not seen_loading[loading_src] then
+                    seen_loading[loading_src] = true
+                    table.insert(extras.files, { path = "OEBPS/" .. loading_src, content = LOADING_SVG })
+                end
+                return string.format('<img src="%s" style="%s" alt=""/>', loading_src, img.style or "")
+            end)
         local pending = {}
         for i, img in ipairs(lazy_images) do
             table.insert(extras.manifest_items, string.format(
@@ -1192,8 +1193,10 @@ function M.buildMainPageEpub(date_str, lang, sections, image_mode, qr_images, la
             if img.fallback then record.fallback = img.fallback end
             pending[#pending + 1] = record
         end
-        table.insert(extras.files, { path = "OEBPS/wikireader-pending.json",
-            content = require("json").encode(pending) })
+        table.insert(extras.files, {
+            path = "OEBPS/wikireader-pending.json",
+            content = require("json").encode(pending)
+        })
     end
 
     local css = FRONTPAGE_CSS .. [[

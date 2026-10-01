@@ -620,10 +620,12 @@ function M.replaceImagesWithLazy(html, lazy_images, hi_res, opts)
             return lazyImageTag(attrs, lazy_images, seen, section or 0, hi_res,
                 infobox, infobox)
         end,
-        { treat_infobox_as_imagebox = opts and opts.treat_infobox_as_imagebox,
+        {
+            treat_infobox_as_imagebox = opts and opts.treat_infobox_as_imagebox,
             drop_unsupported = function(attrs)
                 return not usableLazyImg(attrs, hi_res)
-            end })
+            end
+        })
 end
 
 -- Exposed for locmap.lua: builds a lazy placeholder span for arbitrary
