@@ -198,6 +198,47 @@ function M.stripEditSectionLinks(html)
 end
 
 --[[-------------------------------------------------------------------------
+Absolute-positioned overlay divs
+--]]
+
+-- {{Image label}} overlays (the "BC / AB / ..." province tags on infobox
+-- locator maps and similar positioned labels) are inline
+-- style="position: absolute" divs; crengine ignores absolute positioning,
+-- so they stack into a text column above the orphaned base map. They are
+-- children of the position:relative wrapper and siblings of the map <img>,
+-- so dropping them keeps just the map. Marker overlays of the compositable
+-- Template:Location map (handled by locmap.lua) always carry a class
+-- attribute ("od"), so the class-less requirement leaves those untouched.
+function M.stripPositionedOverlays(html)
+    local out = {}
+    local pos = 1
+    while true do
+        local open_start, open_end = html:find("<div[^>]*>", pos)
+        if not open_start then
+            table.insert(out, html:sub(pos))
+            break
+        end
+        local open_tag = html:sub(open_start, open_end):lower()
+        local style = open_tag:match([[style%s*=%s*"([^"]*)"]]) or ""
+        local is_overlay = not open_tag:find("class%s*=" , 1, false)
+            and style:find("position%s*:%s*absolute")
+        if not is_overlay then
+            table.insert(out, html:sub(pos, open_end))
+            pos = open_end + 1
+        else
+            local _, close_end = wutil.findMatchingClose(html, "div", open_end)
+            if not close_end then
+                table.insert(out, html:sub(pos))
+                break
+            end
+            table.insert(out, html:sub(pos, open_start - 1))
+            pos = close_end + 1
+        end
+    end
+    return table.concat(out)
+end
+
+--[[-------------------------------------------------------------------------
 Element class cleaning (keep element, remove/modify classes)
 --]]
 

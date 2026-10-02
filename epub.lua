@@ -209,6 +209,11 @@ function M.buildEpub(epub_path, title, lang, callback)
             -- just before it. Matched by id (MediaWiki emits
             -- id="Timeline-row").
             html = htmlclean.stripElementsByAttr(html, "div", "id", { "timeline-row" })
+            -- Position:absolute label overlays ({{Image label}} map tags)
+            -- stack into a text column in crengine; drop them in every
+            -- mode, before any image pass can turn their content into
+            -- placeholders. Must run before locmap.replaceLocMaps.
+            html = htmlclean.stripPositionedOverlays(html)
 
             html = htmlclean.cleanElementClasses(html, "table", { "wikitable" }, { "floatleft", "floatright" },
                 forceFullWidthStyle)
