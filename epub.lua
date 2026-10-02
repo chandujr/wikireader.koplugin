@@ -37,6 +37,17 @@ local LOADING_SVG =
 </g>
 </svg>]]
 
+-- KOReader paints table headers/captions with absolute greys (th #DDD,
+-- caption #EEE, in its embedded Wikipedia stylesheet and base
+-- data/epub.css alike). Author-origin rules override those but not
+-- Wikipedia's own inline cell colors, so intentional template coloring
+-- survives; needs the EPUB's "Embedded Style" to be on (the default).
+local THEME_SAFE_TABLE_CSS = [[
+th, table caption {
+  background-color: rgba(0,0,0,0.04);
+}
+]]
+
 --[[-------------------------------------------------------------------------
 Full article EPUB builder
 --]]
@@ -343,7 +354,7 @@ function M.buildEpub(epub_path, title, lang, callback)
             if short_description and short_description ~= "" then
                 content = content:gsub(
                     '(<h1[^>]*>.-</h1>)',
-                    '%1\n<div style="font-style:italic; color:#666; margin-top:0.2em; margin-bottom:1em; text-align:center;">' ..
+                    '%1\n<div style="font-style:italic; color:rgba(0,0,0,0.6); margin-top:0.2em; margin-bottom:1em; text-align:center;">' ..
                     short_description .. '</div>'
                 )
             end
@@ -500,7 +511,7 @@ function M.buildEpub(epub_path, title, lang, callback)
             -- A QR PNG is a flat rectangle with no strut, so without this
             -- it would sit flush against the top border. The base stylesheet
             -- also boxes thumbnails with "border: dotted 1px black"; restyle
-            -- all QR boxes to a lighter dashed border to match the notices.
+            -- all QR boxes to a dashed border to match the notices.
             -- Lazy mode reuses the same figure/gallery styling: the base
             -- stylesheet was built with images off, so the same padding fix
             -- applies while the placeholder has no image yet.
@@ -527,7 +538,7 @@ li.gallerybox {
    the table itself (same pattern as html5.css's table[align=center]
    presentational hint). */
 table.wikireader-tmulti {
-    border: 1px dashed #aaa;
+    border: 1px dashed rgba(0,0,0,0.33);
     margin-left: auto !important;
     margin-right: auto !important;
     margin-top: 0.5em !important;
@@ -553,7 +564,7 @@ table.wikireader-tmulti > tr > td {
    those classes. */
 figure[typeof~='mw:File/Thumb'],
 figure[typeof~='mw:File/Frame'] {
-    border: 1px dashed #aaa;
+    border: 1px dashed rgba(0,0,0,0.33);
     width: 100% !important;
     max-width: 100% !important;
     margin: 0.5em 0 0.5em 0 !important;
@@ -567,7 +578,7 @@ body > div:dir(rtl) > figure[typeof~='mw:File/Frame'] {
     margin: 0.5em 0 0.5em 0 !important;
 }
 li.gallerybox {
-    border: 1px dashed #aaa;
+    border: 1px dashed rgba(0,0,0,0.33);
     width: 100% !important;
     margin: 0.5em 0 0.5em 0 !important;
     /* The base stylesheet's gallery centering lives only in child-
@@ -639,18 +650,22 @@ table.infobox {
             end
             content = content .. [[
 
+/* Borders, box shading and muted text use translucent black rather than
+   opaque greys: crengine composites rgba() over whatever page background
+   the user picked, so the tint blends into the theme (on white these
+   render as the old #aaa/#ccc/#888/#666/#f4f4f4 greys). */
+
 /* Editor furniture stays visible but recedes next to body prose:
    reference marks ([12], [b]) and inline maintenance markers
-   ([citation needed]) are annotations, not article content. Gray is
-   also what makes them less prominent on grayscale e-ink. */
+   ([citation needed]) are annotations, not article content. */
 sup.reference,
 sup.noprint,
 span.mw-editsection {
-  color: #888;
+  color: rgba(0,0,0,0.47);
 }
 
 .wikireader-notices {
-  border: 1px solid #aaa;
+  border: 1px solid rgba(0,0,0,0.33);
   padding: 0.6em 0.8em;
   margin: 0 0 1em 0;
   font-style: italic;
@@ -658,8 +673,8 @@ span.mw-editsection {
 }
 
 blockquote {
-  background: #f4f4f4;
-  border-left: 3px solid #ccc;
+  background: rgba(0,0,0,0.04);
+  border-left: 3px solid rgba(0,0,0,0.2);
   padding: 0.5em 0.8em;
   margin: 0.5em 0;
   font-style: italic;
@@ -669,8 +684,8 @@ blockquote {
    (e.g. Binary search). Inline <code> is deliberately not styled:
    crengine forces display:inline and doesn't paint inline backgrounds. */
 pre {
-  background: #f4f4f4;
-  border: 1px solid #ccc;
+  background: rgba(0,0,0,0.04);
+  border: 1px solid rgba(0,0,0,0.2);
   padding: 0.5em 0.8em;
   page-break-inside: avoid;
 }
@@ -678,7 +693,7 @@ pre {
 /* Inline code snippets in prose get the same shading as block code; a
    full border/padding box reads as clutter at inline size. */
 code {
-  background: #f4f4f4;
+  background: rgba(0,0,0,0.04);
 }
 
 /* Droid Sans Mono's glyphs run taller than the default serif at the
@@ -715,15 +730,15 @@ pre, code {
    reads as a distinct "display" unit. Inline formulas are unaffected:
    crengine does not paint backgrounds on inline boxes. */
 .wikireader-math {
-  background: #f4f4f4;
-  border: 1px solid #ccc;
+  background: rgba(0,0,0,0.04);
+  border: 1px solid rgba(0,0,0,0.2);
   padding: 0.5em 0.8em;
   page-break-inside: avoid;
 }
 
 .wikireader-mathimg {
-  background: #f4f4f4;
-  border: 1px solid #ccc;
+  background: rgba(0,0,0,0.04);
+  border: 1px solid rgba(0,0,0,0.2);
   padding: 0.5em 0.8em;
   page-break-inside: avoid;
 }
@@ -737,7 +752,7 @@ pre, code {
 pre.wikireader-cladogram {
   font-size: 80%;
   line-height: 1.25;
-  border: 1px solid #888;
+  border: 1px solid rgba(0,0,0,0.47);
   padding: 0.6em 0.8em;
   margin: 0 0 1em 0;
   page-break-inside: avoid;
@@ -760,6 +775,7 @@ pre.wikireader-cladogram {
 }
 ]]
         end
+        content = content .. THEME_SAFE_TABLE_CSS
         return original_addFileFromMemory(self, entry_path, content, mtime)
     end
 
@@ -852,7 +868,7 @@ local function writeSinglePageEpub(epub_path, title, lang, bookid_prefix, html_c
     end
     epub:addFileFromMemory("OEBPS/content.opf", opf, mtime)
     epub:addFileFromMemory("OEBPS/content.html", html_content, mtime)
-    epub:addFileFromMemory("OEBPS/stylesheet.css", css, mtime)
+    epub:addFileFromMemory("OEBPS/stylesheet.css", css .. THEME_SAFE_TABLE_CSS, mtime)
     if extras then
         for _, file in ipairs(extras.files or {}) do
             epub:addFileFromMemory(file.path, file.content, mtime)
@@ -1210,7 +1226,7 @@ function M.buildMainPageEpub(date_str, lang, sections, image_mode, qr_images, la
     local css = FRONTPAGE_CSS .. [[
 h2.wikireader-mainpage-section {
   font-size: 120%;
-  border-bottom: 1px solid #aaa;
+  border-bottom: 1px solid rgba(0,0,0,0.33);
   padding-bottom: 0.2em;
   margin-top: 1em;
 }
@@ -1227,7 +1243,7 @@ div.itn-img, div.dyk-img, #mp-otd-img {
   margin: 0.5em 0;
 }
 div.thumbinner {
-  border: 1px dashed #aaa;
+  border: 1px dashed rgba(0,0,0,0.33);
   padding: 4px;
   width: 100%;
   text-align: center;

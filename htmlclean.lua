@@ -806,12 +806,11 @@ local function isBorderedTableClass(class_attr)
         or lower:find("wikitable", 1, true) ~= nil
 end
 
--- Borders kept infobox and wikitable tables as grids: outer edge
--- (#a2a9b1, Wikipedia's infobox/table gray) + border-collapse on the
--- <table>, thin #ccc separators on every cell, plus the cell padding of
--- Wikipedia's own .wikitable rule (0.2em 0.4em) -- crengine has no default
--- cell padding, so text would otherwise sit flush against the borders.
--- All inline, because
+-- Borders kept infobox and wikitable tables as grids: outer edge and
+-- border-collapse on the <table>, thin dashed separators on every cell,
+-- plus the cell padding of Wikipedia's own .wikitable rule (0.2em 0.4em)
+-- -- crengine has no default cell padding, so text would otherwise sit
+-- flush against the borders. All inline, because
 -- crengine ignores descendant selectors in the EPUB stylesheet (the same
 -- reason centerInfoboxCells works inline): a CSS ".wikitable td" rule
 -- never matches, and injected stylesheet rules vanish entirely when the
@@ -838,10 +837,10 @@ function M.borderTableCells(html)
         else
             table.insert(out, html:sub(pos, t_start - 1))
             table.insert(out, M.addInlineStyle(open_tag,
-                "border:1px solid #a2a9b1;border-collapse:collapse"))
+                "border:1px solid rgba(0,0,0,0.33);border-collapse:collapse"))
             table.insert(out, (html:sub(t_open_end + 1, close_start - 1):gsub(
                 '(<t[dh][^>]*>)', function(tag)
-                    return M.addInlineStyle(tag, "border:1px dashed #aaa;padding:0.2em 0.4em")
+                    return M.addInlineStyle(tag, "border:1px dashed rgba(0,0,0,0.33);padding:0.2em 0.4em")
                 end)))
             table.insert(out, html:sub(close_start, close_end))
             pos = close_end + 1
