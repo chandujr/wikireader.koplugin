@@ -38,6 +38,11 @@ local PENDING_ENTRY = "OEBPS/wikireader-pending.json"
 -- unknowable at build time. Images taller than this are never enlarged.
 local TALL_RATIO = 1.5
 
+-- Reserved footprints narrower than this keep their px width: the 50%
+-- floor exists to make real media readable, and would stretch an 18px
+-- legend square or inline symbol across half the page.
+local MIN_ENLARGE_WIDTH = 100
+
 -- Final inline style for a real image, derived from its reserved px
 -- footprint (style) and its context: the px height is dropped so crengine
 -- keeps the aspect ratio, and the height stays within half the page via a
@@ -55,6 +60,8 @@ local function realImageSizeStyle(style, infobox)
         size = infobox and "max-width:33%" or "min-width:50%"
     elseif infobox then
         size = "max-width:33%; max-height:50vh"
+    elseif w < MIN_ENLARGE_WIDTH then
+        size = ""
     elseif h / w > TALL_RATIO then
         size = string.format("max-width:%.2fvh", 50 * w / h)
     else
@@ -63,6 +70,9 @@ local function realImageSizeStyle(style, infobox)
     style = style:gsub("height%s*:%s*%d+px%s*;?%s*", "")
     style = style:gsub(";[%s]*;[%s]*", "; ")
     style = style:gsub(";[%s]*$", ""):gsub("^;[%s]*", "")
+    if size == "" then
+        return style
+    end
     if style ~= "" then style = style .. "; " end
     return style .. size
 end

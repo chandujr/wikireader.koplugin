@@ -786,6 +786,17 @@ function M.centerInfoboxCells(html)
     end))
 end
 
+-- Sizes Template:Legend color chips (<span class="legend-color">) inline.
+-- Their box comes from a TemplateStyles <style> block crengine never
+-- applies, so the chip's inline background-color renders as a one-space-
+-- wide strip the height of a text line instead of a small square.
+function M.styleLegendChips(html)
+    return (html:gsub('(<span[^>]*class%s*=%s*"[^"]*legend%-color[^"]*"[^>]*>)', function(tag)
+        return M.addInlineStyle(tag,
+            "display:inline-block; width:1.25em; height:1.25em; border:1px solid black")
+    end))
+end
+
 -- Tables that render as bordered grids: kept infoboxes and wikitables
 -- (Wikipedia's own bordered data tables). Other tables in article HTML are
 -- layout or message boxes and are left alone.

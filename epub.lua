@@ -192,6 +192,9 @@ function M.buildEpub(epub_path, title, lang, callback)
 
             -- Star icons must become text before any media pass can blank them.
             html = htmlclean.ratingStarsToText(html)
+            -- Legend color chips are TemplateStyles-sized; size them inline
+            -- instead (see styleLegendChips).
+            html = htmlclean.styleLegendChips(html)
 
             -- Strip clutter tables: chronology/nav/sidebar/route-map boxes
             -- are always dropped; infoboxes only while full-width mode is
