@@ -774,8 +774,8 @@ pre.wikireader-cladogram {
   margin: 0 0 1em 0;
 }
 ]]
+            content = content .. THEME_SAFE_TABLE_CSS
         end
-        content = content .. THEME_SAFE_TABLE_CSS
         return original_addFileFromMemory(self, entry_path, content, mtime)
     end
 
