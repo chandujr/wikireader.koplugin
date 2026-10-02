@@ -33,25 +33,26 @@ local logger = require("logger")
 
 local PENDING_ENTRY = "OEBPS/wikireader-pending.json"
 
--- Approximation for "enlargement would break the half-page height cap":
--- the exact threshold is the device's page height/width ratio (~1.3-1.7),
--- unknowable at build time. Images taller than this are never enlarged.
-local TALL_RATIO = 1.5
+-- Images are capped at HEIGHT_CAP_VH of the page height, expressed as a
+-- min/max width of HEIGHT_CAP_VH*vh*(w/h) (see realImageSizeStyle).
+local HEIGHT_CAP_VH = 40
 
--- Reserved footprints narrower than this keep their px width: the 50%
--- floor exists to make real media readable, and would stretch an 18px
--- legend square or inline symbol across half the page.
+-- Reserved footprints narrower than this keep their px width: the cap
+-- width would stretch an 18px legend square or inline symbol well beyond
+-- its real size.
 local MIN_ENLARGE_WIDTH = 100
 
--- Final inline style for a real image, derived from its reserved px
--- footprint (style) and its context: the px height is dropped so crengine
--- keeps the aspect ratio, and the height stays within half the page via a
--- width limit of 50vh*(w/h) -- vh always resolves against the page height,
--- even on a width property (crengine has no calc()/min() to express the
--- height cap directly). Width rules:
+-- Final inline style for a real image, from its reserved px footprint
+-- (style) and its context: the px height is dropped so crengine keeps the
+-- aspect ratio. The height cap is expressed as a min/max width of
+-- HEIGHT_CAP_VH*vh*(w/h) -- the width at which a w:h-locked image is
+-- exactly that tall (vh resolves against the page height even on a width
+-- property; crengine has no calc()/min()). Floor and cap are the same
+-- value on purpose: crengine (per the CSS spec) applies min-width after
+-- max-width, so a separate wider floor would silently override the cap.
 --   infobox media: at most 33% of the (full-width) cell, no floor;
---   very tall images: no enlargement (the floor would fight the cap);
---   everything else: at least 50% of the page width.
+--   everything else: the cap width -- wide images overflow it and render
+--   full-width, still under the height cap.
 local function realImageSizeStyle(style, infobox)
     local w = tonumber(style:match("width%s*:%s*(%d+)px"))
     local h = tonumber(style:match("height%s*:%s*(%d+)px"))
@@ -59,13 +60,12 @@ local function realImageSizeStyle(style, infobox)
     if not (w and h and h > 0) then
         size = infobox and "max-width:33%" or "min-width:50%"
     elseif infobox then
-        size = "max-width:33%; max-height:50vh"
+        size = "max-width:33%; max-height:40vh"
     elseif w < MIN_ENLARGE_WIDTH then
         size = ""
-    elseif h / w > TALL_RATIO then
-        size = string.format("max-width:%.2fvh", 50 * w / h)
     else
-        size = string.format("min-width:50%%; max-width:%.2fvh", 50 * w / h)
+        local cap = string.format("%.2fvh", HEIGHT_CAP_VH * w / h)
+        size = "min-width:" .. cap .. "; max-width:" .. cap
     end
     style = style:gsub("height%s*:%s*%d+px%s*;?%s*", "")
     style = style:gsub(";[%s]*;[%s]*", "; ")
