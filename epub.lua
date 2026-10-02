@@ -253,6 +253,9 @@ function M.buildEpub(epub_path, title, lang, callback)
             -- borderTableCells: crengine ignores descendant selectors, so
             -- stylesheet rules can't reach the cells).
             html = htmlclean.borderTableCells(html)
+            -- Tap-to-rotate hints (sentinel URLs handled in main.lua):
+            -- crengine can only squish wide tables into the portrait width.
+            html = htmlclean.addRotateHints(html)
             if qr_enabled or lazy_enabled then
                 -- Keep media boxes intact: their images become QR codes or
                 -- lazy placeholders.
@@ -772,6 +775,15 @@ pre.wikireader-cladogram {
 .wikireader-cladogram-caption {
   font-size: 85%;
   margin: 0 0 1em 0;
+}
+
+/* Tap-to-rotate hints (htmlclean.addRotateHints). Plain class rules only:
+   crengine ignores descendant selectors in the EPUB stylesheet. */
+.wikireader-rotate-hint {
+  text-align: center;
+  font-size: 75%;
+  color: rgba(0,0,0,0.47);
+  margin: 0.3em 0 0.2em 0;
 }
 ]]
             content = content .. THEME_SAFE_TABLE_CSS

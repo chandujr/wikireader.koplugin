@@ -411,7 +411,7 @@ end
 -- emblems) renders much larger or is a <table>/<figure>/<mapframe>/<video>
 -- /<audio> box. CSS classes can't tell them apart: a flag's
 -- <span typeof="mw:File"> wraps the same mw-file-description link as a
--- real thumbnail. Exposed for testing.
+-- real thumbnail.
 function M.removeInlineIcons(content)
     local out = {}
     local pos = 1
@@ -491,7 +491,6 @@ end
 -- line in Speciesbox/Taxobox rows). It duplicates the status text link
 -- right below it, so it is dropped like an inline icon; matched by image
 -- path, not size (it renders at 250px, beyond the <=24px heuristic).
--- Exposed for testing.
 function M.isStatusBadgeImg(s)
     local src = s:lower():match('src%s*=%s*"([^"]*)"')
     return src ~= nil and src:find("/status_", 1, true) ~= nil
@@ -500,7 +499,6 @@ end
 -- True when the HTML `gap` between two cells holds only whitespace and
 -- row/table-section boundaries, i.e. the cells are adjacent. A <th> is
 -- never crossed: a section-header row breaks the caption relationship.
--- Exposed for testing.
 function M.directlyFollowsCell(gap)
     local bare = gap:gsub("</?t[rb][a-z]*[^<>]*>", ""):gsub("%s", "")
     return bare == ""
@@ -515,7 +513,7 @@ end
 -- their data table in such a full-width cell -- those must stay), and no
 -- media left (a real image cell keeps its own caption). Matched by
 -- style/class because Taxobox gives the cell no infobox-image/-caption
--- class. Exposed for testing.
+-- class.
 function M.isCaptionOnlyCell(open_tag, content)
     open_tag = open_tag:lower()
     if not open_tag:find("colspan") then
@@ -572,8 +570,7 @@ end
 -- a matching table, drop the media from genuine image/caption cells, but
 -- keep the text (names, links, footnotes, ...) of cells that merely carry
 -- a small inline flag beside their real content. With opts.keep_images,
--- non-image media only; image cells stay for the lazy walker. Exposed for
--- testing.
+-- non-image media only; image cells stay for the lazy walker.
 function M.stripImageCellsInBlock(block, opts)
     local out = {}
     local pos = 1
@@ -815,7 +812,7 @@ end
 -- reason centerInfoboxCells works inline): a CSS ".wikitable td" rule
 -- never matches, and injected stylesheet rules vanish entirely when the
 -- user disables "Embedded Style". Nested-table cells are included:
--- embedded layout/data tables read as part of the grid. Exposed for testing.
+-- embedded layout/data tables read as part of the grid.
 function M.borderTableCells(html)
     local out = {}
     local pos = 1
@@ -843,6 +840,58 @@ function M.borderTableCells(html)
                     return M.addInlineStyle(tag, "border:1px dashed rgba(0,0,0,0.33);padding:0.2em 0.4em")
                 end)))
             table.insert(out, html:sub(close_start, close_end))
+            pos = close_end + 1
+        end
+    end
+    return table.concat(out)
+end
+
+--[[-------------------------------------------------------------------------
+Table rotate hints
+--]]
+
+-- The hint line inserted above and below each data table; its links are
+-- sentinel URLs intercepted by main.lua's link handler.
+local function rotateHint()
+    return '<p class="wikireader-rotate-hint">'
+        .. '<a href="https://wikireader.invalid/rotate-ccw">Counterclockwise</a>'
+        .. ' &lt; Tap to Rotate Screen &gt; '
+        .. '<a href="https://wikireader.invalid/rotate-cw">Clockwise</a>'
+        .. '</p>'
+end
+
+-- Above and below each non-infobox table; recursion reaches tables
+-- nested inside an infobox's span. 
+function M.addRotateHints(html)
+    local out = {}
+    local pos = 1
+    while true do
+        local t_start, t_open_end = html:find("<table[^>]*>", pos)
+        if not t_start then
+            table.insert(out, html:sub(pos))
+            break
+        end
+        local open_tag = html:sub(t_start, t_open_end)
+        local class_attr = open_tag:match([[class%s*=%s*"([^"]*)"]]) or ""
+        local is_data_table = not class_attr:lower():find("infobox", 1, true)
+        local close_start, close_end
+        if is_data_table then
+            close_start, close_end = wutil.findMatchingClose(html, "table", t_open_end)
+        end
+        if not close_start then
+            table.insert(out, html:sub(pos, t_open_end))
+            pos = t_open_end + 1
+        else
+            table.insert(out, html:sub(pos, t_start - 1))
+            if is_data_table then
+                table.insert(out, rotateHint())
+            end
+            table.insert(out, open_tag)
+            table.insert(out, M.addRotateHints(html:sub(t_open_end + 1, close_start - 1)))
+            table.insert(out, html:sub(close_start, close_end))
+            if is_data_table then
+                table.insert(out, rotateHint())
+            end
             pos = close_end + 1
         end
     end

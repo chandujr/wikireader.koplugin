@@ -40,6 +40,7 @@ local DataStorage = require("datastorage")
 local Device = require("device")
 local Dispatcher = require("dispatcher")
 local DocSettings = require("docsettings")
+local Event = require("ui/event")
 local InfoMessage = require("ui/widget/infomessage")
 local InputDialog = require("ui/widget/inputdialog")
 local NetworkMgr = require("ui/network/manager")
@@ -227,6 +228,17 @@ function WikiReader:init()
         local wiki_reader_self = self
         local original_onGoToExternalLink = self.ui.link.onGoToExternalLink
         self.ui.link.onGoToExternalLink = function(link_self, link_url)
+            -- Sentinel URLs from htmlclean.addRotateHints: step the page
+            -- one notch in the tapped direction. Our labels describe the
+            -- visible page pivot, which is inverted vs KOReader's device-
+            -- turn naming (buffer rotation inverts the constants; see
+            -- fb:setRotationMode in ffi/framebuffer.lua).
+            if link_url:find("wikireader.invalid/rotate-", 1, true) then
+                local page_clockwise = link_url:find("rotate-cw", 1, true) ~= nil
+                wiki_reader_self.ui:handleEvent(Event:new("IterateRotation", page_clockwise))
+                return true
+            end
+
             local cat_section_index = wutil.parseCategoryLink(link_url)
             if cat_section_index then
                 local cat_title = categories.category_section_titles[cat_section_index]
