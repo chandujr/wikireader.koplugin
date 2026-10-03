@@ -220,7 +220,7 @@ function M.stripPositionedOverlays(html)
         end
         local open_tag = html:sub(open_start, open_end):lower()
         local style = open_tag:match([[style%s*=%s*"([^"]*)"]]) or ""
-        local is_overlay = not open_tag:find("class%s*=" , 1, false)
+        local is_overlay = not open_tag:find("class%s*=", 1, false)
             and style:find("position%s*:%s*absolute")
         if not is_overlay then
             table.insert(out, html:sub(pos, open_end))
@@ -866,7 +866,7 @@ local function rotateHint(is_top)
 end
 
 -- Above and below each non-infobox table; recursion reaches tables
--- nested inside an infobox's span. 
+-- nested inside an infobox's span.
 function M.addRotateHints(html)
     local out = {}
     local pos = 1
@@ -898,6 +898,76 @@ function M.addRotateHints(html)
             if is_data_table then
                 table.insert(out, rotateHint(false))
             end
+            pos = close_end + 1
+        end
+    end
+    return table.concat(out)
+end
+
+--[[-------------------------------------------------------------------------
+Column layout scaffolds ({{col-begin}} + {{col-2}}/{{col-break}}/{{col-end}})
+--]]
+
+-- Drops the tbody/tr/td scaffold of a column-layout table, keeping the
+-- cells' content in order: at scaffold level every element that isn't
+-- tr/td/tbody is a whole content element (section, table, ...) copied
+-- balanced, so the real tables' own rows survive untouched.
+local function unwrapColumnScaffold(inner)
+    local out = {}
+    local pos = 1
+    while true do
+        local tag_start, tag_end, name = inner:find("<([a-zA-Z]+)[^>]*>", pos)
+        if not tag_start then
+            table.insert(out, inner:sub(pos))
+            break
+        end
+        table.insert(out, inner:sub(pos, tag_start - 1))
+        if name:lower():find("^t[drb]") then
+            pos = tag_end + 1
+        else
+            local close_start, close_end = wutil.findMatchingClose(inner, name, tag_end)
+            if close_start then
+                table.insert(out, inner:sub(tag_start, close_end))
+                pos = close_end + 1
+            else
+                table.insert(out, inner:sub(tag_start, tag_end))
+                pos = tag_end + 1
+            end
+        end
+    end
+    return table.concat(out)
+end
+
+-- {{col-begin}} column layouts render as a role=presentation layout table
+-- whose cells hold real content tables; crengine honours the columns and
+-- squishes each into half the page. Dissolve the scaffold so the content
+-- stacks in normal flow at full width. Non-matching tables are copied
+-- verbatim (nested col-begin inside a table cell is not handled).
+function M.unwrapColumnLayouts(html)
+    local out = {}
+    local pos = 1
+    while true do
+        local t_start, t_open_end = html:find("<table[^>]*>", pos)
+        if not t_start then
+            table.insert(out, html:sub(pos))
+            break
+        end
+        local open_tag = html:sub(t_start, t_open_end)
+        local class_attr = (open_tag:match([[class%s*=%s*"([^"]*)"]]) or ""):lower()
+        local is_col_layout = class_attr:find("col-begin", 1, true) ~= nil
+        local close_start, close_end
+        if is_col_layout then
+            close_start, close_end = wutil.findMatchingClose(html, "table", t_open_end)
+        end
+        if not close_start then
+            table.insert(out, html:sub(pos, t_open_end))
+            pos = t_open_end + 1
+        elseif is_col_layout then
+            table.insert(out, html:sub(pos, t_start - 1))
+            table.insert(out, unwrapColumnScaffold(html:sub(t_open_end + 1, close_start - 1)))
+            pos = close_end + 1
+        else
+            table.insert(out, html:sub(pos, close_end))
             pos = close_end + 1
         end
     end

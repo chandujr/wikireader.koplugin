@@ -228,6 +228,11 @@ function M.buildEpub(epub_path, title, lang, callback)
             -- mode, before any image pass can turn their content into
             -- placeholders. Must run before locmap.replaceLocMaps.
             html = htmlclean.stripPositionedOverlays(html)
+            -- Column layouts (chart sections of music articles etc.) are
+            -- scaffolding tables crengine renders as real columns,
+            -- squishing the content tables into half-page cells; dissolve
+            -- them first so their content stacks full width.
+            html = htmlclean.unwrapColumnLayouts(html)
 
             html = htmlclean.cleanElementClasses(html, "table", { "wikitable" }, { "floatleft", "floatright" },
                 forceFullWidthStyle)
