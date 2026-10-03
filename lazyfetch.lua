@@ -242,9 +242,9 @@ local function downloadAll(images, on_all_done)
                     results[i] = res.body
                     UIManager:scheduleIn(0.05, nextImage)
                 elseif images[i].fallback then
-                    -- One retry with the original 1x URL: the 2x derivative
-                    -- can fail where the 1x serves fine, and without it the
-                    -- image would be lost entirely.
+                    -- One retry with the original 1x URL: the wider
+                    -- derivative can fail where the 1x serves fine, and
+                    -- without it the image would be lost entirely.
                     logger.warn("WikiReader lazy: retrying failed image with 1x fallback:", images[i].fallback)
                     client:request({ url = images[i].fallback }, function(fb)
                         if fb and fb.code == 200 and fb.body and #fb.body > 0 then
@@ -291,9 +291,9 @@ local function downloadAll(images, on_all_done)
                 -- LuaSocket traffic keeps the patched (tight) timeouts.
                 socketutil:reset_timeout()
                 if results[i] == nil and img.fallback then
-                    -- One retry with the original 1x URL: the 2x derivative
-                    -- can fail where the 1x serves fine, and without it the
-                    -- image would be lost entirely.
+                    -- One retry with the original 1x URL: the wider
+                    -- derivative can fail where the 1x serves fine, and
+                    -- without it the image would be lost entirely.
                     logger.warn("WikiReader lazy: retrying failed image with 1x fallback:", img.fallback)
                     local fb_sink = {}
                     pcall_ok = pcall(function()

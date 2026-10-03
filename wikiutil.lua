@@ -155,4 +155,18 @@ function M.formatApiDate(year, month, day)
     return string.format("%04d/%02d/%02d", year, month, day)
 end
 
+--[[-------------------------------------------------------------------------
+Settings helpers
+--]]
+
+-- Image quality for "Show images" mode: "high" (largest standard-size
+-- thumb, default), "mid" (2x srcset derivative) or "low" (1x src).
+function M.imageQuality()
+    local quality = G_reader_settings:readSetting("wikireader_image_quality")
+    if quality == "high" or quality == "mid" or quality == "low" then
+        return quality
+    end
+    return "high"
+end
+
 return M

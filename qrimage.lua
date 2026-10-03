@@ -59,6 +59,12 @@ local EXT_MIMETYPE = {
 -- every reserved box is a download plus reserved zip/memory space.
 local MAX_LAZY_IMAGES = 60
 
+-- Wikimedia's standard thumb widths (see [[Common thumbnail sizes]]):
+-- any other width gets a 400, so hi-res URL rewrites must snap to this.
+local THUMB_LADDER = { 20, 40, 60, 120, 250, 330, 500, 960, 1280, 1920, 3840 }
+-- Exposed for locmap.lua's hi-res rewrite (keeps the ladder in one place).
+M.THUMB_LADDER = THUMB_LADDER
+
 --[[-------------------------------------------------------------------------
 Minimal PNG writer (8-bit greyscale, zlib-compressed)
 --]]
@@ -321,9 +327,8 @@ local function makeQr(url, qr_images, qr_size)
 end
 
 -- Picks the URL lazyfetch should download for an <img> with these attrs:
--- in hi-res mode the srcset's 2x/1.5x derivative (the 1x URL is returned
--- as a failure fallback), else the 1x src. Returns the URL or nil if the
--- tag has no usable src.
+-- in mid/high quality a sharper derivative of the 1x src, else the 1x src
+-- itself. Returns the URL or nil if the tag has no usable src.
 local function pickDownloadSrc(attrs, hi_res)
     local src = attrs:match([[src%s*=%s*"([^"]*)"]])
     if not src or src:sub(1, 5) == "data:" then
@@ -332,33 +337,56 @@ local function pickDownloadSrc(attrs, hi_res)
     if src:sub(1, 2) == "//" then
         src = "https:" .. src
     end
-    -- Hi-res mode: download the srcset's 2x (or 1.5x) derivative like
-    -- KOReader's own highres option, keeping the reserved 1x footprint so
-    -- layout doesn't change (crengine just scales the sharper bitmap).
-    -- The 1x URL is recorded as a fallback for lazyfetch to retry when the
-    -- bigger variant fails (derivatives can fail where the 1x succeeds).
+    -- Sharper variants keep the reserved 1x footprint so layout doesn't
+    -- change (crengine just scales the sharper bitmap); the 1x src stays
+    -- as lazyfetch's failure fallback.
     local download_src, fallback = src, nil
-    if hi_res then
-        local srcset = attrs:match([[srcset%s*=%s*"([^"]*)"]])
-        if srcset then
-            -- " " and trailing ", " make the match patterns work for the
-            -- first/last srcset item too (same trick as ui/wikipedia.lua).
-            srcset = " " .. srcset .. ", "
-            local variant = srcset:match([[ (%S+) 2x, ]])
-            if not variant then
-                variant = srcset:match([[ (%S+) 1.5x, ]])
-            end
-            if variant then
-                if variant:sub(1, 2) == "//" then
-                    variant = "https:" .. variant
-                end
-                if variant ~= src then
-                    local vext = variant:gsub("%?.*$", ""):match(".*%.(%S%S%S?%S?%S?)$")
-                    vext = vext and vext:lower()
-                    if vext and EXT_MIMETYPE[vext] then
-                        download_src = variant
-                        fallback = src
+    if hi_res == "high" or hi_res == "mid" then
+        -- The srcset tops out at a ~960px "2x" entry, still low-res zoomed
+        -- in on E-ink; THUMB_LADDER's bigger standard sizes are the only
+        -- other widths Wikimedia serves (anything else gets a 400). So in
+        -- "high", rewrite the /NNNpx- thumb segment to the next step at or
+        -- above 4x the rendered width, clamped to the original's
+        -- data-file-width; "mid" and the no-rewrite fallback use the
+        -- srcset variant like KOReader's ui/wikipedia.lua.
+        local variant
+        local file_w = tonumber(attrs:match([[data%-file%-width%s*=%s*"(%d+)"]]))
+        local w = tonumber(src:match("/(%d+)px-"))
+        if w and hi_res == "high" then
+            -- Clamp to the original so tiny files aren't upscaled; the
+            -- step above the clamp may still be (up to ~33%, harmless).
+            local target = math.min(file_w or math.huge, w * 4)
+            for _, size in ipairs(THUMB_LADDER) do
+                if size >= target then
+                    if size > w then
+                        variant = src:gsub("/%d+px-", "/" .. size .. "px-")
                     end
+                    break
+                end
+            end
+        end
+        if not variant then
+            local srcset = attrs:match([[srcset%s*=%s*"([^"]*)"]])
+            if srcset then
+                -- " " and trailing ", " make the match patterns work for the
+                -- first/last srcset item too (same trick as ui/wikipedia.lua).
+                srcset = " " .. srcset .. ", "
+                variant = srcset:match([[ (%S+) 2x, ]])
+                if not variant then
+                    variant = srcset:match([[ (%S+) 1.5x, ]])
+                end
+            end
+        end
+        if variant then
+            if variant:sub(1, 2) == "//" then
+                variant = "https:" .. variant
+            end
+            if variant ~= src then
+                local vext = variant:gsub("%?.*$", ""):match(".*%.(%S%S%S?%S?%S?)$")
+                vext = vext and vext:lower()
+                if vext and EXT_MIMETYPE[vext] then
+                    download_src = variant
+                    fallback = src
                 end
             end
         end

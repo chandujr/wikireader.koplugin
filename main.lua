@@ -442,20 +442,50 @@ function WikiReader:addToMainMenu(menu_items)
                                 end,
                             },
                             {
-                                text = _("Higher resolution images"),
-                                keep_menu_open = true,
+                                text = _("Image quality"),
+                                help_text = _("Applies to articles opened or refetched after the change, and only while Show images is active."),
                                 enabled_func = function()
                                     local mode = G_reader_settings:readSetting("wikireader_image_mode")
                                     return not mode or mode == "show"
                                 end,
-                                checked_func = function()
-                                    return G_reader_settings:nilOrTrue("wikireader_hi_res")
-                                end,
-                                callback = function()
-                                    G_reader_settings:flipNilOrTrue("wikireader_hi_res")
-                                end,
-                                help_text = _(
-                                    "Downloads the 2x (double resolution) source of each image instead of the thumbnail - sharper when zoomed in, at the cost of larger downloads and EPUB files. Uncheck it for the smaller thumbnail-quality downloads. Applies to articles opened or refetched after the change, and only while Show images is active."),
+                                sub_item_table = {
+                                    {
+                                        text = _("Low"),
+                                        keep_menu_open = true,
+                                        radio = true,
+                                        checked_func = function()
+                                            return wutil.imageQuality() == "low"
+                                        end,
+                                        help_text = _("The displayed thumbnail only - smallest downloads and EPUB files."),
+                                        callback = function()
+                                            G_reader_settings:saveSetting("wikireader_image_quality", "low")
+                                        end,
+                                    },
+                                    {
+                                        text = _("Medium"),
+                                        keep_menu_open = true,
+                                        radio = true,
+                                        checked_func = function()
+                                            return wutil.imageQuality() == "mid"
+                                        end,
+                                        help_text = _("The 2x (double resolution) derivative of each image - sharper when zoomed in, larger downloads."),
+                                        callback = function()
+                                            G_reader_settings:saveSetting("wikireader_image_quality", "mid")
+                                        end,
+                                    },
+                                    {
+                                        text = _("High"),
+                                        keep_menu_open = true,
+                                        radio = true,
+                                        checked_func = function()
+                                            return wutil.imageQuality() == "high"
+                                        end,
+                                        help_text = _("The largest available standard-size derivative of each image (up to four times the displayed width, capped by the original file's resolution) - sharpest when zoomed in, largest downloads."),
+                                        callback = function()
+                                            G_reader_settings:saveSetting("wikireader_image_quality", "high")
+                                        end,
+                                    },
+                                },
                             },
                         },
                     },
@@ -1168,7 +1198,7 @@ function WikiReader:openMainPage()
                 qr_images = qr_images,
                 lazy_images = lazy_images,
                 qr_size = G_reader_settings:readSetting("wikireader_qr_size") or qrimage.DEFAULT_QR_SIZE,
-                hi_res = G_reader_settings:nilOrTrue("wikireader_hi_res"),
+                hi_res = wutil.imageQuality(),
             })
             UIManager:close(info)
 

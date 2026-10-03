@@ -287,19 +287,37 @@ local function compositeLocMap(block, composites, opts)
     end
     if #markers == 0 then return nil end
 
-    -- Download the 1x src, or the srcset's larger variant in hi-res mode
+    -- Download the 1x src, or a sharper derivative in mid/high quality
     -- (still emitting the 1x footprint, same as the lazy images).
     local url = src
-    if opts.hi_res then
-        local srcset = " " .. (base_attrs:match([[srcset%s*=%s*"([^"]*)"]]) or "") .. ", "
-        local variant = srcset:match([[ (%S+) 2x, ]]) or srcset:match([[ (%S+) 1.5x, ]])
-        local vurl = variant and absoluteUrl(variant)
-        -- Thumb URLs carry the rendered width ("/960px-..."); if the
-        -- variant exceeds MAX_DECODED_WIDTH it would be refused at decode
-        -- time, so use the 1x src instead of wasting the download.
-        local vw = variant and tonumber(variant:match("/(%d+)px%-"))
-        if vurl and vurl ~= src and (not vw or vw <= MAX_DECODED_WIDTH) then
-            url = vurl
+    if opts.hi_res == "high" or opts.hi_res == "mid" then
+        -- Same sharper-thumb rewrite as qrimage.pickDownloadSrc, snapped
+        -- to qrimage.THUMB_LADDER (any other width is a 400) and capped
+        -- at MAX_DECODED_WIDTH: without this the srcset's 960px "2x"
+        -- entry usually exceeds the cap and locmaps decode at 1x.
+        if opts.hi_res == "high" then
+            local file_w = tonumber(base_attrs:match([[data%-file%-width%s*=%s*"(%d+)"]]))
+            local wpx = tonumber(src:match("/(%d+)px-"))
+            if wpx and file_w and file_w > wpx then
+                local wider
+                for _, size in ipairs(qrimage.THUMB_LADDER) do
+                    if size > wpx and size <= file_w and size <= MAX_DECODED_WIDTH then
+                        wider = size
+                    end
+                end
+                if wider then
+                    url = src:gsub("/%d+px-", "/" .. wider .. "px-")
+                end
+            end
+        end
+        if url == src then
+            local srcset = " " .. (base_attrs:match([[srcset%s*=%s*"([^"]*)"]]) or "") .. ", "
+            local variant = srcset:match([[ (%S+) 2x, ]]) or srcset:match([[ (%S+) 1.5x, ]])
+            local vurl = variant and absoluteUrl(variant)
+            local vw = variant and tonumber(variant:match("/(%d+)px%-"))
+            if vurl and vurl ~= src and (not vw or vw <= MAX_DECODED_WIDTH) then
+                url = vurl
+            end
         end
     end
 

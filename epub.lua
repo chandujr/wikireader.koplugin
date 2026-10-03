@@ -83,10 +83,9 @@ function M.buildEpub(epub_path, title, lang, callback)
     -- to complete after the article opens.
     local lazy_enabled = image_mode == "show"
     local lazy_images = {}
-    -- Hi-res downloads (only in show mode): lazy images use the srcset's 2x
-    -- derivative instead of the 1x src. Default on: nilOrTrue, so the first
-    -- flip persists an explicit false rather than an opt-in true.
-    local hi_res = lazy_enabled and G_reader_settings:nilOrTrue("wikireader_hi_res")
+    -- Quality only matters in show mode: mid/high download a sharper
+    -- thumb derivative than the 1x src.
+    local hi_res = lazy_enabled and wutil.imageQuality()
     -- Read once at build scope: both the HTML-cleaning hook and the Archiver
     -- stylesheet hook below need it, and the Archiver hook must not read a
     -- bare global (that bug silently disabled the full-width infobox CSS).
