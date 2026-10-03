@@ -284,7 +284,11 @@ local function classify(tag, attrs)
         end
     elseif tag == "div" then
         local cls = className(attrs)
-        if cls:find("thumb") then
+        -- Substring "thumb" also matches thumbinner/thumbcaption, which are
+        -- content inside a thumbnail box, not boxes themselves -- a caption
+        -- div carries no media and must not count as an image box (the
+        -- no-media suppression would then drop the caption whole).
+        if cls:find("thumb") and not cls:find("thumbcaption") then
             return { tag = tag, is_img = true }
         end
     elseif tag == "li" then
