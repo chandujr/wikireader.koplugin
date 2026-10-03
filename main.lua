@@ -354,15 +354,13 @@ function WikiReader:addToMainMenu(menu_items)
                 callback = function()
                     self:openMainPage()
                 end,
-                help_text = _(
-                    "Today's English Wikipedia main page with its \"In the news\", \"Did you know\" and \"On this day\" sections, as a readable book. Tapping an article opens it like any other WikiReader article."),
             },
             {
                 text = _("Featured Articles"),
                 keep_menu_open = true,
                 separator = true,
                 help_text = _(
-                    "Read Wikipedia's featured article for today or a past date, or browse featured articles by category. This relies on the \"featured article of the day\" feed, which may be missing or unreliable for languages other than English."),
+                    "This relies on the \"featured article of the day\" feed, which may be missing or unreliable for languages other than English."),
                 sub_item_table = {
                     {
                         text = _("Today's Featured Article"),
@@ -443,7 +441,6 @@ function WikiReader:addToMainMenu(menu_items)
                             },
                             {
                                 text = _("Image quality"),
-                                help_text = _("Applies to articles opened or refetched after the change, and only while Show images is active."),
                                 enabled_func = function()
                                     local mode = G_reader_settings:readSetting("wikireader_image_mode")
                                     return not mode or mode == "show"
@@ -456,7 +453,6 @@ function WikiReader:addToMainMenu(menu_items)
                                         checked_func = function()
                                             return wutil.imageQuality() == "low"
                                         end,
-                                        help_text = _("The displayed thumbnail only - smallest downloads and EPUB files."),
                                         callback = function()
                                             G_reader_settings:saveSetting("wikireader_image_quality", "low")
                                         end,
@@ -468,7 +464,6 @@ function WikiReader:addToMainMenu(menu_items)
                                         checked_func = function()
                                             return wutil.imageQuality() == "mid"
                                         end,
-                                        help_text = _("The 2x (double resolution) derivative of each image - sharper when zoomed in, larger downloads."),
                                         callback = function()
                                             G_reader_settings:saveSetting("wikireader_image_quality", "mid")
                                         end,
@@ -480,7 +475,6 @@ function WikiReader:addToMainMenu(menu_items)
                                         checked_func = function()
                                             return wutil.imageQuality() == "high"
                                         end,
-                                        help_text = _("The largest available standard-size derivative of each image (up to four times the displayed width, capped by the original file's resolution) - sharpest when zoomed in, largest downloads."),
                                         callback = function()
                                             G_reader_settings:saveSetting("wikireader_image_quality", "high")
                                         end,
@@ -523,7 +517,7 @@ function WikiReader:addToMainMenu(menu_items)
                             G_reader_settings:flipNilOrFalse("wikireader_show_infoboxes")
                         end,
                         help_text = _(
-                            "Keep the summary tables (infoboxes) that appear at the top of many articles. With Show images or QR codes their pictures follow the image settings; with No images they are removed for a cleaner reading view."),
+                            "Keep the summary tables (infoboxes) that appear at the top of many articles. When \"Show images as QR codes\" option is selected, images inside are removed for a cleaner reading view."),
                     },
                     {
                         text = _("Disable hyperlinks"),
@@ -593,7 +587,7 @@ function WikiReader:addToMainMenu(menu_items)
                             })
                         end,
                         help_text = _(
-                            "Remove all cached WikiReader EPUB files and their reading progress. Closes the current article if one is open, so no leftover files remain."),
+                            "Remove all cached WikiReader EPUB files and their reading progress. Closes the current article if one is open."),
                     },
                     {
                         text = _("Gestures"),
@@ -610,7 +604,6 @@ function WikiReader:addToMainMenu(menu_items)
                         callback = function()
                             self:showAbout()
                         end,
-                        help_text = _("Show plugin name, description and version."),
                     },
                 },
                 separator = true,
@@ -620,6 +613,7 @@ function WikiReader:addToMainMenu(menu_items)
                 enabled_func = function()
                     return #history.getList() > 0
                 end,
+                help_text = _("Articles you opened recently. Tap to open; long-press to remove one."),
                 sub_item_table_func = function()
                     -- Built when the menu is opened, so it reflects opens
                     -- that happened after the main menu was registered.
@@ -673,7 +667,7 @@ function WikiReader:addToMainMenu(menu_items)
                     self:refetchCurrentArticle()
                 end,
                 help_text = _(
-                    "Delete the cached copy of the article you are reading and download it again, so the media, infobox and hyperlink settings in \"Settings\" also apply to it. Your reading position is kept."),
+                    "Delete the cached copy of the article you are reading and download it again. Your reading position is kept."),
             },
             {
                 text_func = function()
