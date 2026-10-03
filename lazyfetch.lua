@@ -35,7 +35,7 @@ local PENDING_ENTRY = "OEBPS/wikireader-pending.json"
 
 -- Images are capped at HEIGHT_CAP_VH of the page height, expressed as a
 -- min/max width of HEIGHT_CAP_VH*vh*(w/h) (see realImageSizeStyle).
-local HEIGHT_CAP_VH = 40
+local HEIGHT_CAP_VH = 33
 
 -- Reserved footprints narrower than this keep their px width: the cap
 -- width would stretch an 18px legend square or inline symbol well beyond
@@ -60,7 +60,7 @@ local function realImageSizeStyle(style, infobox)
     if not (w and h and h > 0) then
         size = infobox and "max-width:33%" or "min-width:50%"
     elseif infobox then
-        size = "max-width:33%; max-height:40vh"
+        size = "max-width:33%; max-height:33vh"
     elseif w < MIN_ENLARGE_WIDTH then
         size = ""
     else
