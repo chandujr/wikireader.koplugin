@@ -494,12 +494,14 @@ end
 --   treat_infobox_as_imagebox: also treat class=infobox subtrees as
 --     image-box context (lazy mode with "Show infoboxes": their kept
 --     media imgs become lazy placeholders).
---   drop_unsupported: predicate over <img> attrs; before emitting an
---     image box, the box's region is scanned and if ANY contained <img>
---     fails the predicate, the whole box (caption included) is
---     suppressed instead of leaving a caption-only stub. Infobox entries
---     are exempt: losing an entire infobox over one bad image is worse
---     than an empty cell.
+-- Blocks of media are suppressed whole when they contain no image -- a
+-- figure whose content is a <video>/<audio> (Parsoid types those
+-- mw:File/Thumb like images, so classify() can't tell) has nothing to
+-- show or encode, and keeping it would leave a caption-only stub.
+-- drop_unsupported additionally suppresses the box when ANY contained
+-- <img> fails the predicate (lazy mode: unusable format) instead of
+-- leaving a caption-only stub. Infobox entries are exempt: losing an
+-- entire infobox over one bad image is worse than an empty cell.
 local function walkImageBoxes(html, img_fn, opts)
     -- HTML comments can contain arbitrary text that would confuse the tag
     -- walker (and are meaningless in the final document anyway).
@@ -596,15 +598,20 @@ local function walkImageBoxes(html, img_fn, opts)
                 end
                 -- Unusable-image boxes are suppressed whole, so their
                 -- captions don't dangle without the image they describe.
-                if opts.drop_unsupported and entry.is_img and not entry.is_infobox then
+                if entry.is_img and not entry.is_infobox then
                     local close_start = wutil.findMatchingClose(html, tagname, e)
                     if close_start then
                         local region = html:sub(e + 1, close_start - 1)
+                        local any_img
                         for img_attrs in region:gmatch("<img([^>]*)>") do
-                            if opts.drop_unsupported(img_attrs) then
+                            any_img = true
+                            if opts.drop_unsupported and opts.drop_unsupported(img_attrs) then
                                 entry.is_dropped = true
                                 break
                             end
+                        end
+                        if not any_img then
+                            entry.is_dropped = true
                         end
                     end
                 end
