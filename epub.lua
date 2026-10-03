@@ -776,15 +776,6 @@ pre.wikireader-cladogram {
   font-size: 85%;
   margin: 0 0 1em 0;
 }
-
-/* Tap-to-rotate hints (htmlclean.addRotateHints). Plain class rules only:
-   crengine ignores descendant selectors in the EPUB stylesheet. */
-.wikireader-rotate-hint {
-  text-align: center;
-  font-size: 75%;
-  color: rgba(0,0,0,0.47);
-  margin: 0.3em 0 0.2em 0;
-}
 ]]
             content = content .. THEME_SAFE_TABLE_CSS
         end

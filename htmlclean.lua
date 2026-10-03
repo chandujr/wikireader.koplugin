@@ -850,10 +850,15 @@ end
 Table rotate hints
 --]]
 
--- The hint line inserted above and below each data table; its links are
--- sentinel URLs intercepted by main.lua's link handler.
-local function rotateHint()
-    return '<p class="wikireader-rotate-hint">'
+-- The hint line above/below each data table; sentinel URLs handled by
+-- main.lua. Inline-styled so it survives "Embedded Style" off (same as
+-- borderTableCells); margin only on the prose side, with the table's own
+-- margin zeroed inline, so the bar hugs the table edge.
+local function rotateHint(is_top)
+    return '<p style="text-align:center; text-indent:0; font-size:75%;'
+        .. ' color:rgba(0,0,0,0.47); background:rgba(0,0,0,0.04);'
+        .. ' border:1px solid rgba(0,0,0,0.2); padding:0.2em 0; '
+        .. (is_top and 'margin:0.6em 0 0 0' or 'margin:0 0 0.6em 0') .. '">'
         .. '<a href="https://wikireader.invalid/rotate-ccw">Counterclockwise</a>'
         .. ' &lt; Tap to Rotate Screen &gt; '
         .. '<a href="https://wikireader.invalid/rotate-cw">Clockwise</a>'
@@ -884,13 +889,14 @@ function M.addRotateHints(html)
         else
             table.insert(out, html:sub(pos, t_start - 1))
             if is_data_table then
-                table.insert(out, rotateHint())
+                open_tag = M.addInlineStyle(open_tag, "margin:0")
+                table.insert(out, rotateHint(true))
             end
             table.insert(out, open_tag)
             table.insert(out, M.addRotateHints(html:sub(t_open_end + 1, close_start - 1)))
             table.insert(out, html:sub(close_start, close_end))
             if is_data_table then
-                table.insert(out, rotateHint())
+                table.insert(out, rotateHint(false))
             end
             pos = close_end + 1
         end
