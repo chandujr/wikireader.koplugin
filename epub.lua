@@ -231,6 +231,13 @@ function M.buildEpub(epub_path, title, lang, callback)
 
             html = htmlclean.cleanElementClasses(html, "table", { "wikitable" }, { "floatleft", "floatright" },
                 forceFullWidthStyle)
+            -- {{Bar box}} charts render as a <div class="barbox" style=
+            -- "display:table; width:auto"> wrapping the real <table>, so
+            -- they miss the full-width forcing above and render
+            -- shrink-to-fit at the left margin. Same treatment, classes and
+            -- style: the div becomes a full-width block like every table.
+            html = htmlclean.cleanElementClasses(html, "div", { "barbox" }, { "floatleft", "floatright" },
+                forceFullWidthStyle)
             if infobox_full_width then
                 html = htmlclean.cleanElementClasses(html, "table", { "infobox" }, { "floatleft", "floatright" },
                     infoboxFullWidthStyle)
