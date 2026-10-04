@@ -1445,7 +1445,7 @@ local function multiImageTransformRow(content, n_cols)
                     td = td:gsub("^<td", '<td colspan="' .. n_cols .. '"')
                 end
             end
-            table.insert(out, addStyleProp(td, "vertical-align:top"))
+            table.insert(out, addStyleProp(td, "vertical-align:top;padding-left:6px;padding-right:6px"))
             table.insert(out, inner)
             table.insert(out, "</td>")
         elseif tokenInClass(cls, "theader") then
@@ -1521,15 +1521,20 @@ local function multiImageTransformRows(inner, n_cols)
     return table.concat(out)
 end
 
--- Rewrites one <div class="thumb tmulti ...">...</div> block into the same
--- wrapper div holding a <table> built from its .thumbinner content. Returns
--- the block unchanged (but harmless) if the structure isn't what we expect.
-local function multiImageToTable(wrapper)
+-- Extracts a multi-image box's transformable rows from its wrapper div:
+--   rows    the box's image rows as `<tr>...</tr>` strings
+--   lead    content between the wrapper div and the inner box (usually
+--           whitespace)
+--   trail   content between the inner box and the wrapper's close (usually
+--           empty; the wrapper's own `</div>` is NOT part of it)
+--   close   the wrapper's closing tag text (multiImageToTable re-appends it)
+--   inner   the raw .thumbinner/.multiimageinner content
+-- Returns nil if the structure isn't what we expect.
+local function multiImageRowContent(wrapper)
     local o_start, o_end = wrapper:find("^<div[^>]*>")
     if not o_start then
-        return wrapper
+        return nil
     end
-    local wrapper_open = wrapper:sub(o_start, o_end)
     local ti_start, ti_end = wrapper:find("<div[^>]*>", o_end)
     -- Modern Infobox settlement uses .multiimageinner instead of the
     -- legacy .thumbinner for the same inner-box role.
@@ -1537,24 +1542,115 @@ local function multiImageToTable(wrapper)
     if not ti_start
         or not (tokenInClass(inner_cls, "thumbinner")
             or tokenInClass(inner_cls, "multiimageinner")) then
-        return wrapper
+        return nil
     end
     local ti_close_start, ti_close_end = wutil.findMatchingClose(wrapper, "div", ti_end)
     if not ti_close_start then
-        return wrapper
+        return nil
     end
-    local ti_open = wrapper:sub(ti_start, ti_end)
-    local table_open = ti_open:gsub("^<div([ >])", "<table%1")
-        :gsub([[class%s*=%s*"[^"]*"]], 'class="wikireader-tmulti"', 1)
     local inner = wrapper:sub(ti_end + 1, ti_close_start - 1)
     local n_cols = multiImageColumnCount(inner)
-    local rows = multiImageTransformRows(inner, n_cols)
-    return wrapper_open
-        .. wrapper:sub(o_end + 1, ti_start - 1)
-        .. table_open
-        .. rows
-        .. "</table>"
-        .. wrapper:sub(ti_close_end + 1)
+    local w_close_start = wutil.findMatchingClose(wrapper, "div", o_end)
+    if not w_close_start then
+        return nil
+    end
+    return multiImageTransformRows(inner, n_cols),
+        wrapper:sub(o_end + 1, ti_start - 1),
+        wrapper:sub(ti_close_end + 1, w_close_start - 1),
+        wrapper:sub(w_close_start),
+        n_cols,
+        inner
+end
+
+-- Builds rows for the stacked/single-column form: one .tsingle per row,
+-- so each image lands in its own small atomic row. With table_open set,
+-- each row becomes its own standalone <table> (see multiImageToTable).
+-- Nested tables are NOT usable here: crengine never fragments a table
+-- nested inside another table's cell (the whole nested block is one
+-- unsplittable slice), and rows of one small single-column table glue
+-- together (each row under half the page width gets split-avoid flags),
+-- so the whole box would jump pages as one block.
+local function multiImageStackedRows(inner, table_open)
+    local out = {}
+    local pos = 1
+    while true do
+        local _, ws_end = inner:find("^%s*", pos)
+        pos = (ws_end or pos - 1) + 1
+        local o_start, o_end = inner:find("<div[^>]*>", pos)
+        if not o_start then
+            table.insert(out, inner:sub(pos))
+            break
+        end
+        table.insert(out, inner:sub(pos, o_start - 1))
+        local cls = openTagClass(inner:sub(o_start, o_end))
+        local c_start, c_end = wutil.findMatchingClose(inner, "div", o_end)
+        if not c_start then
+            table.insert(out, inner:sub(o_start))
+            break
+        end
+        local content = inner:sub(o_end + 1, c_start - 1)
+        if tokenInClass(cls, "trow") then
+            local spos = 1
+            while true do
+                local t_s, t_e = content:find("<div[^>]*>", spos)
+                if not t_s then
+                    break
+                end
+                local tcls = openTagClass(content:sub(t_s, t_e))
+                local tc_s, tc_e = wutil.findMatchingClose(content, "div", t_e)
+                if not tc_s then
+                    break
+                end
+                if tokenInClass(tcls, "tsingle") then
+                    -- Same cell treatment as multiImageTransformRow's tsingle
+                    -- branch (class strip, width decls dropped -- each row is
+                    -- full-width here, the image centers itself), but one cell
+                    -- per row: colspan would reintroduce phantom columns and
+                    -- take the infobox out of its single-column path.
+                    local td = content:sub(t_s, t_e):gsub("^<div([ >])", "<td%1")
+                        :gsub('%s*class%s*=%s*"[^"]*"', '')
+                    -- Drop the width decls inside the style value only
+                    -- (a bare [^;]+ would run past the closing quote when
+                    -- width is the attribute's last declaration).
+                    td = td:gsub('(style%s*=%s*")([^"]*)(")', function(p, v, s)
+                        return p
+                            .. v:gsub('%s*max%-width%s*:[^;"]+;?', '')
+                            :gsub('%s*width%s*:[^;"]+;?', '')
+                            .. s
+                    end, 1)
+                    td = addStyleProp(td, "text-align:center;vertical-align:top;padding-left:6px;padding-right:6px")
+                    local row = "<tr>" .. td .. content:sub(t_e + 1, tc_s - 1) .. "</td></tr>"
+                    if table_open then
+                        table.insert(out, table_open .. row .. "</table>")
+                    else
+                        table.insert(out, row)
+                    end
+                elseif tokenInClass(tcls, "theader") then
+                    local cell_style = content:sub(t_s, t_e):match('style%s*=%s*"([^"]*)"')
+                    local style = cell_style and cell_style ~= ""
+                        and cell_style .. ";text-align:center;font-weight:bold"
+                        or "text-align:center;font-weight:bold"
+                    local row = '<tr><td style="' .. style .. '">'
+                        .. content:sub(t_e + 1, tc_s - 1) .. "</td></tr>"
+                    if table_open then
+                        table.insert(out, table_open .. row .. "</table>")
+                    else
+                        table.insert(out, row)
+                    end
+                end
+                spos = tc_e + 1
+            end
+        elseif tokenInClass(cls, "thumbcaption") then
+            local row = '<tr><td style="text-align:center">' .. content .. "</td></tr>"
+            if table_open then
+                table.insert(out, table_open .. row .. "</table>")
+            else
+                table.insert(out, row)
+            end
+        end
+        pos = c_end + 1
+    end
+    return table.concat(out)
 end
 
 -- Rewrites every {{Multiple image}} box (recognised by the container
@@ -1588,7 +1684,282 @@ function M.centerGalleryThumbs(html)
     return (html:gsub('(<div[^>]*class%s*=%s*"thumb")%s+style%s*=%s*"[^"]*"', "%1"))
 end
 
-function M.restructureMultiImages(html)
+-- Innermost enclosing <tag>...</tag> around a position, via a forward walk
+-- of that tag's open/close tokens up to the position. nil when the position
+-- sits outside every open of that tag (or the walk hits malformed markup).
+local function enclosingTag(html, tag, pos)
+    local open_pat = "<" .. tag .. "[^>]*>"
+    local close_pat = "</" .. tag .. "%s*>"
+    local stack = {}
+    local scan = 1
+    while true do
+        local o_start, o_end = html:find(open_pat, scan)
+        local c_start, c_end = html:find(close_pat, scan)
+        if o_start and o_start < pos and (not c_start or o_start < c_start) then
+            stack[#stack + 1] = { o_start, o_end }
+            scan = o_end + 1
+        elseif c_start and c_start < pos then
+            stack[#stack] = nil
+            scan = c_end + 1
+        else
+            local top = stack[#stack]
+            if top then
+                return top[1], top[2]
+            end
+            return nil
+        end
+    end
+end
+
+-- Rewrites one <div class="thumb tmulti ...">...</div> block into the same
+-- wrapper div holding one tiny <table> per image (plus per .theader and
+-- the overall caption); unchanged wrapper if the structure isn't what we
+-- expect. Why per-image tables: rows under half the page width get
+-- split-avoid flags and glue together, and crengine never fragments a
+-- table nested inside another element's flow — a multi-image box would
+-- jump pages as one block. One-row tables are independent blocks the
+-- splitter breaks between freely, so the current page fills with as many
+-- images as fit.
+local function multiImageToTable(wrapper)
+    local _, lead, trail, close, _, inner = multiImageRowContent(wrapper)
+    if not inner then
+        return wrapper
+    end
+    local o_start, o_end = wrapper:find("^<div[^>]*>")
+    local wrapper_open = wrapper:sub(o_start, o_end)
+    local ti_start, ti_end = wrapper:find("<div[^>]*>", o_end)
+    local ti_open = wrapper:sub(ti_start, ti_end)
+    local table_open = ti_open:gsub("^<div([ >])", "<table%1")
+        :gsub([[class%s*=%s*"[^"]*"]], 'class="wikireader-tmulti"', 1)
+    return wrapper_open
+        .. lead
+        .. multiImageStackedRows(inner, table_open)
+        .. trail
+        .. close
+end
+
+-- Replaces a multi-image box's host row inside a kept infobox: instead of
+-- a nested <table> (the multiImageToTable form), the box's image rows are
+-- emitted as rows of the infobox table itself, one <tr> per image row:
+--       <tr><td[host cell]>lead-in (TemplateStyles etc.)</td></tr>
+--       (the box's image rows, as emitted by multiImageTransformRow)
+--       <tr><td[host cell]>trailing cell content</td></tr>
+-- Why: crengine treats every table row as one unsplittable slice and
+-- never splits between a table's first and second row (it could be column
+-- headers). An infobox's second row is the image grid — the title row
+-- sticks to it and both get pushed to page 2, leaving page 1 almost
+-- empty. As the infobox's own rows every image row stays small.
+-- When M.stackInfoboxRows has run (fields stacked single-column), the
+-- side-by-side grid can't stay either — crengine never fragments a table
+-- nested inside a cell — so each .tsingle becomes its own single-cell
+-- infobox row (see multiImageStackedRows).
+-- If the box doesn't live directly inside an infobox table (or its host row
+-- isn't recognisable), returns nil and the caller keeps the nested-table
+-- form.
+local function hoistMultiImageRows(html, o_start, w_close_end, stacked)
+    -- The innermost table containing the wrapper decides the treatment:
+    -- a box nested one table deeper keeps its nested-table form (hoisting
+    -- there would still be inside the outer table's atomic row).
+    local t_s, t_e = enclosingTag(html, "table", o_start)
+    if not t_s or not tokenInClass(openTagClass(html:sub(t_s, t_e)), "infobox") then
+        return nil
+    end
+    local td_s, td_e = enclosingTag(html, "td", o_start)
+    if not td_s then
+        return nil
+    end
+    local td_close_s = wutil.findMatchingClose(html, "td", td_e)
+    if not td_close_s or td_close_s < w_close_end then
+        return nil
+    end
+    local tr_s, tr_e = enclosingTag(html, "tr", o_start)
+    if not tr_s then
+        return nil
+    end
+    local tr_close_s, tr_close_e = wutil.findMatchingClose(html, "tr", tr_e)
+    if not tr_close_s or tr_close_s < td_close_s then
+        return nil
+    end
+    local rows, lead, trail, _, _, inner =
+        multiImageRowContent(html:sub(o_start, w_close_end))
+    if not rows then
+        return nil
+    end
+    local td_open = html:sub(td_s, td_e)
+    local pre = lead .. html:sub(td_e + 1, o_start - 1)
+    local post = html:sub(w_close_end + 1, td_close_s - 1) .. trail
+    local out = {}
+    if pre:find("%S") then
+        table.insert(out, "<tr>" .. td_open .. pre .. "</td></tr>")
+    end
+    if stacked then
+        table.insert(out, multiImageStackedRows(inner))
+    else
+        -- The nested-table form centers text via the surrounding cell; hoisted
+        -- rows are the infobox's own cells, so center them inline. Prepended so
+        -- a text-align the template itself declared keeps winning (later decl).
+        -- (The stacked form already carries text-align:center on each cell.)
+        table.insert(out, (rows:gsub("<td[^>]*>", function(tag)
+            return addStyleProp(tag, "text-align:center")
+        end)))
+    end
+    if post:find("%S") then
+        table.insert(out, "<tr>" .. td_open .. post .. "</td></tr>")
+    end
+    -- Consumed range starts at the host row, so the caller must not re-emit
+    -- the row's own <tr>/<td> opens.
+    return table.concat(out), tr_s, tr_close_e + 1
+end
+
+--[[-------------------------------------------------------------------------
+Kept-infobox row stacking
+--]]
+
+-- Stacks every row of a kept infobox into single full-width cells: label
+-- th + value td pairs merge into one cell ("<b>Label:</b> value"),
+-- multi-value rows become one full-width row per cell, colspan/rowspan
+-- attrs dropped everywhere.
+-- Why: crengine treats every row of a multi-column table as one
+-- unsplittable slice — a row with a long value (Studios, Producers in
+-- album infoboxes) that doesn't fit the space left on the page is pushed
+-- whole to the next page, wasting up to half a page. A single-column
+-- table's cell content is split line-by-line instead, so long fields
+-- flow across page breaks like normal text (Wikipedia's mobile rendering
+-- stacks the same way). Only meaningful on kept ("Show infoboxes")
+-- infoboxes, which are forced full-width.
+
+-- Drops colspan/rowspan attributes from a cell's open tag. In a table
+-- whose rows are all single cells they would only register phantom
+-- columns, which would take the table out of crengine's single-column
+-- (line-fragmentable) path.
+local function stripCellSpans(open_tag)
+    return (open_tag:gsub('%s*colspan%s*=%s*"[^"]*"', '')
+        :gsub('%s*rowspan%s*=%s*"[^"]*"', ''))
+end
+
+-- Rebuilds one row's content. Top-level cells only: the walk consumes each
+-- cell's whole span (nested tables inside it pass through untouched), and
+-- any content between cells (whitespace, usually) rides along in the
+-- preceding cell's inner.
+local function stackInfoboxRowCells(content)
+    local cells = {}
+    local pos = 1
+    while true do
+        local next_cell = content:find("<t[dh][^>]*>", pos)
+        if not next_cell then
+            if cells[#cells] then
+                cells[#cells].inner = cells[#cells].inner .. content:sub(pos)
+            end
+            break
+        end
+        local c_s, c_e = next_cell, select(2, content:find("<t[dh][^>]*>", pos))
+        local tag = content:sub(c_s + 1, c_s + 2)
+        local cc_s, cc_e = wutil.findMatchingClose(content, tag, c_e)
+        if not cc_s then
+            break
+        end
+        cells[#cells + 1] = {
+            tag = tag,
+            open = content:sub(c_s, c_e),
+            inner = content:sub(c_e + 1, cc_s - 1),
+        }
+        pos = cc_e + 1
+    end
+    if #cells == 0 then
+        return content
+    end
+    if #cells == 1 then
+        local c = cells[1]
+        return "<tr>" .. stripCellSpans(c.open) .. c.inner .. "</" .. c.tag .. "></tr>"
+    end
+    -- td labels end with ":" already; {{Taxobox}}-style pairs written
+    -- as two tds merge like th|td pairs, only without adding another
+    -- colon
+    local label_text = cells[1].inner:gsub("<[^>]*>", ""):match("^%s*(.-)%s*$") or ""
+    if #cells == 2 and cells[2].tag == "td"
+        and (cells[1].tag == "th"
+            or (cells[1].tag == "td" and label_text:find(":$"))) then
+        -- One merged cell; the label cell's bold/scope styling can't
+        -- survive the merge, so bold the label text explicitly. An empty
+        -- label keeps just the value.
+        local label = (cells[1].inner
+                :gsub("<div[^>]*>", "")
+                :gsub("</div%s*>", ""))
+            :match("^%s*(.-)%s*$")
+        local td_open = stripCellSpans(cells[2].open)
+        -- Block children in the value (e.g. <div class="postal-code">)
+        -- would also force a line break; same unwrap, closing divs
+        -- becoming a space so consecutive div values can't jam. ul/dl
+        -- list values stay block: label line above the list.
+        local value = cells[2].inner
+            :gsub("<div[^>]*>", "")
+            :gsub("</div%s*>", " ")
+        if label ~= "" then
+            if cells[1].tag == "th" then
+                return "<tr>" .. td_open .. "<b>" .. label .. ":</b> " .. value .. "</td></tr>"
+            end
+            return "<tr>" .. td_open .. "<b>" .. label .. "</b> " .. value .. "</td></tr>"
+        end
+        return "<tr>" .. td_open .. value .. "</td></tr>"
+    end
+    -- any other multi-cell row (td+td, th+th, th+td+td): sequential
+    -- full-width rows, one per cell, matching the stacked style
+    local out = {}
+    for _, c in ipairs(cells) do
+        table.insert(out, "<tr>" .. stripCellSpans(c.open) .. c.inner .. "</" .. c.tag .. "></tr>")
+    end
+    return table.concat(out)
+end
+
+-- Walks a kept infobox table's top-level rows and stacks them. Nested
+-- tables (Date/Location blocks, chronology boxes) are consumed inside
+-- their parent row's span and preserved as-is.
+local function stackInfoboxTableRows(inner)
+    local out = {}
+    local pos = 1
+    while true do
+        local r_s, r_e = inner:find("<tr[^>]*>", pos)
+        if not r_s then
+            table.insert(out, inner:sub(pos))
+            break
+        end
+        local rc_s, rc_e = wutil.findMatchingClose(inner, "tr", r_e)
+        if not rc_s then
+            table.insert(out, inner:sub(pos))
+            break
+        end
+        table.insert(out, inner:sub(pos, r_s - 1))
+        table.insert(out, stackInfoboxRowCells(inner:sub(r_e + 1, rc_s - 1)))
+        pos = rc_e + 1
+    end
+    return table.concat(out)
+end
+
+function M.stackInfoboxRows(html)
+    local out = {}
+    local pos = 1
+    while true do
+        local t_s, t_e = html:find("<table[^>]*>", pos)
+        if not t_s then
+            table.insert(out, html:sub(pos))
+            break
+        end
+        local open_tag = html:sub(t_s, t_e)
+        local close_s, close_e = wutil.findMatchingClose(html, "table", t_e)
+        if not close_s or not tokenInClass(openTagClass(open_tag), "infobox") then
+            table.insert(out, html:sub(pos, t_e))
+            pos = t_e + 1
+        else
+            table.insert(out, html:sub(pos, t_s - 1))
+            table.insert(out, open_tag .. stackInfoboxTableRows(html:sub(t_e + 1, close_s - 1))
+                .. html:sub(close_s, close_e))
+            pos = close_e + 1
+        end
+    end
+    return table.concat(out)
+end
+
+function M.restructureMultiImages(html, stacked_infoboxes)
     local out = {}
     local pos = 1
     while true do
@@ -1602,9 +1973,17 @@ function M.restructureMultiImages(html)
         if tokenInClass(cls, "tmulti") then
             local c_start, c_end = wutil.findMatchingClose(html, "div", o_end)
             if c_start then
-                table.insert(out, html:sub(pos, o_start - 1))
-                table.insert(out, multiImageToTable(html:sub(o_start, c_end)))
-                pos = c_end + 1
+                local hoisted, emit_start, next_pos =
+                    hoistMultiImageRows(html, o_start, c_end, stacked_infoboxes)
+                if hoisted then
+                    table.insert(out, html:sub(pos, emit_start - 1))
+                    table.insert(out, hoisted)
+                    pos = next_pos or (c_end + 1)
+                else
+                    table.insert(out, html:sub(pos, o_start - 1))
+                    table.insert(out, multiImageToTable(html:sub(o_start, c_end)))
+                    pos = c_end + 1
+                end
             else
                 table.insert(out, html:sub(pos, o_end))
                 pos = o_end + 1

@@ -259,6 +259,10 @@ function M.buildEpub(epub_path, title, lang, callback)
                 -- has no .infobox rules and crengine ignores descendant
                 -- selectors), mirroring Wikipedia's own alignment.
                 html = htmlclean.centerInfoboxCells(html)
+                -- Stack every field into a single full-width cell so crengine
+                -- can fragment tall fields (long lists) line-by-line across
+                -- pages instead of pushing them whole (see htmlclean.lua).
+                html = htmlclean.stackInfoboxRows(html)
             end
             -- Border infoboxes and wikitables as grids, inline (see
             -- borderTableCells: crengine ignores descendant selectors, so
@@ -333,8 +337,10 @@ function M.buildEpub(epub_path, title, lang, callback)
                 -- figure rules below always win (see htmlclean.lua).
                 html = htmlclean.stripFigureHalign(html)
                 -- {{Multiple image}} uses flexbox, unsupported by crengine;
-                -- rewrite the box into a native <table>.
-                html = htmlclean.restructureMultiImages(html)
+                -- rewrite each box into one tiny <table> per image (inside
+                -- a kept infobox, the images are hoisted into the infobox's
+                -- own rows instead), so nothing jumps pages as one block.
+                html = htmlclean.restructureMultiImages(html, infobox_full_width)
                 -- Gallery thumbs' inline width would pin the image to the
                 -- left edge of the full-width box (see htmlclean.lua).
                 html = htmlclean.centerGalleryThumbs(html)
