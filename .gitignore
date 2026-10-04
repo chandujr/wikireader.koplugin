@@ -10,6 +10,9 @@ luacov.*.out
 .luacov
 .luacheckcache
 
+# Local test scripts
+tests/
+
 # Packaged plugin
 *.koplugin
 *.zip
