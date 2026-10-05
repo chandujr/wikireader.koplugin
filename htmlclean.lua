@@ -853,12 +853,17 @@ Table rotate hints
 -- The hint line above/below each data table; sentinel URLs handled by
 -- main.lua. Inline-styled so it survives "Embedded Style" off (same as
 -- borderTableCells); margin only on the prose side, with the table's own
--- margin zeroed inline, so the bar hugs the table edge.
+-- margin zeroed inline, so the bar hugs the table edge. The page-break
+-- avoid (a preference: huge tables still split inside) binds each bar to
+-- its neighboring block, else it gets orphaned alone on the previous page
+-- when the table doesn't fit.
 local function rotateHint(is_top)
     return '<p style="text-align:center; text-indent:0; font-size:75%;'
         .. ' color:rgba(0,0,0,0.47); background:rgba(0,0,0,0.04);'
         .. ' border:1px solid rgba(0,0,0,0.2); padding:0.2em 0; '
-        .. (is_top and 'margin:0.6em 0 0 0' or 'margin:0 0 0.6em 0') .. '">'
+        .. (is_top
+            and 'page-break-after:avoid; margin:0.6em 0 0 0'
+            or 'page-break-before:avoid; margin:0 0 0.6em 0') .. '">'
         .. '<a href="https://wikireader.invalid/rotate-ccw">Counterclockwise</a>'
         .. ' &lt; Tap to Rotate Screen &gt; '
         .. '<a href="https://wikireader.invalid/rotate-cw">Clockwise</a>'
