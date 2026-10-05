@@ -870,9 +870,11 @@ local function rotateHint(is_top)
         .. '</p>'
 end
 
--- Above and below each non-infobox table; recursion reaches tables
--- nested inside an infobox's span.
-function M.addRotateHints(html)
+-- Above and below each top-level non-infobox table. Tables nested inside
+-- another table (a kept infobox's stacked fields, a notice's internals)
+-- are skipped via `nested`: they rotate with their enclosing table, so
+-- their own bars would be clutter.
+function M.addRotateHints(html, nested)
     local out = {}
     local pos = 1
     while true do
@@ -895,8 +897,9 @@ function M.addRotateHints(html)
             end
         end
         local is_data_table = not (is_notice_table or lower:find("infobox", 1, true))
+        local hinted = is_data_table and not nested
         local close_start, close_end
-        if is_data_table then
+        if hinted or not is_data_table then
             close_start, close_end = wutil.findMatchingClose(html, "table", t_open_end)
         end
         if not close_start then
@@ -904,14 +907,15 @@ function M.addRotateHints(html)
             pos = t_open_end + 1
         else
             table.insert(out, html:sub(pos, t_start - 1))
-            if is_data_table then
+            if hinted then
                 open_tag = M.addInlineStyle(open_tag, "margin:0")
                 table.insert(out, rotateHint(true))
             end
             table.insert(out, open_tag)
-            table.insert(out, M.addRotateHints(html:sub(t_open_end + 1, close_start - 1)))
+            table.insert(out, M.addRotateHints(html:sub(t_open_end + 1, close_start - 1),
+                nested or not is_data_table))
             table.insert(out, html:sub(close_start, close_end))
-            if is_data_table then
+            if hinted then
                 table.insert(out, rotateHint(false))
             end
             pos = close_end + 1
@@ -1854,9 +1858,10 @@ local function stripCellSpans(open_tag)
 end
 
 -- Rebuilds one row's content. Top-level cells only: the walk consumes each
--- cell's whole span (nested tables inside it pass through untouched), and
--- any content between cells (whitespace, usually) rides along in the
--- preceding cell's inner.
+-- cell's whole span, and any content between cells (whitespace, usually)
+-- rides along in the preceding cell's inner.
+-- Forward decls: mutually recursive with the nested-table hoisting below.
+local stackInfoboxTableRows, stackNestedTablesIn
 local function stackInfoboxRowCells(content)
     local cells = {}
     local pos = 1
@@ -1886,7 +1891,24 @@ local function stackInfoboxRowCells(content)
     end
     if #cells == 1 then
         local c = cells[1]
-        return "<tr>" .. stripCellSpans(c.open) .. c.inner .. "</" .. c.tag .. "></tr>"
+        -- A cell holding only a nested table (military-conflict
+        -- Date/Location blocks, chronology boxes) is just a frame around
+        -- it: splice its rows into the parent as ordinary infobox rows,
+        -- else the wrapper cell double-borders. Nesting tbody corrupts
+        -- crengine's table parsing, so peel it first.
+        local t_inner = c.inner:match("^%s*<table[^>]*>(.*)</table%s*>%s*$")
+        if t_inner then
+            t_inner = t_inner:match("^%s*<tbody[^>]*>(.*)</tbody%s*>%s*$")
+                or t_inner
+            return stackInfoboxTableRows(stackNestedTablesIn(t_inner))
+        end
+        -- Block divs in header cells (settlement fn-ref wrappers) would
+        -- still force the ref onto its own line.
+        local inner = c.inner
+        if c.open:find("infobox-header", 1, true) then
+            inner = inner:gsub("<div[^>]*>", ""):gsub("</div%s*>", " ")
+        end
+        return "<tr>" .. stripCellSpans(c.open) .. inner .. "</" .. c.tag .. "></tr>"
     end
     -- td labels end with ":" already; {{Taxobox}}-style pairs written
     -- as two tds merge like th|td pairs, only without adding another
@@ -1901,6 +1923,7 @@ local function stackInfoboxRowCells(content)
         local label = (cells[1].inner
                 :gsub("<div[^>]*>", "")
                 :gsub("</div%s*>", ""))
+            :gsub("<br%s*/?>%s*", " ")
             :match("^%s*(.-)%s*$")
         local td_open = stripCellSpans(cells[2].open)
         -- Block children in the value (e.g. <div class="postal-code">)
@@ -1927,10 +1950,8 @@ local function stackInfoboxRowCells(content)
     return table.concat(out)
 end
 
--- Walks a kept infobox table's top-level rows and stacks them. Nested
--- tables (Date/Location blocks, chronology boxes) are consumed inside
--- their parent row's span and preserved as-is.
-local function stackInfoboxTableRows(inner)
+-- Walks a kept infobox table's top-level rows and stacks them.
+stackInfoboxTableRows = function(inner)
     local out = {}
     local pos = 1
     while true do
@@ -1945,8 +1966,33 @@ local function stackInfoboxTableRows(inner)
             break
         end
         table.insert(out, inner:sub(pos, r_s - 1))
-        table.insert(out, stackInfoboxRowCells(inner:sub(r_e + 1, rc_s - 1)))
+        table.insert(out, stackInfoboxRowCells(stackNestedTablesIn(inner:sub(r_e + 1, rc_s - 1))))
         pos = rc_e + 1
+    end
+    return table.concat(out)
+end
+
+-- Stacks nested tables inside a row the same way (recursively for deeper
+-- nesting) before the row walker collects cells: {{Infobox military
+-- conflict}} holds its Date/Location fields in a nested label/value table.
+stackNestedTablesIn = function(inner)
+    local out = {}
+    local pos = 1
+    while true do
+        local t_s, t_e = inner:find("<table[^>]*>", pos)
+        if not t_s then
+            table.insert(out, inner:sub(pos))
+            break
+        end
+        local c_s, c_e = wutil.findMatchingClose(inner, "table", t_e)
+        if not c_s then
+            table.insert(out, inner:sub(pos))
+            break
+        end
+        table.insert(out, inner:sub(pos, t_e))
+        table.insert(out, stackInfoboxTableRows(stackNestedTablesIn(inner:sub(t_e + 1, c_s - 1))))
+        table.insert(out, inner:sub(c_s, c_e))
+        pos = c_e + 1
     end
     return table.concat(out)
 end
