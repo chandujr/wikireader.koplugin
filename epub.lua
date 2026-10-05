@@ -313,6 +313,12 @@ function M.buildEpub(epub_path, title, lang, callback)
             -- Render cladograms (Template:Clade phylogeny trees) as text
             -- diagrams, since crengine cannot draw their CSS border lines.
             html = cladogram.replaceCladograms(html)
+            -- EasyTimeline renders ({{#tag:timeline}}) are bare timeline-wrapper
+            -- divs the walker sees no image box in; route them through the
+            -- same placeholder machinery first.
+            html = qrimage.replaceTimelineWrappers(html,
+                { lazy = lazy_images, qr = qr_images, qr_size = qr_size, lang = lang },
+                {}, hi_res, qr_enabled)
             -- Locator maps (Template:Location map) become ONE composited
             -- image (base map + drawn marker dots) in lazy mode, fetched at
             -- build time like the formula SVGs. Must run before the walker

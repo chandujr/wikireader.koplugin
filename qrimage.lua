@@ -186,7 +186,10 @@ end
 -- than the original; those are handled too. Returns nil if no filename
 -- could be extracted (or no lang was given).
 function M.filePageUrl(mediaUrl, lang)
-    if not mediaUrl or not lang then
+    -- EasyTimeline and similar live-rendered charts: hash-named,
+    -- no File: page exists.
+    if not mediaUrl or not lang
+        or mediaUrl:match("/wikipedia/[^/]+/timeline/") then
         return nil
     end
     if mediaUrl:sub(1, 2) == "//" then
@@ -640,8 +643,58 @@ local function walkImageBoxes(html, img_fn, opts)
     return result
 end
 
+--[[-------------------------------------------------------------------------
+timeline-wrapper blocks (EasyTimeline)
+
+{{#tag:timeline}} renders as a bare
+<div class="timeline-wrapper"><map name="..."></map><img usemap="#..."
+src="//upload.wikimedia.org/wikipedia/en/timeline/<hash>.png"/></div>:
+hash-named, no thumb box, no width/height, no File: page. The walker
+sees no image box here, so this pass routes the chart through the same
+placeholder machinery first. The PNG's real size never appears in the
+markup, so the natural 900x500 canvas is reserved as the lazy footprint
+(lazyfetch's realImageSizeStyle() re-caps it later); in QR mode the
+chart PNG's own URL is encoded since there is no File: page.
+--]]
+-- Only this src layout identifies an EasyTimeline render.
+local RENDER_PAT = [[src%s*=%s*"(//upload%.wikimedia%.org/wikipedia/[^/]+/timeline/[^/%"]+)%"]]
+
+function M.replaceTimelineWrappers(html, marker_table, seen, hi_res, qr_mode)
+    return html:gsub(
+        '<div class="timeline%-wrapper">(.-)</div>',
+        function(inner)
+            local attrs = inner:match([[<img%s+([^>]*)>]])
+            if not attrs or not attrs:match(RENDER_PAT) then
+                return nil -- leave anything else with that class alone
+            end
+            local marker = qr_mode
+                and qrImageTag(attrs, marker_table.qr, marker_table.qr_size, marker_table.lang)
+                or lazyImageTag(attrs, marker_table.lazy, seen, 0, hi_res, true, false)
+            if marker == "" and qr_mode then
+                -- Hash render: no File: page, so the QR carries the
+                -- chart PNG itself.
+                local src = attrs:match([[src%s*=%s*"([^"]*)"]])
+                if src and src:sub(1, 5) ~= "data:" then
+                    marker = makeQr(src:gsub("^//", "https://"),
+                        marker_table.qr, marker_table.qr_size)
+                end
+            end
+            if marker == "" then
+                return "" -- unencodable: drop the box
+            end
+            -- No width/height in the render to reserve; graft the
+            -- natural-canvas footprint (QR markers have no style).
+            if not qr_mode then
+                marker = marker:gsub('style="',
+                    'style="width:900px; height:500px; ', 1)
+            end
+            return marker
+        end)
+end
+
 -- QR mode: every boxed image becomes a QR code of its File:
--- description page.
+-- description page. Bare EasyTimeline charts (see below) go through
+-- replaceTimelineWrappers first.
 function M.replaceImagesWithQr(html, qr_images, qr_size, lang)
     return walkImageBoxes(html,
         function(attrs)
