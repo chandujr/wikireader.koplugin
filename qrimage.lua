@@ -430,14 +430,6 @@ local function lazyImageTag(attrs, lazy_images, seen, section, hi_res, centered,
     if not ext or not EXT_MIMETYPE[ext] then
         return ""
     end
-    if seen[download_src] then
-        local hit = seen[download_src]
-        return string.format('<span class="wikireader-lazyimg" data-lazyindex="%d" style="%s"></span>',
-            hit.index, hit.style)
-    end
-    if #lazy_images >= MAX_LAZY_IMAGES then
-        return ""
-    end
     -- Same style-carrying trick as KOReader's createEpub: crengine ignores
     -- width/height attributes but honors them in a style, and reserving
     -- the real footprint keeps the post-reload reflow minimal.
@@ -455,6 +447,18 @@ local function lazyImageTag(attrs, lazy_images, seen, section, hi_res, centered,
         style_props[#style_props + 1] = "margin:0 auto"
     end
     local style = table.concat(style_props, "; ")
+    -- The same image file can recur in different contexts (infobox media
+    -- vs article body, or a different rendered footprint) that lazyfetch
+    -- sizes by different rules, so only identical context dedupes.
+    local key = download_src .. "\1" .. tostring(infobox) .. "\1" .. style
+    if seen[key] then
+        local hit = seen[key]
+        return string.format('<span class="wikireader-lazyimg" data-lazyindex="%d" style="%s"></span>',
+            hit.index, hit.style)
+    end
+    if #lazy_images >= MAX_LAZY_IMAGES then
+        return ""
+    end
     local index = #lazy_images + 1
     lazy_images[index] = {
         src = download_src,
@@ -465,7 +469,7 @@ local function lazyImageTag(attrs, lazy_images, seen, section, hi_res, centered,
         fallback = fallback,
         infobox = infobox,
     }
-    seen[download_src] = { index = index, style = style }
+    seen[key] = { index = index, style = style }
     return string.format('<span class="wikireader-lazyimg" data-lazyindex="%d" style="%s"></span>',
         index, style)
 end
