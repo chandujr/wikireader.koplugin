@@ -883,7 +883,18 @@ function M.addRotateHints(html)
         end
         local open_tag = html:sub(t_start, t_open_end)
         local class_attr = open_tag:match([[class%s*=%s*"([^"]*)"]]) or ""
-        local is_data_table = not class_attr:lower():find("infobox", 1, true)
+        local lower = class_attr:lower()
+        -- mbox tables are notices (dropped/wrapped later, and never wide
+        -- enough to need rotation); hinting then dropping them would leave
+        -- orphaned bars.
+        local is_notice_table = false
+        for _, pat in ipairs(wutil.LEADING_NOTICE_PATTERNS) do
+            if lower:find(pat, 1, true) then
+                is_notice_table = true
+                break
+            end
+        end
+        local is_data_table = not (is_notice_table or lower:find("infobox", 1, true))
         local close_start, close_end
         if is_data_table then
             close_start, close_end = wutil.findMatchingClose(html, "table", t_open_end)
