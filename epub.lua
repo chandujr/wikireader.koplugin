@@ -65,7 +65,9 @@ Full article EPUB builder
 -- metadata. A kept infobox's media cells are dropped before the media pass,
 -- except in "show" mode, where their images join the lazy pipeline and
 -- locator maps become composited images.
-function M.buildEpub(epub_path, title, lang, callback)
+-- fixed_path (save flow): build into the given path; skip the
+-- resolved-title rename so a temp rebuild never becomes a cache entry.
+function M.buildEpub(epub_path, title, lang, callback, fixed_path)
     local short_description = nil -- extracted from the HTML
     local resolved_title = nil    -- from the API response
 
@@ -814,7 +816,7 @@ pre.wikireader-cladogram {
         Archiver.Writer.addFileFromMemory = original_addFileFromMemory
         if ok and success then
             local used_path = epub_path
-            if resolved_title and resolved_title ~= title then
+            if not fixed_path and resolved_title and resolved_title ~= title then
                 local new_path = cache.getCachePath(resolved_title, lang)
                 if new_path ~= epub_path then
                     os.rename(epub_path, new_path)

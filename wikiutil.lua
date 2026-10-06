@@ -169,4 +169,8 @@ function M.imageQuality()
     return "high"
 end
 
+function M.trim(s)
+    return (s:gsub("^%s+", ""):gsub("%s+$", ""))
+end
+
 return M

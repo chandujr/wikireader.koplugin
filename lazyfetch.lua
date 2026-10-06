@@ -698,6 +698,28 @@ function M._step(epub_path)
     end, is_abandoned)
 end
 
+-- Pending list of a not-open EPUB (save flow). Raw readPending, not the
+-- memoized reader path: a temp file's mtime changes across swaps anyway.
+function M.pendingImages(epub_path)
+    return readPending(epub_path)
+end
+
+-- Fetches ALL pending images for a NOT-open EPUB: the save flow's temp
+-- build must be self-contained, unlike _step's paged flow. A full batch
+-- leaves no "not scheduled" results, so swapInImages drops the pending
+-- entry; failed downloads lose their placeholder as usual. on_done gets
+-- the swap's success, so the caller can discard the file on zip failure.
+function M.completeAll(epub_path, on_done)
+    local images = readPending(epub_path)
+    if not images then
+        on_done(true) -- nothing pending: already complete (should not happen)
+        return
+    end
+    downloadAll(images, function(results)
+        on_done(swapInImages(epub_path, images, results) == true)
+    end, function() return false end)
+end
+
 -- Exposed for the downloader self-check (tests/test_lazy_download.lua).
 M._downloadAll = downloadAll
 

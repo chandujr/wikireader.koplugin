@@ -403,7 +403,7 @@ local function ltxToText(tex)
                         local trim = cmd ~= "text" and cmd ~= "mathrm"
                             and cmd ~= "textnormal" and cmd ~= "mbox" and cmd ~= "hbox"
                         table.insert(out, ltxToText(trim
-                            and inner:gsub("^%s+", ""):gsub("%s+$", "")
+                            and wutil.trim(inner)
                             or inner))
                         -- Wikipedia also pads after the group (mathbf{psi } (t,x));
                         -- real math rendering drops that space too.
