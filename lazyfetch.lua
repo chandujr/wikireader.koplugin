@@ -410,17 +410,36 @@ local CHECK_INTERVAL = 20
 -- the same images or race the same zip rewrite.
 local step_running = {}
 
-function M.scheduleCompletion(epub_path)
-    NetworkMgr:runWhenOnline(function()
-        -- Small delay so an article-open-triggered first render is never
-        -- contending with the first image request.
-        UIManager:scheduleIn(1, function()
-            -- A download in flight absorbs the trigger; the cycle's own
-            -- completion-time re-check covers the fresh position.
-            if step_running[epub_path] then return end
-            M._step(epub_path)
-        end)
+-- epub_path -> true while offline and waiting on (or already declined for)
+-- an image-batch attempt: KOReader drops runWhenOnline callbacks silently
+-- when the wifi prompt is dismissed, with no plugin-visible signal, so this
+-- is the only way to limit the prompt to one attempt per article. Cleared
+-- by onNetworkConnected.
+local net_blocked = {}
+
+local function planStep(epub_path)
+    -- Small delay so an article-open-triggered first render is never
+    -- contending with the first image request.
+    UIManager:scheduleIn(1, function()
+        -- A download in flight absorbs the trigger; the cycle's own
+        -- completion-time re-check covers the fresh position.
+        if step_running[epub_path] then return end
+        M._step(epub_path)
     end)
+end
+
+function M.scheduleCompletion(epub_path)
+    if NetworkMgr:isOnline() then
+        net_blocked[epub_path] = nil
+        planStep(epub_path)
+    elseif not net_blocked[epub_path] then
+        net_blocked[epub_path] = true
+        NetworkMgr:runWhenOnline(function() planStep(epub_path) end)
+    end
+end
+
+function M.onNetworkConnected()
+    net_blocked = {}
 end
 
 -- Exposed only for the offline checks.

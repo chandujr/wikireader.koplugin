@@ -321,6 +321,10 @@ end
 -- the images now on the current page; lazyfetch coalesces overlapping
 -- checks (no-op in no-image mode, and a cheap no-pending-exit otherwise,
 -- so it can fire on any turn in any wiki EPUB).
+function WikiReader:onNetworkConnected()
+    lazyfetch.onNetworkConnected()
+end
+
 function WikiReader:onPageUpdate()
     if G_reader_settings:readSetting("wikireader_image_mode") == "none" then return end
     local path = currentDocumentPath(self)
