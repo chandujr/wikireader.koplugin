@@ -264,6 +264,7 @@ function M.buildEpub(epub_path, title, lang, callback)
                 -- pages instead of pushing them whole (see htmlclean.lua).
                 html = htmlclean.stackInfoboxRows(html)
             end
+            html = htmlclean.forceFullWidthStyledTables(html, forceFullWidthStyle)
             -- Border infoboxes and wikitables as grids, inline (see
             -- borderTableCells: crengine ignores descendant selectors, so
             -- stylesheet rules can't reach the cells).

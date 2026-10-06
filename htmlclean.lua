@@ -318,6 +318,23 @@ function M.cleanElementClasses(html, tag, class_patterns, classes_to_remove, rem
     return table.concat(out)
 end
 
+-- TemplateStyles tables carry the same layout-killing inline width/float
+-- as wikitables but no class to match ({{Historical populations}} emits
+-- <table class="table-pale" style="width:15em;...;float:right">).
+-- Idempotent over already-normalized tables. Must run after the infobox
+-- pass: that needs infoboxFullWidthStyle's font-size removal, which this
+-- doesn't do. Same %%-escape discipline as cleanElementClasses' splice
+-- (see forceFullWidthStyle in epub.lua).
+function M.forceFullWidthStyledTables(html, styleFn)
+    return html:gsub("<table[^>]*>", function(tag)
+        local style = tag:match('style%s*=%s*"([^"]*)"')
+        if not style or not (style:find("width%s*:") or style:find("float%s*:")) then
+            return tag
+        end
+        return (tag:gsub('style%s*=%s*"[^"]*"', 'style="' .. styleFn(style) .. '"'))
+    end)
+end
+
 -- {{Rating}} stars (tiny Star full/half/empty.svg <img> icons) end up blank
 -- otherwise: removeInlineIcons() drops them in kept infoboxes and
 -- createEpub() strips unembeddable remote <img>s. Replacing just the <img>
