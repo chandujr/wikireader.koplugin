@@ -1,21 +1,24 @@
 --[[--
-Background image completion for lazily-built WikiReader EPUBs.
+Background completion of lazily-built WikiReader EPUBs (formula SVGs and
+photographs).
 
-With "Fetch images in background" on, epub.lua builds the article EPUB
-immediately, with each boxed image as a placeholder <img> whose zip entry
-does not exist yet, and an OEBPS/wikireader-pending.json entry listing the
-URLs to fetch. This module downloads the whole pending set as ONE
-background batch after the document opens (each transfer in a coroutine
-over non-blocking sockets, resumed only from scheduler ticks, so downloads
-never hold the UI thread or block the open), rewrites the zip with the
-images added and the pending entry dropped, and seamlessly reloads the
-open document — that single reload is the article's only partial refresh.
+With formulas and/or "Fetch images in background", epub.lua builds the
+article EPUB immediately, with each boxed image as a placeholder <img> and
+each formula as a placeholder <img> whose zip entries do not exist yet, and
+an OEBPS/wikireader-pending.json entry listing the URLs to fetch (formula
+SVGs first: the downloader runs the list in order, so its concurrency slots
+fill with formulas before photos). This module downloads the whole pending
+set as ONE background batch after the document opens (each transfer in a
+coroutine over non-blocking sockets, resumed only from scheduler ticks, so
+downloads never hold the UI thread or block the open), rewrites the zip with
+the downloads added and the pending entry dropped, and seamlessly reloads
+the open document — that single reload is the article's only partial refresh.
 A cached article interrupted mid-download keeps its pending entry, so the
 next open finishes it the same way. Failed downloads are removed from
 content.html and content.opf so no blank squares remain. Page turns
 re-trigger the check (debounced via main.lua's onPageUpdate) but are
 absorbed while a batch runs; a batch is abandoned only when the document
-is closed, never on a page turn — every listed image is wanted whatever
+is closed, never on a page turn — every listed download is wanted whatever
 page the reader is on.
 ]]
 
@@ -50,11 +53,6 @@ local PENDING_ENTRY = "OEBPS/wikireader-pending.json"
 -- min/max width of HEIGHT_CAP_VH*vh*(w/h) (see realImageSizeStyle).
 local HEIGHT_CAP_VH = 33
 
--- Reserved footprints narrower than this keep their px width: the cap
--- width would stretch an 18px legend square or inline symbol well beyond
--- its real size.
-local MIN_ENLARGE_WIDTH = 100
-
 -- Final inline style for a real image, from its reserved px footprint
 -- (style) and its context: the px height is dropped so crengine keeps the
 -- aspect ratio. The height cap is expressed as a min/max width of
@@ -74,7 +72,10 @@ local function realImageSizeStyle(style, infobox)
         size = infobox and "max-width:33%" or "min-width:50%"
     elseif infobox then
         size = "max-width:33%; max-height:33vh"
-    elseif w < MIN_ENLARGE_WIDTH then
+    elseif w < 100 then
+        -- Reserved footprints narrower than 100px keep their px width: the
+        -- cap width would stretch an 18px legend square well beyond its
+        -- real size.
         size = ""
     else
         local cap = string.format("%.2fvh", HEIGHT_CAP_VH * w / h)
@@ -140,7 +141,7 @@ local function readPendingCached(epub_path)
     return images
 end
 
--- Rewrites the zip in place after one batch: adds the downloaded images,
+-- Rewrites the zip in place after one batch: adds the downloaded files,
 -- removes the tags of attempted-but-failed ones (results[i] == false; they
 -- would otherwise show as permanent blank squares), keeps not-yet-scheduled
 -- placeholders intact (results[i] == nil), and rewrites the pending entry
@@ -169,12 +170,9 @@ local function swapInImages(epub_path, images, results)
     local remaining = {}
     local ok_count = 0
     for i, img in ipairs(images) do
-        -- The hint span and OPF id are keyed by the BUILD index, which
-        -- outlives the pending list: every swap rewrites the pending JSON
-        -- with only the remaining images, so from the second batch on the
-        -- loop position no longer matches the index burned into the HTML.
-        -- Derive it from the imgpath instead.
-        local idx = tonumber(img.imgpath:match("wrimg(%d+)")) or i
+        local is_math = img.math
+        local idx = is_math and tonumber(img.imgpath:match("math(%d+)"))
+            or tonumber(img.imgpath:match("wrimg(%d+)")) or i
         local path_pat = img.imgpath:gsub("%.", "%%.")
         -- Pending <img>s point at their per-image ".loading.svg" icon copy;
         -- cached EPUBs from earlier plugin versions point straight at the
@@ -183,25 +181,28 @@ local function swapInImages(epub_path, images, results)
         local content = results[i]
         if content then
             ok_count = ok_count + 1
-            -- Image arrived: point the img at the real file, and drop any
-            -- "loading" hint span left by earlier plugin versions. The
-            -- reserved footprint swaps for the real sizing (see
-            -- realImageSizeStyle); the plain src swap below is a fallback
-            -- for tags without a style attribute right after src.
-            html = html:gsub('src="' .. loading_pat .. '" style="([^"]*)"',
-                function(style)
-                    return 'src="' .. img.imgpath .. '" style="'
-                        .. realImageSizeStyle(style, img.infobox) .. '"'
-                end)
-            html = html:gsub('src="' .. loading_pat .. '"', 'src="' .. img.imgpath .. '"')
-            html = html:gsub('<span class="wikireader%-loading" data%-lazyindex="' .. idx .. '"[^>]*>.-</span>', "")
+            -- Formula SVGs need no markup change (the placeholder <img>
+            -- already points at their final path); only photos swap their
+            -- loading-icon placeholder for the real sizing (see
+            -- realImageSizeStyle) and drop the "loading" hint span.
+            if not is_math then
+                html = html:gsub('src="' .. loading_pat .. '" style="([^"]*)"',
+                    function(style)
+                        return 'src="' .. img.imgpath .. '" style="'
+                            .. realImageSizeStyle(style, img.infobox) .. '"'
+                    end)
+                html = html:gsub('src="' .. loading_pat .. '"', 'src="' .. img.imgpath .. '"')
+                html = html:gsub('<span class="wikireader%-loading" data%-lazyindex="' .. idx .. '"[^>]*>.-</span>', "")
+            end
         elseif content == false then
             -- Attempted and failed: remove the placeholder <img> and its
             -- manifest item so no blank square remains.
-            html = html:gsub('<img src="' .. loading_pat .. '"[^>]*/>', "")
+            if not is_math then
+                html = html:gsub('<img src="' .. loading_pat .. '"[^>]*/>', "")
+                html = html:gsub('<span class="wikireader%-loading" data%-lazyindex="' .. idx .. '"[^>]*>.-</span>', "")
+            end
             html = html:gsub('<img src="' .. path_pat .. '"[^>]*/>', "")
-            html = html:gsub('<span class="wikireader%-loading" data%-lazyindex="' .. idx .. '"[^>]*>.-</span>', "")
-            local id = "wrimg" .. string.format("%05d", idx)
+            local id = (is_math and "wrmath" or "wrimg") .. string.format("%05d", idx)
             opf = opf:gsub('<item id="' .. id .. '"[^>]*/>%s*', "")
         else
             -- Not scheduled this cycle: keep the placeholder and the entry.

@@ -320,18 +320,17 @@ function WikiReader:onCloseDocument()
     end
 end
 
--- Page turns in an open lazy EPUB re-check for pending images; this
--- covers articles opened outside the fetch flow (history, cache) and
--- interrupted batches resumed after reopen. lazyfetch coalesces the
--- overlapping checks and downloads all pending images in one batch (no-op
--- in no-image mode, and a cheap no-pending-exit otherwise, so it can fire
--- on any turn in any wiki EPUB).
+-- Page turns in an open lazy EPUB re-check for pending downloads (formula
+-- SVGs in every image mode, photographs outside "none"); this covers
+-- articles opened outside the fetch flow (history, cache) and interrupted
+-- batches resumed after reopen. lazyfetch coalesces the overlapping
+-- checks and downloads everything in one batch (a cheap no-pending-exit
+-- otherwise, so it can fire on any turn in any wiki EPUB).
 function WikiReader:onNetworkConnected()
     lazyfetch.onNetworkConnected()
 end
 
 function WikiReader:onPageUpdate()
-    if G_reader_settings:readSetting("wikireader_image_mode") == "none" then return end
     local path = currentDocumentPath(self)
     if isWikiEpubPath(path) then
         lazyfetch.scheduleCompletion(path)
@@ -1269,12 +1268,11 @@ function WikiReader:fetchAndOpen(title, lang, open_fn)
     end)
 end
 
--- Kicks off background image completion for a lazily-built EPUB
--- (no-op in no-image/QR mode; lazyfetch checks for pending work).
+-- Kicks off background completion for a lazily-built EPUB (formula SVGs
+-- in every image mode, photographs outside "none"); lazyfetch checks for
+-- pending work either way.
 function WikiReader:maybeCompleteLazyImages(epub_path)
-    if G_reader_settings:readSetting("wikireader_image_mode") ~= "none" then
-        lazyfetch.scheduleCompletion(epub_path)
-    end
+    lazyfetch.scheduleCompletion(epub_path)
 end
 
 function WikiReader:openArticle(title, lang)

@@ -25,13 +25,13 @@ srcset 2x/1.5x as fallback; low/mid/high only active in show mode).
 | `htmlclean.lua` | All HTML transformations: strip clutter (navboxes, hatnotes, timeline bars), unwrap article links, drop infobox media cells (or, in lazy mode, keep image cells for the lazy pipeline and drop only video/audio/mapframe), center infobox cells, border infobox/wikitable tables, insert tap-to-rotate hints above/below data tables (rotation handled by main.lua's link handler), merge quote attributions, rewrite `{{Multiple image}}` flexbox into one tiny table per image (inside a kept infobox the images are hoisted into the infobox's own rows instead — side-by-side grid rows, one per row in stacked mode), stack kept-infobox rows into single full-width fields (label/value pairs merge to one line; block divs in merged pairs unwrapped). Splitting/crengine rationale lives in the code comments. |
 | `qrimage.lua` | Replaces each boxed image with a QR code of its File: page (renders QR via KOReader's `ffi/qrencode`, writes minimal PNGs, rewrites image boxes to placeholder `<img>`s). Also owns the shared image-box walker used by the lazy-image mode (kept infoboxes join as image boxes there, their placeholders centered via `display:block; margin:0 auto`); drops non-image media (video/audio) and, in QR mode only, locator maps. |
 | `locmap.lua` | Locator maps (Template:Location map): in lazy mode composites each `div.locmap` into ONE PNG — base map thumb downloaded and decoded (`ffi/png`/`ffi/jpeg`) with red marker dots drawn at the template's percentages — and keeps the caption; failures fall back to a plain lazy placeholder of the bare base map. Other modes drop locmaps. |
-| `latex.lua` | Math formulas: block formulas → fetched Wikipedia SVGs (cap 60, Unicode fallback), inline formulas → Unicode transcription (replaces `MathML`/images). |
+| `latex.lua` | Math formulas: every formula (block and inline) becomes a marker span for its Wikipedia SVG (deduped by SVG hash, no caps, no fallback); lazyfetch downloads them in the background batch (formulas first). |
 | `cladogram.lua` | Clade tables → ASCII tree `<pre>` diagrams. |
 | `wikiutil.lua` | Shared helpers: minimal HTTP JSON GET, Wikipedia URL parsing/encoding, HTML notice-tag constants, balanced-tag matching (`findMatchingClose`). |
 | `wikireader-cache.lua` | EPUB cache (10 entries / 24 h), stale-file removal, sidecar-aware delete, cache dir handling. |
 | `wikireader-history.lua` | Last-10-articles reading history (title/lang references persisted in `G_reader_settings`, no files). |
 | `wikireader-bookmarks.lua` | User-bookmarked articles (max 50, newest first), stored as title/lang references in `G_reader_settings` (`wikireader_bookmarks`); never evicts automatically, only via explicit remove/clear. |
-| `lazyfetch.lua` | Current-page background image completion for "Show images": triggered by article opens and by page turns (`main.lua`'s `onPageUpdate`, coalesced per EPUB so overlapping checks can't stack), it resolves the current page via XPointer bracketing (`getPageXPointer(page)`/`(page+1)` + `getHTMLFromXPointers`) and downloads only pending images whose placeholder path appears in that page's HTML; on the last page it fetches all remaining images and completes the article. Failures never widen the batch to fetch-all. Rewrites the zip in place (`.tmp` + rename), keeps the pending entry until nothing remains, and seamlessly reloads the open document after each batch. |
+| `lazyfetch.lua` | Background completion of lazily-built EPUBs: downloads the whole pending set (formula SVGs first, then photographs) in one batch, triggered by article opens and page turns (`main.lua`'s `onPageUpdate`, coalesced per EPUB so overlapping checks can't stack). Rewrites the zip in place (`.tmp` + rename), keeps the pending entry until nothing remains, removes failed downloads (their `<img>` + manifest item) so no blank squares remain, and seamlessly reloads the open document after each batch. |
 | `categories.lua` | Featured-articles category tree built from the API's flat section list; module-level lookup used by the link handler. |
 | `mainpage.lua` | Scrapes today's English Wikipedia main page for its "In the news" / "Did you know" / "On this day" boxes (by their stable `mp-*` ids), cleans them, routes their thumbnails through the image settings (`epub.buildMainPageEpub` stitches them in; `lazyfetch` completes the lazy ones), and absolutizes the article links. English-only: other wikis have different main-page titles and id-less markup. |
 | `_meta.lua` | Plugin name/version metadata shown in the About dialog. |
@@ -42,16 +42,16 @@ srcset 2x/1.5x as fallback; low/mid/high only active in show mode).
 2. `epub.lua` checks cache → fetches Parsoid HTML from the MediaWiki API.
 3. HTML cleaning passes run in sequence (`htmlclean`, `latex`, `cladogram`,
    locmap composites + QR or lazy-image placeholders via `qrimage`); `latex`
-   also fetches block-formula SVGs (capped, Unicode fallback on failure),
-   `locmap` fetches+composites locator maps (capped, lazy fallback on
-   failure; lazy mode only).
+   turns every formula into a pending SVG marker (no downloads), `locmap`
+   fetches+composites locator maps (capped, lazy fallback on failure; lazy
+   mode only).
 4. `Wikipedia.createEpub` builds the EPUB; patched `Archiver` hooks inject
-   QR PNGs, locator-map composites, block-formula math SVGs, stylesheet,
-   metadata.
+   QR PNGs, locator-map composites, the formula-SVG `<img>`s (zip entries
+   left for lazyfetch), stylesheet, metadata, and the pending-URL list.
 5. Result cached as `<lang> - <Title>.epub`; opened via ReaderUI.
-6. In "Show images" mode, `lazyfetch` then downloads the images on the
-   current page in the background and re-triggers on every page turn
-   (zip swap + seamless reload per batch).
+6. `lazyfetch` then downloads the whole pending set in the background
+   (formula SVGs first, then photographs) and re-triggers on every page
+   turn (zip swap + seamless reload per batch).
 
 The "Wikipedia main page" flow skips steps 2–4: `mainpage.fetchSections`
 scrapes and cleans the three main-page boxes itself, and

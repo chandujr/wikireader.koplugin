@@ -92,8 +92,9 @@ function M.buildEpub(epub_path, title, lang, callback, fixed_path)
     -- stylesheet hook below need it, and the Archiver hook must not read a
     -- bare global (that bug silently disabled the full-width infobox CSS).
     local infobox_full_width = G_reader_settings:isTrue("wikireader_show_infoboxes")
-    -- Block-formula SVGs fetched by latex.replaceMathElements; stitched in
-    -- from the Archiver hooks below, like the QR images.
+    -- Formula SVG URL records collected by latex.replaceMathElements;
+    -- markers swap to <img> in the Archiver hooks below and the URLs join
+    -- the pending list ahead of the photographs (see lazyfetch.lua).
     local math_images = {}
     -- Locator maps composited by locmap.replaceLocMaps (lazy mode only):
     -- base map PNG with the red marker dots drawn in; stitched in from the
@@ -450,9 +451,10 @@ function M.buildEpub(epub_path, title, lang, callback, fixed_path)
                         "OEBPS/" .. composite.path, composite.png, mtime)
                 end
             end
-            -- Swap each block-formula marker back to a real <img>, carrying
-            -- the original SVG's inline style (..height/vertical-align:)
-            -- from Wikipedia, and register the SVG files.
+            -- Swap each formula marker for a real <img>. The SVG zip
+            -- entries are NOT written here: the files don't exist yet,
+            -- lazyfetch.lua downloads them after the article opens and
+            -- fills them in.
             if next(math_images) then
                 content = content:gsub('<span class="wikireader%-mathimg" data%-mathimgindex="(%d+)"[^>]*></span>',
                     function(idx)
@@ -460,17 +462,14 @@ function M.buildEpub(epub_path, title, lang, callback, fixed_path)
                         if not mathimg then
                             return ""
                         end
-                        local path = string.format("images/math%05d.svg", tonumber(idx))
-                        -- Wikipedia's inline sizing style would let body text flow
-                        -- around the formula; block formulas go on their own line.
+                        -- Own classes: the .wikireader-mathimg box rule
+                        -- (background/border/padding, page-break-avoid) must
+                        -- not wrap running-text formulas.
+                        local cls = mathimg.inline and "wikireader-mathimg-inline" or "wikireader-mathimg"
                         return string.format(
-                            '<img src="%s" style="display:block; margin:0.6em auto; %s" class="wikireader-mathimg"/>',
-                            path, mathimg.style)
+                            '<img src="%s" style="%s" class="%s" alt=""/>',
+                            mathimg.imgpath, mathimg.style, cls)
                     end)
-                for idx, mathimg in ipairs(math_images) do
-                    original_addFileFromMemory(self,
-                        string.format("OEBPS/images/math%05d.svg", idx), mathimg.svg, mtime)
-                end
             end
         elseif entry_path == "OEBPS/content.opf" then
             if resolved_title then
@@ -484,13 +483,6 @@ function M.buildEpub(epub_path, title, lang, callback, fixed_path)
                         idx, qr.path))
                 end
             end
-            if next(math_images) then
-                for idx in ipairs(math_images) do
-                    content = content:gsub("</manifest>", string.format(
-                        '<item id="math%05d" href="images/math%05d.svg" media-type="image/svg+xml"/>\n  </manifest>',
-                        idx, idx))
-                end
-            end
             if next(locmap_composites) then
                 for idx in ipairs(locmap_composites) do
                     content = content:gsub("</manifest>", string.format(
@@ -498,6 +490,29 @@ function M.buildEpub(epub_path, title, lang, callback, fixed_path)
                         idx, idx))
                 end
             end
+            -- Formula SVGs are lazy like the photographs, and their
+            -- manifest items must be inserted BEFORE the wrimg ones so
+            -- lazyfetch's download slots fill with formulas first.
+            local math_manifest, math_pending = {}, nil
+            if next(math_images) then
+                math_pending = {}
+                for idx, mathimg in ipairs(math_images) do
+                    table.insert(math_manifest, string.format(
+                        '<item id="wrmath%05d" href="%s" media-type="image/svg+xml"/>',
+                        idx, mathimg.imgpath))
+                    math_pending[idx] = {
+                        src = mathimg.src, imgpath = mathimg.imgpath,
+                        mimetype = mathimg.mimetype, section = mathimg.section or 0,
+                        math = true,
+                    }
+                end
+            end
+            if math_pending then
+                for _, item in ipairs(math_manifest) do
+                    content = content:gsub("</manifest>", item .. "\n  </manifest>", 1)
+                end
+            end
+            local JSON = require("json")
             if next(lazy_images) then
                 for idx, img in ipairs(lazy_images) do
                     content = content:gsub("</manifest>", string.format(
@@ -511,8 +526,10 @@ function M.buildEpub(epub_path, title, lang, callback, fixed_path)
                 -- interrupted before the images arrive can still be
                 -- completed later (lazyfetch drops the entry once nothing
                 -- remains).
-                local JSON = require("json")
                 local pending = {}
+                for _, rec in ipairs(math_pending or {}) do
+                    pending[#pending + 1] = rec
+                end
                 for _, img in ipairs(lazy_images) do
                     local record =
                     { src = img.src, imgpath = img.imgpath, mimetype = img.mimetype, section = img.section or 0 }
@@ -525,6 +542,10 @@ function M.buildEpub(epub_path, title, lang, callback, fixed_path)
                     pending[#pending + 1] = record
                 end
                 original_addFileFromMemory(self, "OEBPS/wikireader-pending.json", JSON.encode(pending), mtime)
+            elseif math_pending then
+                -- Formulas-only article (no photographs): the pending
+                -- entry still rides along so lazyfetch completes it.
+                original_addFileFromMemory(self, "OEBPS/wikireader-pending.json", JSON.encode(math_pending), mtime)
             end
         elseif entry_path == "OEBPS/toc.ncx" then
             if resolved_title then
@@ -750,21 +771,10 @@ pre, code {
   margin: 0.2em 0 0.8em 0;
 }
 
-.wikireader-math {
-  white-space: nowrap;
-}
-
-/* Block formulas (Unicode transcriptions and SVG images) get the same
-   shaded box as code blocks and cladograms, so every non-prose element
-   reads as a distinct "display" unit. Inline formulas are unaffected:
-   crengine does not paint backgrounds on inline boxes. */
-.wikireader-math {
-  background: rgba(0,0,0,0.04);
-  border: 1px solid rgba(0,0,0,0.2);
-  padding: 0.5em 0.8em;
-  page-break-inside: avoid;
-}
-
+/* Display formulas (SVG images on their own line) get the same shaded box
+   as code blocks and cladograms, so every non-prose element reads as a
+   distinct "display" unit. Inline formula imgs carry a different class
+   (wikireader-mathimg-inline) so the box never wraps running text. */
 .wikireader-mathimg {
   background: rgba(0,0,0,0.04);
   border: 1px solid rgba(0,0,0,0.2);
