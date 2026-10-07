@@ -320,10 +320,12 @@ function WikiReader:onCloseDocument()
     end
 end
 
--- Every page turn in an open lazy EPUB re-triggers image completion for
--- the images now on the current page; lazyfetch coalesces overlapping
--- checks (no-op in no-image mode, and a cheap no-pending-exit otherwise,
--- so it can fire on any turn in any wiki EPUB).
+-- Page turns in an open lazy EPUB re-check for pending images; this
+-- covers articles opened outside the fetch flow (history, cache) and
+-- interrupted batches resumed after reopen. lazyfetch coalesces the
+-- overlapping checks and downloads all pending images in one batch (no-op
+-- in no-image mode, and a cheap no-pending-exit otherwise, so it can fire
+-- on any turn in any wiki EPUB).
 function WikiReader:onNetworkConnected()
     lazyfetch.onNetworkConnected()
 end

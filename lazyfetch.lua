@@ -4,24 +4,19 @@ Background image completion for lazily-built WikiReader EPUBs.
 With "Fetch images in background" on, epub.lua builds the article EPUB
 immediately, with each boxed image as a placeholder <img> whose zip entry
 does not exist yet, and an OEBPS/wikireader-pending.json entry listing the
-URLs to fetch. This module downloads those URLs without ever holding the UI
-thread (each transfer runs in a coroutine over non-blocking sockets,
-resumed only from scheduler ticks), rewrites the zip with the downloaded
-images added and the pending entry dropped, and seamlessly reloads the open
-document. A cached article that was interrupted mid-download still carries
-its pending entry, so the next open finishes it the same way. Failed
-downloads are removed from content.html and content.opf so no blank
-squares remain.
-
-Only the images on the CURRENT reading page are fetched: the page is
-bracketed with XPointers and its HTML is matched against each pending
-image's placeholder src path. Page turns re-trigger completion via
-main.lua's onPageUpdate handler (debounced); the periodic re-check only
-covers a not-yet-determinable position and the tail of an in-flight download,
-stopping once a page is confirmed image-free. Any failure to determine
-the current page or its HTML fetches nothing that cycle; there is no
-fetch-all fallback, so an API failure can only delay fetching, never
-widen the batch.
+URLs to fetch. This module downloads the whole pending set as ONE
+background batch after the document opens (each transfer in a coroutine
+over non-blocking sockets, resumed only from scheduler ticks, so downloads
+never hold the UI thread or block the open), rewrites the zip with the
+images added and the pending entry dropped, and seamlessly reloads the
+open document — that single reload is the article's only partial refresh.
+A cached article interrupted mid-download keeps its pending entry, so the
+next open finishes it the same way. Failed downloads are removed from
+content.html and content.opf so no blank squares remain. Page turns
+re-trigger the check (debounced via main.lua's onPageUpdate) but are
+absorbed while a batch runs; a batch is abandoned only when the document
+is closed, never on a page turn — every listed image is wanted whatever
+page the reader is on.
 ]]
 
 local Archiver = require("ffi/archiver")
@@ -145,9 +140,6 @@ local function readPendingCached(epub_path)
     return images
 end
 
--- Rewrites the zip in place: every original entry, plus the downloaded
--- image files, minus the pending entry (this build is now complete).
--- Failed downloads have their placeholder <img> and manifest item removed.
 -- Rewrites the zip in place after one batch: adds the downloaded images,
 -- removes the tags of attempted-but-failed ones (results[i] == false; they
 -- would otherwise show as permanent blank squares), keeps not-yet-scheduled
@@ -261,8 +253,7 @@ end
 -- a map of batch index -> body (false = attempted and failed, absent = not
 -- scheduled). `is_abandoned` is polled between slices; when it turns true
 -- the batch is discarded (partial downloads dropped, pending entry intact)
--- and on_all_done(nil) fires, so the caller re-checks the reader's new
--- position.
+-- and on_all_done(nil) fires.
 local function downloadAll(images, on_all_done, is_abandoned)
     local results = {}
     if httpasync then
@@ -488,80 +479,6 @@ local function liveDocument(epub_path)
     return nil
 end
 
--- Reading position as a page number, or nil if it can't be determined yet.
-local function currentPage(doc)
-    local ok, page = pcall(function()
-        return doc:getPageFromXPointer(doc:getXPointer())
-    end)
-    if ok and page and page > 0 then
-        return page
-    end
-    return nil
-end
-
--- HTML of the current page, found by bracketing its XPointer range. Any
--- failure here (empty/nil on either side) yields nil rather than any
--- approximate page content. cf. koassistant.koplugin's context extractor
--- for the same getPageXPointer(page)/getPageXPointer(page+1) pattern.
-local function currentPageHtml(doc, page)
-    local xp_start = doc:getPageXPointer(page)
-    if not xp_start or xp_start == "" then
-        return nil
-    end
-    local xp_end = doc:getPageXPointer(page + 1)
-    if not xp_end or xp_end == "" then
-        return nil
-    end
-    local ok_html, html = pcall(function()
-        if doc.getHTMLFromXPointers then
-            return doc:getHTMLFromXPointers(xp_start, xp_end)
-        end
-    end)
-    if not ok_html or not html or html == "" then
-        return nil
-    end
-    return html
-end
-
--- Splits the pending list into the images appearing on the current page
--- (their placeholder src path, e.g. "images/wrimg01234.ext", shows up in
--- the page's HTML) and the rest. On the last page the page+1 bracket
--- fails, so everything left is fetched at once (and this build completes):
--- koassistant's screen-selection document-end probe exists but navigates
--- the live document, too intrusive for a background tick. Other unusable
--- brackets fetch nothing, so an API failure can only delay fetching,
--- never widen the batch (no fetch-all fallback).
-local function partition(images, doc, page)
-    if not doc or not page then
-        return {}, images
-    end
-    local ok, page_count = pcall(function() return doc:getPageCount() end)
-    if ok and page_count and page >= page_count then
-        -- Last page: no page+1 bracket exists; the user is done reading,
-        -- so finish the article instead of stranding its final images.
-        return images, {}
-    end
-    local page_html = currentPageHtml(doc, page)
-    if not page_html then
-        return {}, images
-    end
-    local batch, remaining = {}, {}
-    for _, img in ipairs(images) do
-        if page_html:find(img.imgpath, 1, true) then
-            batch[#batch + 1] = img
-        else
-            remaining[#remaining + 1] = img
-        end
-    end
-    logger.dbg("WikiReader lazy: current page", page, "-",
-        #batch, "on page,", #remaining, "elsewhere")
-    return batch, remaining
-end
-
--- How often a not-yet-determinable position is re-probed while the
--- article stays open; page turns make this rare (see _step).
-local CHECK_INTERVAL = 20
-
 -- Coalescing, per EPUB: scheduleCompletion is called on article open and
 -- again on every page turn, and a batch download can outlive several of
 -- those triggers; step_running[path] marks that path's download as in
@@ -580,8 +497,7 @@ local scheduled_step = {} -- epub_path -> the pending (debounced) step action
 
 local function planStep(epub_path)
     -- Trailing-edge debounce: a burst of page turns collapses into one
-    -- check ~1s after the LAST trigger, instead of stacking a step (each
-    -- with its own zip walk and page-HTML extraction) per turn.
+    -- check ~1s after the LAST trigger, instead of stacking a step per turn.
     local prev = scheduled_step[epub_path]
     if prev then
         UIManager:unschedule(prev)
@@ -589,32 +505,26 @@ local function planStep(epub_path)
     local action
     action = function()
         scheduled_step[epub_path] = nil
-        -- A download in flight absorbs the trigger; the cycle's own
-        -- completion-time re-check covers the fresh position.
+        -- A download in flight absorbs the trigger.
         if step_running[epub_path] then return end
         M._step(epub_path)
     end
     scheduled_step[epub_path] = action
-    -- Small delay so an article-open-triggered first render is never
-    -- contending with the first image request.
+    -- Small delay so the article-open first render isn't contending with
+    -- the first image request.
     UIManager:scheduleIn(1, action)
 end
 
 function M.scheduleCompletion(epub_path)
-    if NetworkMgr:isOnline() then
-        net_blocked[epub_path] = nil
-        planStep(epub_path)
-    elseif not net_blocked[epub_path] then
-        net_blocked[epub_path] = true
-        NetworkMgr:runWhenOnline(function() planStep(epub_path) end)
-    end
+    -- No network check here: this fires on every page turn of every wiki
+    -- EPUB; _step gates the wifi prompt on actual pending work.
+    planStep(epub_path)
 end
 
 function M.onNetworkConnected()
     net_blocked = {}
 end
 
--- Exposed only for the offline checks.
 function M._step(epub_path)
     if step_running[epub_path] then
         return -- a batch for this EPUB is already downloading
@@ -623,79 +533,47 @@ function M._step(epub_path)
     if not images then
         return -- nothing pending: build is complete (or not a lazy build)
     end
+    if NetworkMgr:isOnline() then
+        net_blocked[epub_path] = nil
+    elseif net_blocked[epub_path] then
+        return -- prompted before and declined/still offline for this article
+    else
+        net_blocked[epub_path] = true
+        NetworkMgr:runWhenOnline(function() planStep(epub_path) end)
+        return
+    end
     local doc = liveDocument(epub_path)
     if not doc then
-        -- The reader moved on. The completed-so-far EPUB is the cache copy,
-        -- so whatever was fetched is kept; the rest is fetched on the next
-        -- open (fetchAndOpen restarts the completion then).
+        -- The reader moved on; fetched images persist in the zip, the rest
+        -- is fetched on the next open.
         logger.dbg("WikiReader lazy: article no longer open, pausing completion")
         return
     end
-    local page = currentPage(doc)
-    if not page then
-        -- Document still rendering/positioning itself; wait for a later
-        -- check rather than assuming the start and over-fetching.
-        UIManager:scheduleIn(CHECK_INTERVAL, function() M._step(epub_path) end)
-        return
-    end
-    local batch = partition(images, doc, page)
-    if #batch == 0 then
-        -- Page and its HTML confirmed image-free: stop polling; the next
-        -- page turn (main.lua onPageUpdate) or the next open re-triggers.
-        return
-    end
-    -- Map batch items back to their indexes in the full pending list.
-    local index_of = {}
-    for i, img in ipairs(images) do index_of[img] = i end
-    local batch_page = page
     step_running[epub_path] = true
-    -- A page turn (or reader close) during the batch abandons it: the
-    -- in-flight downloads belong to a page the reader left, and the zip
-    -- rewrite + seamless reload would stall the UI for work nobody sees.
-    local function is_abandoned()
-        local doc = liveDocument(epub_path)
-        if not doc then return true end
-        local now_page = currentPage(doc)
-        -- nil (mid-render/positioning) is not a move; only a determinable
-        -- different page abandons the batch.
-        return now_page ~= nil and now_page ~= batch_page
-    end
-    downloadAll(batch, function(results)
+    -- Whole-article batch, run to completion even across page turns: the
+    -- single seamless reload below is this build's only partial refresh.
+    downloadAll(images, function(results)
         step_running[epub_path] = false
         if not results then
-            -- Abandoned: this batch's page-turn trigger was already
-            -- absorbed by step_running, so a re-check must pick up whatever
-            -- page the reader is on now.
-            UIManager:scheduleIn(0.5, function() M._step(epub_path) end)
-            return
+            return -- reader closed mid-batch; leftovers surface at the next open
         end
-        local results_all = {}
-        for j, content in pairs(results) do
-            results_all[index_of[batch[j]]] = content
-        end
-        local ok = swapInImages(epub_path, images, results_all)
+        -- Failed downloads lost their placeholders in the swap, and
+        -- nothing remains pending: build is complete, no re-check needed.
+        local ok = swapInImages(epub_path, images, results)
         if ok then
-            -- XPointers are paragraph-anchored, so the seamless reload
-            -- keeps the reading position even though images reflow the
-            -- text slightly. Resolve the LIVE reader (self.ui may be the
-            -- filemanager instance when the article was opened from a
-            -- menu). The reload is idle-gated: skipped when the reader has
+            -- XPointers are paragraph-anchored, so the reload keeps the
+            -- reading position even though images reflow the text. Resolve
+            -- the LIVE reader (self.ui may be the filemanager instance when
+            -- the article was opened from a menu); skip when the reader has
             -- moved on — the images persist in the zip and surface at the
-            -- next batch's reload or the next open.
+            -- next open.
             local ReaderUI = require("apps/reader/readerui")
             local ui = ReaderUI.instance
             if ui and ui.document and ui.document.file == epub_path then
-                local now_page = currentPage(ui.document)
-                if now_page == nil or now_page == batch_page then
-                    ui:reloadDocument(nil, true)
-                end
+                ui:reloadDocument(nil, true)
             end
         end
-        -- The position may have moved while the batch ran (and the reload
-        -- re-renders the page); one re-check either fetches the new page's
-        -- images or confirms it image-free and stops the loop.
-        UIManager:scheduleIn(0, function() M._step(epub_path) end)
-    end, is_abandoned)
+    end, function() return liveDocument(epub_path) == nil end)
 end
 
 -- Pending list of a not-open EPUB (save flow). Raw readPending, not the
@@ -704,11 +582,11 @@ function M.pendingImages(epub_path)
     return readPending(epub_path)
 end
 
--- Fetches ALL pending images for a NOT-open EPUB: the save flow's temp
--- build must be self-contained, unlike _step's paged flow. A full batch
--- leaves no "not scheduled" results, so swapInImages drops the pending
--- entry; failed downloads lose their placeholder as usual. on_done gets
--- the swap's success, so the caller can discard the file on zip failure.
+-- Fetches ALL pending images for a NOT-open EPUB (the save flow's temp
+-- build must be self-contained). A full batch leaves no "not scheduled"
+-- results, so swapInImages drops the pending entry; failed downloads lose
+-- their placeholder as usual. on_done gets the swap's success, so the
+-- caller can discard the file on zip failure.
 function M.completeAll(epub_path, on_done)
     local images = readPending(epub_path)
     if not images then
