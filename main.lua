@@ -652,7 +652,7 @@ function WikiReader:addToMainMenu(menu_items)
                     self:saveCurrentArticle()
                 end,
                 help_text = _(
-                    "Rebuild the article you are reading as a fresh EPUB with your choice of image handling and file name, saved to the built-in Wikipedia save folder."),
+                    "Copy the EPUB of the article you are reading, with its image handling as currently built, to the built-in Wikipedia save folder."),
             },
             {
                 text = _("Share current article link"),
@@ -1590,47 +1590,10 @@ function WikiReader:saveCurrentArticle()
         util.makePath(save_dir)
     end
 
-    self:showSaveArticleOptions(save_dir)
+    self:showSaveArticleFilename(save_dir)
 end
 
--- The reading-mode setting is only the dialog's default: a saved copy in
--- "show" mode would carry a pending list nobody completes, so image
--- handling is chosen per save, not inherited from reading.
-function WikiReader:showSaveArticleOptions(save_dir)
-    local mode_values = {
-        { value = "none", text = _("No image") },
-        { value = "show", text = _("Save images") },
-        { value = "qr", text = _("Save images as QR codes") },
-    }
-    local reading_mode = G_reader_settings:readSetting("wikireader_image_mode")
-    if not reading_mode or (reading_mode ~= "none" and reading_mode ~= "qr") then
-        reading_mode = "show"
-    end
-    local radio_buttons = {}
-    for _, mode in ipairs(mode_values) do
-        table.insert(radio_buttons, {
-            {
-                text = mode.text,
-                provider = mode.value,
-                checked = reading_mode == mode.value,
-            },
-        })
-    end
-    local RadioButtonWidget = require("ui/widget/radiobuttonwidget")
-    UIManager:show(RadioButtonWidget:new {
-        title_text = _("Save current article"),
-        info_text = _("Images in the saved copy:"),
-        width_factor = 0.9,
-        radio_buttons = radio_buttons,
-        ok_text = _("Continue"),
-        cancel_text = _("Cancel"),
-        callback = function(radio)
-            self:showSaveArticleFilename(radio.provider, save_dir)
-        end,
-    })
-end
-
-function WikiReader:showSaveArticleFilename(image_mode, save_dir)
+function WikiReader:showSaveArticleFilename(save_dir)
     local lang = (nav_current.lang or self.lang or "en"):lower()
     local title = nav_current.title or ""
     local prefill = lang .. " - " .. title:gsub("_", " ")
@@ -1642,10 +1605,9 @@ function WikiReader:showSaveArticleFilename(image_mode, save_dir)
         buttons = {
             {
                 {
-                    text = _("Back"),
+                    text = _("Cancel"),
                     callback = function()
                         UIManager:close(save_dialog)
-                        self:showSaveArticleOptions(save_dir)
                     end,
                 },
                 {
@@ -1655,7 +1617,7 @@ function WikiReader:showSaveArticleFilename(image_mode, save_dir)
                         local name = wutil.trim(save_dialog:getInputText() or "")
                         UIManager:close(save_dialog)
                         if name == "" then name = prefill end
-                        self:saveArticleAs(image_mode, save_dir, name)
+                        self:saveArticleAs(save_dir, name)
                     end,
                 },
             },
@@ -1665,107 +1627,68 @@ function WikiReader:showSaveArticleFilename(image_mode, save_dir)
     save_dialog:onShowKeyboard()
 end
 
--- Rebuilds into a temp file (never a cache copy: it may hold another
--- mode's placeholders), quality forced high -- the saved copy is static,
--- so its pending list must ride with the sharpest build-time URLs. The
--- override window is buildEpub's first resume: every mode/quality read
--- runs there, before it yields and the restore below fires.
-function WikiReader:saveArticleAs(image_mode, save_dir, name)
-    local lang = nav_current.lang or self.lang or "en"
-    local title = nav_current.title
+-- The cached article EPUB is the final build for the user's image
+-- settings (completion rewrites that same file), so saving is a copy plus
+-- sidecar. An in-flight image batch makes it a moving target: wait it out
+-- (nudging completion past an offline park), then copy.
+function WikiReader:saveArticleAs(save_dir, name)
+    local src_path = nav_current.path
     local filename = util.getSafeFilename(name .. ".epub", save_dir):gsub("_", " ")
     local dest_path = save_dir .. "/" .. filename
-    -- Leading dot keeps half-built EPUBs out of file-manager listings;
-    -- the timestamp keeps concurrent saves from sharing one temp file.
-    local temp_path = save_dir .. "/.wr-save." .. os.time() .. ".epub"
 
-    local prev_mode = G_reader_settings:readSetting("wikireader_image_mode")
-    local prev_quality = G_reader_settings:readSetting("wikireader_image_quality")
-    G_reader_settings:saveSetting("wikireader_image_mode", image_mode)
-    G_reader_settings:saveSetting("wikireader_image_quality", "high")
-    local function restore()
-        G_reader_settings:saveSetting("wikireader_image_mode", prev_mode)
-        G_reader_settings:saveSetting("wikireader_image_quality", prev_quality)
-    end
-
-    NetworkMgr:runWhenOnline(function()
-        -- fixed_path: the temp build must not be renamed into the cache dir.
-        local ok_call, err = pcall(epub.buildEpub, temp_path, title, lang, function(success)
-            if not success then
-                self:cleanupSaveTemp(temp_path)
-                UIManager:show(InfoMessage:new {
-                    text = _("Couldn't download that article. Check the title and your connection."),
-                })
-                return
-            end
-            -- Defer out of the build coroutine before showing widgets.
-            UIManager:nextTick(function()
-                self:finishSavedBuild(temp_path, dest_path, filename, image_mode)
-            end)
-        end, true)
-        -- Safe: every mode/quality read ran inside buildEpub's first,
-        -- blocking resume, before its first yield.
-        pcall(restore)
-        if not ok_call then
-            self:cleanupSaveTemp(temp_path)
-            UIManager:show(InfoMessage:new {
-                text = T(_("Failed to save article: %1"), err),
-            })
-        end
-    end)
-end
-
--- "show" only: a saved copy must carry no pending list a reader can
--- never finish, so all images are fetched up front.
-function WikiReader:finishSavedBuild(temp_path, dest_path, filename, image_mode)
-    if image_mode ~= "show" then
-        self:commitSavedEpub(temp_path, dest_path, filename)
+    if not lazyfetch.pendingImages(src_path) then
+        self:commitSavedEpub(src_path, dest_path, filename)
         return
     end
-    local images = lazyfetch.pendingImages(temp_path)
-    if not images or #images == 0 then
-        self:commitSavedEpub(temp_path, dest_path, filename)
-        return
-    end
-    local info = InfoMessage:new { text = _("Downloading images…") }
+    local info = InfoMessage:new { text = _("Waiting for images to finish downloading…") }
     UIManager:show(info)
-    lazyfetch.completeAll(temp_path, function(ok)
-        UIManager:close(info)
-        if not ok then
-            self:cleanupSaveTemp(temp_path)
+    -- 3 nudged attempts (~9s): enough for an in-flight batch to settle
+    -- and for the wifi prompt to fire once; after that the saved copy
+    -- keeps whatever images exist rather than waiting forever.
+    local attempts = 3
+    local function poll()
+        if not lfs.attributes(src_path) then
+            UIManager:close(info)
             UIManager:show(InfoMessage:new {
-                text = _("Couldn't rewrite the saved copy with its images. Try again."),
+                text = _("The article file no longer exists (may have been evicted from cache)."),
             })
             return
         end
-        self:commitSavedEpub(temp_path, dest_path, filename)
-    end)
+        if not lazyfetch.pendingImages(src_path) then
+            UIManager:close(info)
+            self:commitSavedEpub(src_path, dest_path, filename)
+            return
+        end
+        -- Also nudges an offline-parked batch toward started once wifi
+        -- returns (sans page turn, _step wouldn't otherwise run).
+        lazyfetch.scheduleCompletion(src_path)
+        attempts = attempts - 1
+        if attempts <= 0 then
+            UIManager:close(info)
+            self:commitSavedEpub(src_path, dest_path, filename)
+            UIManager:show(InfoMessage:new {
+                text = _("Some images didn't finish downloading. The article was saved as is."),
+            })
+            return
+        end
+        UIManager:scheduleIn(3, poll)
+    end
+    poll()
 end
 
--- Every mode funnels here: overwrite confirm, copy + sidecar, cleanup.
-function WikiReader:commitSavedEpub(temp_path, dest_path, filename)
+-- Overwrite confirm, copy + sidecar.
+function WikiReader:commitSavedEpub(src_path, dest_path, filename)
     if lfs.attributes(dest_path) then
         UIManager:show(ConfirmBox:new {
             text = T(_("%1 already exists. Overwrite?"), BD.filename(filename)),
             ok_text = _("Overwrite"),
             ok_callback = function()
-                self:doSaveArticle(temp_path, dest_path, filename)
-                self:cleanupSaveTemp(temp_path)
-            end,
-            cancel_callback = function()
-                self:cleanupSaveTemp(temp_path)
+                self:doSaveArticle(src_path, dest_path, filename)
             end,
         })
         return
     end
-    self:doSaveArticle(temp_path, dest_path, filename)
-    self:cleanupSaveTemp(temp_path)
-end
-
--- Both the build file and the swap's own .tmp may linger on failure paths.
-function WikiReader:cleanupSaveTemp(temp_path)
-    os.remove(temp_path)
-    os.remove(temp_path .. ".tmp")
+    self:doSaveArticle(src_path, dest_path, filename)
 end
 
 function WikiReader:doSaveArticle(src_path, dest_path, display_filename)
