@@ -237,12 +237,12 @@ function M.buildEpub(epub_path, title, lang, callback, fixed_path)
                 -- TemplateStyles/CSS art crengine can't render; drop it
                 -- (with its header row) before the other infobox passes.
                 html = htmlclean.stripElementPeriodicTable(html)
-                -- Kept infobox: in lazy mode keep the media cells -- their
-                -- images become lazy placeholders and locmaps become
-                -- composites -- and only drop non-image media; otherwise
-                -- drop media cells, keep text data and inline names.
-                -- Must run before the media passes.
-                html = htmlclean.stripImageCells(html, nil, { keep_images = lazy_enabled })
+                -- Kept infobox: in lazy/qr mode keep the media cells (their
+                -- images become placeholders, map composites or QR codes) and
+                -- only drop non-image media; otherwise drop media cells, keep
+                -- text data and inline names. Must run before the media passes.
+                html = htmlclean.stripImageCells(html, nil,
+                    { keep_images = lazy_enabled or qr_enabled })
                 -- Center full-width infobox rows inline (the base stylesheet
                 -- has no .infobox rules and crengine ignores descendant
                 -- selectors), mirroring Wikipedia's own alignment.
@@ -312,11 +312,12 @@ function M.buildEpub(epub_path, title, lang, callback, fixed_path)
                 html = locmap.replaceLocMaps(html, locmap_composites,
                     { hi_res = hi_res, lazy_images = lazy_images })
             end
-            -- Replace each media element with a QR or lazy placeholder;
-            -- QR PNGs are stitched in from the Archiver hooks below, lazy
-            -- placeholders reference zip entries filled in later.
+            -- Replace each media element with a QR or lazy placeholder
+            -- (QR PNGs stitched in via the Archiver hooks below, lazy
+            -- placeholders are zip entries filled in later).
             if qr_enabled then
-                html = qrimage.replaceImagesWithQr(html, qr_images, qr_size, lang)
+                html = qrimage.replaceImagesWithQr(html, qr_images, qr_size, lang,
+                    { treat_infobox_as_imagebox = infobox_full_width })
             elseif lazy_enabled then
                 html = qrimage.replaceImagesWithLazy(html, lazy_images, hi_res,
                     { treat_infobox_as_imagebox = infobox_full_width })

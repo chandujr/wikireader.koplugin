@@ -250,14 +250,11 @@ local VOID_TAGS = {
 -- MediaWiki uses those spans for small inline icons in the prose (moon
 -- phase symbols, flags, ...), which would be silly as QR codes. Images in
 -- galleries are covered anyway via their div.thumb/li.gallerybox parents.
--- Kept infoboxes (the "Show infoboxes" option) are not an image-box
--- context by default: in QR/none mode their media is stripped entirely
--- before this pass runs (htmlclean.stripImageCells), and in lazy mode
--- stripImageCells only runs with keep_images, leaving the (big) infobox
--- images in place -- there opts.treat_infobox_as_imagebox makes the
--- walker treat infobox subtrees as image-box context so those imgs get
--- lazy placeholders too. Either way, nothing inside an infobox should
--- become a QR code.
+-- Kept infoboxes (the "Show infoboxes" option) are an image-box context
+-- only when opts.treat_infobox_as_imagebox is set: htmlclean leaves their
+-- media cells in place (stripImageCells with keep_images) and img_fn turns
+-- those imgs into lazy placeholders or QR codes. Inline icons are removed
+-- by stripImageCells first, so only genuine media survives inside the box.
 local function hasClass(cls, token)
     for w in cls:gmatch("[^%s]+") do
         if w == token then
@@ -697,12 +694,15 @@ end
 -- QR mode: every boxed image becomes a QR code of its File:
 -- description page. Bare EasyTimeline charts (see below) go through
 -- replaceTimelineWrappers first.
-function M.replaceImagesWithQr(html, qr_images, qr_size, lang)
+function M.replaceImagesWithQr(html, qr_images, qr_size, lang, opts)
     return walkImageBoxes(html,
         function(attrs)
             return qrImageTag(attrs, qr_images, qr_size, lang)
         end,
-        { drop_locmap = true })
+        {
+            drop_locmap = true,
+            treat_infobox_as_imagebox = opts and opts.treat_infobox_as_imagebox,
+        })
 end
 
 -- Lazy-image mode: boxed <img>s become placeholders whose zip entries are
