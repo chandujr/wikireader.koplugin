@@ -327,10 +327,14 @@ function M.buildEpub(epub_path, title, lang, callback, fixed_path)
                 -- attribute-only selectors; drop them so the full-width
                 -- figure rules below always win (see htmlclean.lua).
                 html = htmlclean.stripFigureHalign(html)
-                -- {{Multiple image}} uses flexbox, unsupported by crengine;
-                -- rewrite each box into one tiny <table> per image, so
-                -- nothing jumps pages as one block.
+                -- {{Multiple image}} uses flexbox, unsupported by crengine:
+                -- body boxes rewrite into one tiny <table> per image (so
+                -- nothing jumps pages as one block); boxes inside a kept
+                -- infobox go back into the infobox's own grid rows.
                 html = htmlclean.restructureMultiImages(html)
+                -- {{Infobox settlement/columns}} uses CSS display:table
+                -- (see settlementColsToTable in htmlclean.lua).
+                html = htmlclean.settlementColsToTable(html)
                 -- Gallery thumbs' inline width would pin the image to the
                 -- left edge of the full-width box (see htmlclean.lua).
                 html = htmlclean.centerGalleryThumbs(html)
