@@ -551,13 +551,23 @@ end
 
 -- True when a cell (after inline icons were removed) still holds genuine
 -- media: a large (>24px) <img>, a <table> image box, <figure>, a
--- kartographer <mapframe>, or <video>/<audio>. Such cells are dropped
--- whole; anything else is inline-icon-free text and is kept.
+-- kartographer mapframe, or <video>/<audio>. Such cells are dropped
+-- whole; anything else is inline-icon-free text and is kept. Content is
+-- matched case-insensitively (lowered here), as callers may or may not
+-- have lowered it.
 function M.cellHasMedia(content)
+    content = content:lower()
     if content:find("<video", 1, true)
         or content:find("<audio", 1, true)
         or content:find("<figure", 1, true)
         or content:find("<mapframe", 1, true) then
+        return true
+    end
+    -- Kartographer's static frame: modern Parsoid wraps the OSM snapshot
+    -- <img> in an <a data-mw-kartographer="mapframe"> instead of emitting
+    -- a literal <mapframe> element (which only the snapshot itself sees).
+    if content:find('mw:extension/mapframe', 1, true)
+        or content:find('data-mw-kartographer="mapframe"', 1, true) then
         return true
     end
     local pos = 1
@@ -648,6 +658,10 @@ function M.stripImageCellsInBlock(block, opts)
             drop_cell = lower:find("<video", 1, true) ~= nil
                 or lower:find("<audio", 1, true) ~= nil
                 or lower:find("<mapframe", 1, true) ~= nil
+                -- Interactive maps serve a static snapshot; without
+                -- touch interaction it is just a wrong-resolution render.
+                or lower:find('data-mw-kartographer="mapframe"', 1, true) ~= nil
+                or lower:find('mw:extension/mapframe', 1, true) ~= nil
         end
 
         if drop_cell then
