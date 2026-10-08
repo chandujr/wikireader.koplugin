@@ -1785,6 +1785,71 @@ local function enclosingTag(html, tag, pos)
     end
 end
 
+-- Sums a row's <td>/<th> colspan values (nested-table cells included;
+-- grid-row cells carry no nested tables in practice).
+local function rowColumnSpan(row)
+    local total = 0
+    for tag in row:gmatch("<t[dh][^>]*>") do
+        total = total + (tonumber(tag:match('colspan%s*=%s*"(%d+)"')) or 1)
+    end
+    return total
+end
+
+-- Pads each grid row's cells with colspan so the row's total column span
+-- matches target: a narrower box row (a lone image, or a .theader/
+-- overall-caption in a box with fewer columns than the infobox) would
+-- otherwise claim only the first infobox column -- its width:100% cell
+-- centered inside a partial column sits far off-center in a 2-column
+-- infobox. The extra span goes to the first colspan-less cell, or widens
+-- the first spanned one.
+local function padGridRowSpans(rows, target)
+    local out = {}
+    local pos = 1
+    while true do
+        local r_s, r_e = rows:find("<tr[^>]*>", pos)
+        if not r_s then
+            table.insert(out, rows:sub(pos))
+            break
+        end
+        local close_s, close_e = wutil.findMatchingClose(rows, "tr", r_e)
+        if not close_s then
+            table.insert(out, rows:sub(pos))
+            break
+        end
+        table.insert(out, rows:sub(pos, r_e))
+        local row = rows:sub(r_e + 1, close_s - 1)
+        local short = target - rowColumnSpan(row)
+        if short < 0 then short = 0 end
+        if short ~= 0 then
+            local i = 1
+            while true do
+                local cs, ce = row:find("<t[dh][^>]*>", i)
+                if not cs then break end
+                local tag = row:sub(cs, ce)
+                local span = tonumber(tag:match('colspan%s*=%s*"(%d+)"'))
+                if not span then
+                    -- Implicit span was 1; make the total target.
+                    row = row:sub(1, ce - 1) .. ' colspan="' .. (short + 1)
+                        .. '"' .. row:sub(ce)
+                    break
+                elseif span + short > 0 then
+                    -- No colspan-less cell: widen the first spanned one.
+                    row = row:sub(1, cs)
+                        .. tag:gsub('colspan%s*=%s*"%d+"', 'colspan="'
+                            .. tostring(span + short) .. '"', 1)
+                        .. row:sub(ce + 1)
+                    break
+                end
+                i = ce + 1
+            end
+        end
+        table.insert(out, row)
+        table.insert(out, rows:sub(close_s, close_e))
+        pos = close_e + 1
+    end
+    return table.concat(out)
+end
+
 -- Replaces a multi-image box's host row inside a kept infobox: instead of
 -- a nested <table> (the multiImageToTable form), the box's image rows are
 -- emitted as rows of the infobox table itself, one <tr> per image row:
@@ -1829,6 +1894,21 @@ local function hoistMultiImageRows(html, o_start, w_close_end)
         return nil
     end
     local td_open = html:sub(td_s, td_e)
+    -- Column budget of the host row: its own colspan plus the other
+    -- cells' spans in the same <tr> (a labeled row contributes its <th>).
+    local function cellsSpan(s)
+        local total = 0
+        for tag in s:gmatch("<t[dh][^>]*>") do
+            total = total + (tonumber(tag:match('colspan%s*=%s*"(%d+)"')) or 1)
+        end
+        return total
+    end
+    local target = (tonumber(td_open:match('colspan%s*=%s*"(%d+)"')) or 1)
+        + cellsSpan(html:sub(tr_s, td_s - 1))
+        + cellsSpan(html:sub(td_close_e + 1, tr_close_s - 1))
+    if target > 1 then
+        rows = padGridRowSpans(rows, target)
+    end
     local pre = lead .. html:sub(td_e + 1, o_start - 1)
     local post = html:sub(w_close_end + 1, td_close_s - 1) .. trail
     -- The host row may hold cells besides the host one (a lower, labeled
