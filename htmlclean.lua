@@ -1413,124 +1413,152 @@ local function tsingleWidth(open_tag)
 end
 
 -- Rewrites the inside of one <tr> (the content of a .trow div): every
--- tsingle div becomes <td>, every theader div a full-width centered <td
--- colspan=N>. Everything else -- the thumbimage/thumbcaption divs nested
--- inside a tsingle, QR markers, links, text -- passes through untouched.
--- Each tsingle's inline "width:NNNpx" is converted to its share of that
--- row's total width: the injected stylesheet drops the table to 100% but
--- px cells would keep the slack to the right of the last cell (the row
--- never looked centered). Rows whose cells aren't all px-widthed keep the
--- template's own declarations.
--- The share is equal for every cell in the row (e.g. 3 cells -> 33.33%
--- each), not proportional to the template's px widths: crengine honors
--- per-cell percentage widths in its table algorithm, and equal shares
--- give the columns equal widths with captions wrapping inside them --
--- proportional shares would keep the template's uneven layout (e.g. a
--- wide first cell's longer caption holding its column wide).
-local function multiImageTransformRow(content, n_cols)
-    local n_tsingle = 0
-    local all_px = true
-    for tag in content:gmatch("<div[^>]*>") do
-        if tokenInClass(openTagClass(tag), "tsingle") then
-            if not tsingleWidth(tag) then
-                all_px = false
-                break
-            end
-            n_tsingle = n_tsingle + 1
+-- tsingle div becomes one proportional display:inline-block <div>, all
+-- enclosed in a single full-width <td colspan=N>; every theader div keeps
+-- its own full-width <td colspan=N>. Everything else -- the
+-- thumbimage/thumbcaption divs nested inside a tsingle, QR markers,
+-- links, text -- passes through untouched.
+-- Proportional (not equal) shares: the browser scales a row's images to
+-- one shared height, so their widths are aspect-proportional -- equal
+-- cells left the narrow images floating with dead space between them.
+-- One colspan cell per row also keeps crengine's whole-table column
+-- merging (its widest percentage per column wins) from fighting rows
+-- whose proportions differ. Needs KOReader's default "web" block-
+-- rendering mode; older modes degrade to stacked full-width items.
+
+-- Re-footprints one grid item's media to fill its cell: width:100%,
+-- aspect kept, capped like lazyfetch's 33vh page-height bound so tall
+-- originals can't bloat the cell. The template's height:NNpx;overflow:
+-- hidden clip crops a 1px rounding overshoot in the browser -- kept, it
+-- would slice the upscaled image. The walker rewrites <img>s before
+-- this pass, so raw imgs are only test-fixture/pre-placeholder builds.
+local function fillItemMedia(inner, lazy_images)
+    local fillStyle = function(px_w, px_h)
+        if px_w and px_h and px_h > 0 then
+            return string.format("width:100%%; max-width:%.2fvh", 33 * px_w / px_h)
         end
+        return "width:100%"
     end
-    -- Cells whose px widths the engine can't use as a unit keep the
-    -- template's own declarations (which sizes the cell relative to
-    -- siblings via "max-width", crengine's next-widest driver).
-    -- A row with a single image spans the whole box: emit colspan instead
-    -- of a width:100% cell. crengine keeps the widest percent any cell
-    -- deposits on a column and rescales the others to fit, so a lone
-    -- 100% cell would double its column's share for every other row
-    -- (the unequal-columns bug); colspan cells don't feed the column
-    -- width algorithm.
-    local span_all = all_px and n_cols > 1 and n_tsingle == 1
-    local out = {}
+    inner = inner:gsub('<span class="wikireader%-lazyimg" data%-lazyindex="([%d]+)"([^>]*)>',
+        function(idx, rest)
+            local w = tonumber(rest:match('width%s*:%s*(%d+)px'))
+            local h = tonumber(rest:match('height%s*:%s*(%d+)px'))
+            local style = fillStyle(w, h)
+            if lazy_images then
+                local img = lazy_images[tonumber(idx)]
+                if img then
+                    img.style = style
+                end
+            end
+            return '<span class="wikireader-lazyimg" data-lazyindex="'
+                .. idx .. '" style="' .. style .. '"></span>'
+        end)
+    inner = inner:gsub("<img([^>]*)>", function(attrs)
+        local w = tonumber(attrs:match('%swidth%s*=%s*"(%d+)"'))
+        local h = tonumber(attrs:match('%sheight%s*=%s*"(%d+)"'))
+        -- The captured attrs may end in the self-closing slash: keep it,
+        -- style goes before it.
+        local self_closing = attrs:sub(-1) == "/"
+        attrs = attrs:gsub('/%s*$', '')
+            :gsub('%s+width%s*=%s*"[^"]*"', '')
+            :gsub('%s+height%s*=%s*"[^"]*"', '')
+        return '<img' .. attrs .. ' style="' .. fillStyle(w, h) .. '"'
+            .. (self_closing and "/" or "") .. ">"
+    end)
+    inner = inner:gsub("<div([^>]*)>", function(a)
+        if a:match('overflow%s*:%s*hidden') and a:match('height%s*:%s*%d+px') then
+            return '<div' .. a:gsub('%s*style%s*=%s*"[^"]*"', '') .. '>'
+        end
+    end)
+    return inner
+end
+
+local function multiImageTransformRow(content, n_cols, lazy_images)
+    local items = {}
+    local n_grid, row_w = 0, 0
+    local missing = false
     local pos = 1
     while true do
         local o_start, o_end = content:find("<div[^>]*>", pos)
         if not o_start then
-            table.insert(out, content:sub(pos))
+            table.insert(items, { raw = content:sub(pos) })
             break
         end
-        table.insert(out, content:sub(pos, o_start - 1))
         local open_tag = content:sub(o_start, o_end)
         local cls = openTagClass(open_tag)
         local c_start, c_end = wutil.findMatchingClose(content, "div", o_end)
         if not c_start then
-            table.insert(out, content:sub(o_start))
+            table.insert(items, { raw = content:sub(o_start) })
             break
         end
         local inner = content:sub(o_end + 1, c_start - 1)
         if tokenInClass(cls, "tsingle") then
-            local td = open_tag:gsub("^<div([ >])", "<td%1")
-                -- The template's embedded TemplateStyles (which crengine
-                -- applies) floats .tsingle boxes left and, in its small-
-                -- screen media query, left-aligns their .thumbcaption --
-                -- the rewrite already provides the alignment via the
-                -- table's text-align:center, so the class must not survive.
-                :gsub('%s*class%s*=%s*"[^"]*"', '')
-            -- Replace the cell's fixed width with its equal share of the
-            -- row (two decimals); the inline width would otherwise defeat
-            -- the table's 100% reflow. Rows whose cells aren't all px-
-            -- widthed keep the template's own scaling behavior.
-            local kept = {}
-            if all_px then
-                local style = td:match('style%s*=%s*"([^"]*)"') or ""
-                for decl in style:gmatch("[^;]+") do
-                    if not decl:match('^%s*max%-width%s*:')
-                        and not decl:match('^%s*width%s*:') then
-                        kept[#kept + 1] = decl
-                    end
-                end
-                local rebuilt = table.concat(kept, ";")
-                if rebuilt ~= "" then rebuilt = rebuilt .. ";" end
-                local width_decl = span_all and ""
-                    or ("width:" .. string.format("%.2f", 100 / n_tsingle) .. "%")
-                td = td:gsub('(style%s*=%s*")([^"]*)(")', function(p, _, s)
-                    return p .. rebuilt .. width_decl .. s
-                end, 1)
-                if span_all then
-                    td = td:gsub("^<td", '<td colspan="' .. n_cols .. '"')
-                end
-            end
-            table.insert(out, addStyleProp(td, "vertical-align:top;padding-left:6px;padding-right:6px"))
-            table.insert(out, inner)
-            table.insert(out, "</td>")
-        elseif tokenInClass(cls, "theader") then
-            local td_open = '<td colspan="' .. n_cols .. '"'
-            local cell_style = open_tag:match('style%s*=%s*"([^"]*)"')
-            if cell_style and cell_style ~= "" then
-                td_open = td_open .. ' style="' .. cell_style .. ";text-align:center;font-weight:bold\""
+            local w = tsingleWidth(open_tag)
+            if not w then
+                missing = true
             else
-                td_open = td_open .. ' style="text-align:center;font-weight:bold"'
+                row_w = row_w + w
             end
-            table.insert(out, td_open .. ">")
-            table.insert(out, inner)
-            table.insert(out, "</td>")
-        elseif tokenInClass(cls, "thumbcaption") then
-            -- The box's overall caption, emitted in its own .trow div:
-            -- span the whole row (a bare <div> in a <tr> is invalid HTML).
-            local td_open = '<td colspan="' .. n_cols .. '"'
-            local cell_style = open_tag:match('style%s*=%s*"([^"]*)"')
-            if cell_style and cell_style ~= "" then
-                td_open = td_open .. ' style="' .. cell_style .. ";text-align:center\""
-            else
-                td_open = td_open .. ' style="text-align:center"'
-            end
-            table.insert(out, td_open .. ">")
-            table.insert(out, inner)
-            table.insert(out, "</td>")
+            n_grid = n_grid + 1
+            items[#items + 1] = { tsingle = true, w = w, inner = fillItemMedia(inner, lazy_images) }
         else
-            -- Unknown div directly inside a row (shouldn't happen): keep intact.
-            table.insert(out, content:sub(o_start, c_end))
+            items[#items + 1] = { tag = open_tag, cls = cls, inner = inner }
         end
         pos = c_end + 1
     end
+    -- Width shares: the template's px proportions (equal if px widths
+    -- are missing). Floored so the row total can't exceed 100% -- the
+    -- last inline-block would wrap below the first one.
+    local cell_open = '<td colspan="' .. n_cols
+        .. '" style="vertical-align:top;padding-left:6px;padding-right:6px;text-align:center">'
+    local out = {}
+    local buf = {}
+    local function flushGrid()
+        if next(buf) then
+            table.insert(out, cell_open .. table.concat(buf) .. "</td>")
+            buf = {}
+        end
+    end
+    for _, item in ipairs(items) do
+        if item.tsingle then
+            local share = (missing or row_w == 0) and 100 / n_grid
+                or 100 * item.w / row_w
+            table.insert(buf,
+                '<div style="display:inline-block;width:'
+                .. string.format("%.2f", math.floor(share * 100) / 100)
+                -- vertical-align:top aligns uneven item heights; padding
+                -- lives on an inner auto-width div (on the fixed-width
+                -- item it would add to the width and overflow the row).
+                .. '%;vertical-align:top"><div style="padding:0 6px">'
+                .. item.inner
+                .. "</div></div>")
+        else
+            flushGrid()
+            if item.raw then
+                table.insert(out, item.raw)
+            elseif tokenInClass(item.cls, "theader") then
+                local cell_style = item.tag:match('style%s*=%s*"([^"]*)"')
+                local style = cell_style and cell_style ~= ""
+                    and cell_style .. ";text-align:center;font-weight:bold"
+                    or "text-align:center;font-weight:bold"
+                table.insert(out, '<td colspan="' .. n_cols .. '" style="'
+                    .. style .. '">' .. item.inner .. "</td>")
+            elseif tokenInClass(item.cls, "thumbcaption") then
+                -- The box's overall caption, emitted in its own full-width
+                -- cell (a bare <div> in a <tr> is invalid HTML).
+                local cell_style = item.tag:match('style%s*=%s*"([^"]*)"')
+                local style = cell_style and cell_style ~= ""
+                    and cell_style .. ";text-align:center"
+                    or "text-align:center"
+                table.insert(out, '<td colspan="' .. n_cols .. '" style="'
+                    .. style .. '">' .. item.inner .. "</td>")
+            else
+                -- Unknown div directly inside a row (shouldn't happen): keep intact.
+                table.insert(out, item.tag .. item.inner .. "</div>")
+            end
+        end
+    end
+    flushGrid()
     return table.concat(out)
 end
 
@@ -1538,7 +1566,7 @@ end
 -- each top-level .trow div becomes <tr>, the optional overall
 -- .thumbcaption becomes a full-width footer row, everything else passes
 -- through.
-local function multiImageTransformRows(inner, n_cols)
+local function multiImageTransformRows(inner, n_cols, lazy_images)
     local out = {}
     local pos = 1
     while true do
@@ -1559,7 +1587,7 @@ local function multiImageTransformRows(inner, n_cols)
         local content = inner:sub(o_end + 1, c_start - 1)
         if tokenInClass(cls, "trow") then
             table.insert(out, "<tr>")
-            table.insert(out, multiImageTransformRow(content, n_cols))
+            table.insert(out, multiImageTransformRow(content, n_cols, lazy_images))
             table.insert(out, "</tr>")
         elseif tokenInClass(cls, "thumbcaption") then
             -- Overall caption of the whole box: a full-width footer row.
@@ -1583,7 +1611,7 @@ end
 --   close   the wrapper's closing tag text (multiImageToTable re-appends it)
 --   inner   the raw .thumbinner/.multiimageinner content
 -- Returns nil if the structure isn't what we expect.
-local function multiImageRowContent(wrapper)
+local function multiImageRowContent(wrapper, lazy_images)
     local o_start, o_end = wrapper:find("^<div[^>]*>")
     if not o_start then
         return nil
@@ -1607,7 +1635,7 @@ local function multiImageRowContent(wrapper)
     if not w_close_start then
         return nil
     end
-    return multiImageTransformRows(inner, n_cols),
+    return multiImageTransformRows(inner, n_cols, lazy_images),
         wrapper:sub(o_end + 1, ti_start - 1),
         wrapper:sub(ti_close_end + 1, w_close_start - 1),
         wrapper:sub(w_close_start),
@@ -1865,7 +1893,7 @@ end
 -- If the box doesn't live directly inside an infobox table (or its host
 -- row isn't recognisable), returns nil and the caller keeps the
 -- nested-table form.
-local function hoistMultiImageRows(html, o_start, w_close_end)
+local function hoistMultiImageRows(html, o_start, w_close_end, lazy_images)
     -- The innermost table containing the wrapper decides the treatment:
     -- a box nested one table deeper keeps its nested-table form (hoisting
     -- there would still be inside the outer table's atomic row).
@@ -1889,7 +1917,7 @@ local function hoistMultiImageRows(html, o_start, w_close_end)
     if not tr_close_s or tr_close_s < td_close_s then
         return nil
     end
-    local rows, lead, trail = multiImageRowContent(html:sub(o_start, w_close_end))
+    local rows, lead, trail = multiImageRowContent(html:sub(o_start, w_close_end), lazy_images)
     if not rows then
         return nil
     end
@@ -2047,7 +2075,7 @@ end
 -- else the box becomes one tiny per-image stacked table
 -- (see multiImageToTable). Unexpected structures are returned unchanged,
 -- so it degrades gracefully.
-function M.restructureMultiImages(html)
+function M.restructureMultiImages(html, lazy_images)
     local out = {}
     local pos = 1
     while true do
@@ -2062,7 +2090,7 @@ function M.restructureMultiImages(html)
             local c_start, c_end = wutil.findMatchingClose(html, "div", o_end)
             if c_start then
                 local hoisted, emit_start, next_pos =
-                    hoistMultiImageRows(html, o_start, c_end)
+                    hoistMultiImageRows(html, o_start, c_end, lazy_images)
                 if hoisted then
                     table.insert(out, html:sub(pos, emit_start - 1))
                     table.insert(out, hoisted)

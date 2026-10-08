@@ -66,6 +66,11 @@ local HEIGHT_CAP_VH = 33
 --   floor would silently override the cap) -- wide images render
 --   full-width, still under the height cap.
 local function realImageSizeStyle(style, infobox)
+    -- Percentage footprints are the multi-image grid (htmlclean fills those
+    -- cells at build time, cap included); nothing to compute here.
+    if style:match("width%s*:%s*[%d%.]+%%") then
+        return style
+    end
     local w = tonumber(style:match("width%s*:%s*(%d+)px"))
     local h = tonumber(style:match("height%s*:%s*(%d+)px"))
     local size

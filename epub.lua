@@ -331,8 +331,10 @@ function M.buildEpub(epub_path, title, lang, callback, fixed_path)
                 -- {{Multiple image}} uses flexbox, unsupported by crengine:
                 -- body boxes rewrite into one tiny <table> per image (so
                 -- nothing jumps pages as one block); boxes inside a kept
-                -- infobox go back into the infobox's own grid rows.
-                html = htmlclean.restructureMultiImages(html)
+                -- infobox go back into the infobox's own grid rows, whose
+                -- images the grid pass re-footprints (lazy_images threaded
+                -- through; see fillItemMedia in htmlclean.lua).
+                html = htmlclean.restructureMultiImages(html, lazy_images)
                 -- {{Infobox settlement/columns}} uses CSS display:table
                 -- (see settlementColsToTable in htmlclean.lua).
                 html = htmlclean.settlementColsToTable(html)
@@ -567,11 +569,10 @@ li.gallerybox {
    (no page split, and -- unlike the floated article layout -- full width),
    but with the dashed QR-box border. The template's inline width
    (e.g. 492px) is overridden below so very wide boxes never overflow the
-   page; the rewrite turns each cell's inline "width:NNNpx" into an
-   equal percentage share of its row so the columns come out of equal
-   width (captions then just wrap inside them), and margin auto centers
-   the table itself (same pattern as html5.css's table[align=center]
-   presentational hint). */
+   page; the rewrite footprints each image to fill its proportional
+   inline-block cell (htmlclean.multiImageTransformRow), and margin auto
+   centers the table itself (same pattern as html5.css's
+   table[align=center] presentational hint). */
 table.wikireader-tmulti {
     border: 1px dashed rgba(0,0,0,0.33);
     margin-left: auto !important;
