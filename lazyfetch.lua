@@ -50,19 +50,20 @@ local FETCH_DEADLINE_S = 30
 local PENDING_ENTRY = "OEBPS/wikireader-pending.json"
 
 -- Images are capped at HEIGHT_CAP_VH of the page height, expressed as a
--- min/max width of HEIGHT_CAP_VH*vh*(w/h) (see realImageSizeStyle).
+-- max width of HEIGHT_CAP_VH*vh*(w/h) (see realImageSizeStyle).
 local HEIGHT_CAP_VH = 33
 
 -- Final inline style for a real image, from its reserved px footprint
--- (style) and its context: the px height is dropped so crengine keeps the
--- aspect ratio. The height cap is expressed as a min/max width of
--- HEIGHT_CAP_VH*vh*(w/h) -- the width at which a w:h-locked image is
--- exactly that tall (vh resolves against the page height even on a width
--- property; crengine has no calc()/min()). Floor and cap are the same
--- value on purpose: crengine (per the CSS spec) applies min-width after
--- max-width, so a separate wider floor would silently override the cap.
---   infobox media: at most 33% of the (full-width) cell, no floor;
---   everything else: the cap width -- wide images overflow it and render
+-- (style): the px height is dropped so crengine keeps the aspect ratio.
+-- The height cap is expressed as a max width of HEIGHT_CAP_VH*vh*(w/h)
+-- -- the width at which a w:h-locked image is exactly that tall (vh
+-- resolves against the page height even on a width property; crengine
+-- has no calc()/min()).
+--   infobox media: cap only -- the reserved px width stays, so a small
+--   thumb is never upscaled (its larger render would just bloat the cell);
+--   everything else: width floored AND capped at the cap width (same value
+--   on purpose: crengine applies min-width after max-width, so a wider
+--   floor would silently override the cap) -- wide images render
 --   full-width, still under the height cap.
 local function realImageSizeStyle(style, infobox)
     local w = tonumber(style:match("width%s*:%s*(%d+)px"))
@@ -71,7 +72,7 @@ local function realImageSizeStyle(style, infobox)
     if not (w and h and h > 0) then
         size = infobox and "max-width:33%" or "min-width:50%"
     elseif infobox then
-        size = "max-width:33%; max-height:33vh"
+        size = "max-width:" .. string.format("%.2fvh", HEIGHT_CAP_VH * w / h)
     elseif w < 100 then
         -- Reserved footprints narrower than 100px keep their px width: the
         -- cap width would stretch an 18px legend square well beyond its
@@ -92,6 +93,8 @@ local function realImageSizeStyle(style, infobox)
 end
 
 local M = {}
+-- Exposed for tests.
+M.realImageSizeStyle = realImageSizeStyle
 
 -- Returns the pending image list from `epub_path`, or nil if the EPUB has
 -- none (already completed, or not a lazy build).

@@ -90,7 +90,7 @@ function M.buildEpub(epub_path, title, lang, callback, fixed_path)
     local hi_res = lazy_enabled and wutil.imageQuality()
     -- Read once at build scope: both the HTML-cleaning hook and the Archiver
     -- stylesheet hook below need it, and the Archiver hook must not read a
-    -- bare global (that bug silently disabled the full-width infobox CSS).
+    -- bare global (that bug silently disabled the kept-infobox CSS).
     local infobox_full_width = G_reader_settings:isTrue("wikireader_show_infoboxes")
     -- Formula SVG URL records collected by latex.replaceMathElements;
     -- markers swap to <img> in the Archiver hooks below and the URLs join
@@ -183,25 +183,6 @@ function M.buildEpub(epub_path, title, lang, callback, fixed_path)
                 return style .. ';width:100%%'
             end
 
-            -- Kept infoboxes: like forceFullWidthStyle, but also drops any
-            -- inline font-size on the <table> itself. Speciesbox/Taxobox
-            -- tables carry "font-size: 100%" (they opt out of the live
-            -- site's 88% infobox shrink), which makes biology boxes render
-            -- at full body size while every other infobox sits at the base
-            -- stylesheet's table size (80%). Removing the override lets the
-            -- same table rule apply to them. This works even when the user
-            -- disables "Embedded Style" (the injected stylesheet.css and
-            -- its table.infobox !important rule are ignored then, while
-            -- inline styles may still apply). Runs BEFORE the %-escaping in
-            -- forceFullWidthStyle, on the raw style text. Table borders are
-            -- not handled here: htmlclean.borderTableCells applies them
-            -- inline to infoboxes and wikitables alike (crengine ignores
-            -- descendant selectors, so stylesheet rules can't reach cells).
-            local function infoboxFullWidthStyle(style)
-                style = style:gsub('font%-size%s*:%s*[^;]+;%s*', '')
-                style = style:gsub('font%-size%s*:%s*[^;]+', '')
-                return forceFullWidthStyle(style)
-            end
 
             -- Star icons must become text before any media pass can blank them.
             html = htmlclean.ratingStarsToText(html)
@@ -210,7 +191,7 @@ function M.buildEpub(epub_path, title, lang, callback, fixed_path)
             html = htmlclean.styleLegendChips(html)
 
             -- Strip clutter tables: chronology/nav/sidebar/route-map boxes
-            -- are always dropped; infoboxes only while full-width mode is
+            -- are always dropped; infoboxes only while "Show infoboxes" is
             -- off (the default).
             local stripped_tables = { "navbox", "sidebar", "vertical-navbox", "rmbox" }
             if not infobox_full_width then
@@ -246,8 +227,12 @@ function M.buildEpub(epub_path, title, lang, callback, fixed_path)
             html = htmlclean.cleanElementClasses(html, "div", { "barbox" }, { "floatleft", "floatright" },
                 forceFullWidthStyle)
             if infobox_full_width then
+                -- Force the kept infobox full width like every other table:
+                -- infoboxes render as narrow floated boxes on the site, and
+                -- text squeezed beside one leaves both columns too narrow
+                -- on an e-ink page.
                 html = htmlclean.cleanElementClasses(html, "table", { "infobox" }, { "floatleft", "floatright" },
-                    infoboxFullWidthStyle)
+                    forceFullWidthStyle)
                 -- {{Infobox element}}'s periodic-table diagram is
                 -- TemplateStyles/CSS art crengine can't render; drop it
                 -- (with its header row) before the other infobox passes.
@@ -262,10 +247,6 @@ function M.buildEpub(epub_path, title, lang, callback, fixed_path)
                 -- has no .infobox rules and crengine ignores descendant
                 -- selectors), mirroring Wikipedia's own alignment.
                 html = htmlclean.centerInfoboxCells(html)
-                -- Stack every field into a single full-width cell so crengine
-                -- can fragment tall fields (long lists) line-by-line across
-                -- pages instead of pushing them whole (see htmlclean.lua).
-                html = htmlclean.stackInfoboxRows(html)
             end
             html = htmlclean.forceFullWidthStyledTables(html, forceFullWidthStyle)
             -- Border infoboxes and wikitables as grids, inline (see
@@ -347,10 +328,9 @@ function M.buildEpub(epub_path, title, lang, callback, fixed_path)
                 -- figure rules below always win (see htmlclean.lua).
                 html = htmlclean.stripFigureHalign(html)
                 -- {{Multiple image}} uses flexbox, unsupported by crengine;
-                -- rewrite each box into one tiny <table> per image (inside
-                -- a kept infobox, the images are hoisted into the infobox's
-                -- own rows instead), so nothing jumps pages as one block.
-                html = htmlclean.restructureMultiImages(html, infobox_full_width)
+                -- rewrite each box into one tiny <table> per image, so
+                -- nothing jumps pages as one block.
+                html = htmlclean.restructureMultiImages(html)
                 -- Gallery thumbs' inline width would pin the image to the
                 -- left edge of the full-width box (see htmlclean.lua).
                 html = htmlclean.centerGalleryThumbs(html)
@@ -660,14 +640,11 @@ table.wikireader-tmulti {
 ]]
             end
             if infobox_full_width then
-                -- Kept full-width infoboxes: mirror Wikipedia's own infobox
-                -- alignment. The base stylesheet has no .infobox rules, so
-                -- full-width data rows (office tenure, term dates, etc., in
-                -- .infobox-full-data/.infobox-header/.infobox-subheader/
-                -- .infobox-above/.infobox-below cells) would fall back to
-                -- left-aligned. Label/data pairs are already left-aligned
-                -- via the inline style="text-align:left" Wikipedia emits on
-                -- .infobox-label cells, so only these rows need centering.
+                -- Kept full-width infoboxes: mirror Wikipedia's own alignment
+                -- (the site centers everything but label/data pairs). The
+                -- width itself is forced inline on the table above, which
+                -- works even with "Embedded Style" off; crengine has no
+                -- descendant selectors, so these rules are belt-and-braces.
                 content = content .. [[
 
 .infobox .infobox-title,
@@ -678,23 +655,6 @@ table.wikireader-tmulti {
 .infobox .infobox-full-data,
 .infobox .infobox-below {
   text-align: center;
-}
-
-/* Normalize the box text size across all infobox kinds. On the live site
-   MediaWiki:Common.css shrinks every infobox to 88%, but Speciesbox/Taxobox
-   opt OUT of that with their own "font-size: 100%" -- carried either inline
-   on the table ("infobox biota") or in an embedded TemplateStyles block
-   ("biota-infobox"). In the EPUB there is no site-wide 88% shrink at all:
-   KOReader's base stylesheet renders every table at 80% of body size,
-   which is what normal kept infoboxes display at -- so biology boxes alone
-   ended up noticeably larger than every other infobox. Force the table
-   back onto that same footing; !important is required because the inline
-   "font-size: 100%" would otherwise outrank any plain stylesheet rule.
-   Per-cell sizes (e.g. the 85% "Temporal range" line) still scale
-   relative to this, and nested tables keep the base stylesheet's
-   font-size:100%, i.e. they render at this same size once. */
-table.infobox {
-  font-size: 80% !important;
 }
 ]]
             end

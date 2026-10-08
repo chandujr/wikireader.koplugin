@@ -439,9 +439,7 @@ local function lazyImageTag(attrs, lazy_images, seen, section, hi_res, centered,
     local height = tonumber(attrs:match([[%sheight%s*=%s*"([^"]*)"]]))
     if width then style_props[#style_props + 1] = string.format("width:%dpx", width) end
     if height then style_props[#style_props + 1] = string.format("height:%dpx", height) end
-    -- crengine doesn't center inline imgs via the parent cell's text-align;
-    -- block + auto margins also stacks multiple infobox images vertically,
-    -- each centered.
+    -- crengine doesn't center inline imgs via the parent cell's text-align.
     if centered then
         style_props[#style_props + 1] = "display:block"
         style_props[#style_props + 1] = "margin:0 auto"
@@ -732,7 +730,7 @@ end
 -- Exposed for locmap.lua: builds a lazy placeholder span for arbitrary
 -- <img> attrs, registering it in `lazy_images` like the walker does.
 -- (centered only centers the placeholder; infobox marks infobox media,
--- which lazyfetch sizes differently.)
+-- which lazyfetch sizes cap-only, without the article images' floor.)
 function M.makeLazyImageTag(attrs, lazy_images, seen, section, hi_res, centered, infobox)
     return lazyImageTag(attrs, lazy_images, seen, section or 0, hi_res, centered, infobox)
 end
