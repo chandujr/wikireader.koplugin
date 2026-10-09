@@ -75,5 +75,12 @@ outlives the day's news.
 - Lua 5.1-compatible; no external dependencies beyond KOReader's runtime.
 - `nav_history`/`nav_current` in `main.lua` are module-level on purpose
   (KOReader rebuilds plugin instances per UI) — do not move them to `self`.
-- Validate edits with `luac -p <file>`; no test suite exists.
-- Find the local koreader codebase using `find / -name "*wikipedia.lua*" 2>/dev/null` in case you need to consult koreader scripts.
+- Validate edits with `luac -p <file>`; also run the feature's script in the
+  gitignored local `tests/` folder (`lua tests/test_<name>.lua`) and extend
+  it when touching its area. Tests run under system lua; KOReader modules
+  are stubbed via `package.preload`, whose entries must be loader functions
+  returning the module (plain tables don't work).
+- Lua patterns have no alternation (`|` is a literal) — probe shapes with
+  sequential finds, as the infobox caption pairing does.
+- Find the local koreader codebase using `find / -name "*wikipedia.lua*" 2>/dev/null`
+  in case you need to consult koreader scripts.
