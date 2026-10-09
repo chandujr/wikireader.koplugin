@@ -893,6 +893,11 @@ local function rotateHint(is_top)
         .. (is_top
             and 'page-break-after:avoid; margin:0.6em 0 0 0'
             or 'page-break-before:avoid; margin:0 0 0.6em 0') .. '">'
+        -- Absolute URIs are required: crengine resolves any href whose
+        -- scheme it doesn't know (e.g. "wikireader:foo") as a path relative
+        -- to the document base, mangling it before Lua sees it. The reserved
+        -- .invalid host is unresolvable by definition, so these are local
+        -- markers that never result in a fetch.
         .. '<a href="https://wikireader.invalid/rotate-ccw">Counterclockwise</a>'
         .. ' &lt; Tap to Rotate Screen &gt; '
         .. '<a href="https://wikireader.invalid/rotate-cw">Clockwise</a>'

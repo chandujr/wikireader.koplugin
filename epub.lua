@@ -25,6 +25,21 @@ local wutil = require("wikiutil")
 
 local M = {}
 
+-- Caption-bearing images are wrapped in a sentinel link carrying the
+-- percent-encoded caption for main.lua's hold-on-image hook. Absolute https
+-- URI required (unknown schemes get mangled by crengine's base-URI
+-- resolution; the reserved .invalid host never sees a fetch).
+local IMG_CAPTION_URL = "https://wikireader.invalid/imgcap="
+local function captionLink(img_html, caption, img_style)
+    local a_open = '<a href="' .. IMG_CAPTION_URL .. socket_url.escape(caption) .. '"'
+    -- A block img (centered placeholders) inside an inline anchor would be
+    -- laid out inline: keep the anchor's layout matching the img's.
+    if img_style and img_style:find("display:block", 1, true) then
+        a_open = a_open .. ' style="display:block"'
+    end
+    return a_open .. ">" .. img_html .. "</a>"
+end
+
 -- Hourglass "loading" icon shown inside an image box until lazyfetch swaps
 -- the real bitmap in. One copy per image (each pending img points at its
 -- own ".loading.svg" path). Sand drawn half-drained: a pile left in the
@@ -85,6 +100,9 @@ function M.buildEpub(epub_path, title, lang, callback, fixed_path)
     -- to complete after the article opens.
     local lazy_enabled = image_mode == "show"
     local lazy_images = {}
+    -- Box-caption texts keyed by original image URL, collected during the
+    -- HTML pass and resolved in the marker swaps below (see captionLink).
+    local image_captions = {}
     -- Quality only matters in show mode: mid/high download a sharper
     -- thumb derivative than the 1x src.
     local hi_res = lazy_enabled and wutil.imageQuality()
@@ -315,6 +333,11 @@ function M.buildEpub(epub_path, title, lang, callback, fixed_path)
             -- Replace each media element with a QR or lazy placeholder
             -- (QR PNGs stitched in via the Archiver hooks below, lazy
             -- placeholders are zip entries filled in later).
+            if qr_enabled or lazy_enabled then
+                -- Collect box captions while the boxes still hold their
+                -- original <img> tags (the walker replaces them next).
+                qrimage.collectImageCaptions(html, image_captions)
+            end
             if qr_enabled then
                 html = qrimage.replaceImagesWithQr(html, qr_images, qr_size, lang,
                     { treat_infobox_as_imagebox = infobox_full_width })
@@ -388,9 +411,11 @@ function M.buildEpub(epub_path, title, lang, callback, fixed_path)
                         return ""
                     end
                     local title = qr.url:gsub("&", "&amp;"):gsub('"', "&quot;")
-                    return string.format(
+                    local img = string.format(
                         '<img src="%s" width="%d" height="%d" class="wikireader-qr" alt="QR code for image" title="%s"/>',
                         qr.path, qr_size, qr_size, title)
+                    local caption = qr.src and image_captions[qr.src]
+                    return caption and captionLink(img, caption) or img
                 end)
                 for _, qr in ipairs(qr_images) do
                     original_addFileFromMemory(self, "OEBPS/" .. qr.path, qr.png, mtime)
@@ -414,8 +439,10 @@ function M.buildEpub(epub_path, title, lang, callback, fixed_path)
                             loading_written[loading_src] = true
                             original_addFileFromMemory(self, "OEBPS/" .. loading_src, LOADING_SVG, mtime)
                         end
-                        return string.format('<img src="%s" style="%s" alt=""/>',
+                        local img_tag = string.format('<img src="%s" style="%s" alt=""/>',
                             loading_src, img.style or "")
+                        local caption = image_captions[img.fallback or img.src]
+                        return caption and captionLink(img_tag, caption, img.style) or img_tag
                     end)
             end
             -- Locator map composites (locmap.lua): swap each marker span

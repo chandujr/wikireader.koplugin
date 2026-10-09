@@ -41,6 +41,7 @@ local Device = require("device")
 local Dispatcher = require("dispatcher")
 local DocSettings = require("docsettings")
 local Event = require("ui/event")
+local Font = require("ui/font")
 local InfoMessage = require("ui/widget/infomessage")
 local InputDialog = require("ui/widget/inputdialog")
 local NetworkMgr = require("ui/network/manager")
@@ -228,10 +229,16 @@ function WikiReader:init()
         -- Also patch onGoToExternalLink so that, when the "skip link dialog"
         -- setting is enabled, Wikipedia links show a short preview popup
         -- (instead of the external-link dialog or a full download right away).
-        local wiki_reader_self = self
-        local original_onGoToExternalLink = self.ui.link.onGoToExternalLink
-        self.ui.link.onGoToExternalLink = function(link_self, link_url)
-            -- Sentinel URLs from htmlclean.addRotateHints: step the page
+            local wiki_reader_self = self
+            local original_onGoToExternalLink = self.ui.link.onGoToExternalLink
+            self.ui.link.onGoToExternalLink = function(link_self, link_url)
+                -- Caption sentinel from epub.lua's captionLink(): viewing
+                -- happens on hold (see the onHold hook below); tap stays inert.
+                if link_url:find("wikireader.invalid/imgcap=", 1, true) then
+                    return true
+                end
+
+                -- Sentinel URLs from htmlclean.addRotateHints: step the page
             -- one notch in the tapped direction. Our labels describe the
             -- visible page pivot, which is inverted vs KOReader's device-
             -- turn naming (buffer rotation inverts the constants; see
@@ -258,6 +265,54 @@ function WikiReader:init()
                 return true
             end
             return original_onGoToExternalLink(link_self, link_url)
+        end
+    end
+
+    -- Hold-on-image full-screen view with the image's caption. crengine
+    -- exposes no image metadata at a held position but does resolve the
+    -- enclosing link: epub.lua's captionLink wraps captioned images in a
+    -- sentinel link carrying the caption (unfetchable reserved .invalid
+    -- host), decoded here into the viewer's title. No sentinel -> stock
+    -- image viewer.
+    if self.ui and self.ui.highlight then
+        local original_onHold = self.ui.highlight.onHold
+        self.ui.highlight.onHold = function(hl_self, arg, ges)
+            local ui = hl_self.ui
+            if ui.rolling and ui.document and isWikiEpubPath(ui.document.file) then
+                local ok, link = pcall(ui.document.getLinkFromPosition, ui.document, ges.pos)
+                if ok and type(link) == "string" then
+                    local encoded = link:match("^https://wikireader%.invalid/imgcap=(.+)$")
+                    if encoded then
+                        local hold_pos = hl_self.view:screenToPageTransform(ges.pos)
+                        local image = hold_pos and ui.document:getImageFromPosition(hold_pos, true, true)
+                        if image then
+                            local ImageViewer = require("ui/widget/imageviewer")
+                            local TitleBar = require("ui/widget/titlebar")
+                            -- ImageViewer exposes no title styling; TitleBar
+                            -- hardcodes a bold face. Regular info font,
+                            -- swapped for this one call only (single-threaded
+                            -- event loop, so nothing can create a TitleBar in
+                            -- between) and restored right after.
+                            local saved_face = TitleBar.title_face_fullscreen
+                            local saved_face_nf = TitleBar.title_face_not_fullscreen
+                            local caption_face = Font:getFace("smallinfofont", 20)
+                            TitleBar.title_face_fullscreen = caption_face
+                            TitleBar.title_face_not_fullscreen = caption_face
+                            UIManager:show(ImageViewer:new{
+                                image = image,
+                                with_title_bar = true,
+                                title_text = socket_url.unescape(encoded),
+                                fullscreen = true,
+                            })
+                            TitleBar.title_face_fullscreen = saved_face
+                            TitleBar.title_face_not_fullscreen = saved_face_nf
+                            ui.keyselection:stopHighlightIndicator()
+                            return true
+                        end
+                    end
+                end
+            end
+            return original_onHold(hl_self, arg, ges)
         end
     end
 end

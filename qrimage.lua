@@ -319,14 +319,16 @@ local function inInfobox(stack)
 end
 
 -- Generates the QR PNG for `url`, appends it to `qr_images` and returns
--- the marker span. Returns "" if the URL could not be QR-coded.
-local function makeQr(url, qr_images, qr_size)
+-- the marker span. Returns "" if the URL could not be QR-coded. `src` is
+-- the image's original (already https-prefixed) URL, recorded so the EPUB
+-- builder can look the image's caption up for the full-screen viewer.
+local function makeQr(url, qr_images, qr_size, src)
     local index = #qr_images + 1
     local png = M.qrPng(url, qr_size)
     if not png then
         return ""
     end
-    qr_images[index] = { path = string.format("images/qr%05d.png", index), png = png, url = url }
+    qr_images[index] = { path = string.format("images/qr%05d.png", index), png = png, url = url, src = src }
     return string.format('<span class="wikireader-qrimg" data-qrindex="%d"></span>', index)
 end
 
@@ -481,7 +483,10 @@ local function qrImageTag(attrs, qr_images, qr_size, lang)
     if not url then
         return ""
     end
-    return makeQr(url, qr_images, qr_size)
+    if src:sub(1, 2) == "//" then
+        src = "https:" .. src
+    end
+    return makeQr(url, qr_images, qr_size, src)
 end
 
 -- Walks the article HTML and replaces every <img> that sits inside an
@@ -608,6 +613,8 @@ local function walkImageBoxes(html, img_fn, opts)
                     local close_start = wutil.findMatchingClose(html, tagname, e)
                     if close_start then
                         local region = html:sub(e + 1, close_start - 1)
+                        -- Optional caption-capture hook (see collectImageCaptions).
+                        if opts.region_fn then opts.region_fn(region) end
                         local any_img
                         for img_attrs in region:gmatch("<img([^>]*)>") do
                             any_img = true
@@ -619,6 +626,13 @@ local function walkImageBoxes(html, img_fn, opts)
                         if not any_img then
                             entry.is_dropped = true
                         end
+                    end
+                elseif entry.is_infobox then
+                    -- Kept infoboxes pair images and captions across table
+                    -- rows/cells (see infoboxCaptions), not thumbcaptions.
+                    local close_start = wutil.findMatchingClose(html, tagname, e)
+                    if close_start and opts.infobox_fn then
+                        opts.infobox_fn(html:sub(e + 1, close_start - 1))
                     end
                 end
                 -- Suppression mode swallows the box and everything up to
@@ -689,6 +703,277 @@ function M.replaceTimelineWrappers(html, marker_table, seen, hi_res, qr_mode)
             end
             return marker
         end)
+end
+
+--[[-------------------------------------------------------------------------
+Full-screen image captions
+
+crengine exposes no image metadata at a held position, so the EPUB builder
+wraps each captioned image in a sentinel link carrying the caption
+(epub.lua's captionLink), and main.lua's hold-on-image hook decodes it into
+the full-screen viewer's title. This pass collects each image box's caption
+text (figcaption, or the old-parser thumbcaption/gallerytext div), keyed by
+the box's original 1x image URL — the same key the marker tables' src or
+fallback entries resolve to at swap time.
+--]]
+
+-- Minimal entity decoding for caption text (Parsoid only ever uses these
+-- named entities and numeric references in captions).
+local NAMED_ENTITIES = {
+    amp = "&", lt = "<", gt = ">", quot = '"', apos = "'",
+    nbsp = " ", shy = "",
+    ndash = "\226\128\147", mdash = "\226\128\148",
+    hellip = "\226\128\166", rsquo = "\226\128\153", lsquo = "\226\128\152",
+    ldquo = "\226\128\156", rdquo = "\226\128\157",
+}
+
+local function codepointToUtf8(c)
+    if c < 0x80 then
+        return string.char(c)
+    elseif c < 0x800 then
+        return string.char(bit.bor(0xC0, bit.rshift(c, 6)), bit.bor(0x80, bit.band(c, 0x3F)))
+    elseif c < 0x10000 then
+        if c >= 0xD800 and c <= 0xDFFF then
+            return "?" -- surrogates
+        end
+        return string.char(bit.bor(0xE0, bit.rshift(c, 12)),
+            bit.bor(0x80, bit.band(bit.rshift(c, 6), 0x3F)),
+            bit.bor(0x80, bit.band(c, 0x3F)))
+    elseif c < 0x110000 then
+        return string.char(bit.bor(0xF0, bit.rshift(c, 18)),
+            bit.bor(0x80, bit.band(bit.rshift(c, 12), 0x3F)),
+            bit.bor(0x80, bit.band(bit.rshift(c, 6), 0x3F)),
+            bit.bor(0x80, bit.band(c, 0x3F)))
+    end
+    return "?"
+end
+
+local function decodeEntities(s)
+    return (s:gsub("&([%w#]+);", function(name)
+        if name:sub(1, 1) == "#" then
+            local digits = name:sub(2)
+            local code = digits:sub(1, 1) == "x"
+                and tonumber(digits:sub(2), 16) or tonumber(digits)
+            return code and code > 0 and codepointToUtf8(code) or ""
+        end
+        return NAMED_ENTITIES[name]
+    end))
+end
+
+-- Captions show on the viewer's title bar, which reflows on its own, so
+-- tag runs collapse to spaces and <br> is treated as a plain break there.
+local function captionPlainText(text)
+    text = text:gsub("%s*<%s*br%s*/?>%s*", " ")
+    -- Footnote/reference markers ([2], [note 1]) ride in <sup> elements;
+    -- the title bar wants the caption text alone. Balanced surgery keeps
+    -- any nested markup inside the sup from leaking after the strip below.
+    while true do
+        local sup_open, sup_end = text:find("<sup[^>]*>")
+        if not sup_open then break end
+        local sup_close, sup_close_end = wutil.findMatchingClose(text, "sup", sup_end)
+        if not sup_close then break end
+        text = text:sub(1, sup_open - 1) .. " " .. text:sub(sup_close_end + 1)
+    end
+    text = text:gsub("<[^>]*>", " ")
+    text = decodeEntities(text)
+    text = text:gsub("%s+", " ")
+    return (text:match("^%s*(.-)%s*$"))
+end
+
+-- Shared tail of every caption read: plain-text it and cap it for the
+-- sentinel URL, cutting at a space so no UTF-8 sequence splits.
+local function finalizeCaption(text)
+    text = captionPlainText(text)
+    if text == "" then
+        return nil
+    end
+    if #text > 480 then
+        -- Sentinel-URL sane: cut at a space so no UTF-8 sequence splits.
+        text = text:sub(1, 480):match("^(.*%s)") or text:sub(1, 480)
+    end
+    return text
+end
+
+local function boxCaptionText(region)
+    local text = region:match([[<figcaption[^>]*>(.-)</figcaption>]])
+    if not text then
+        -- Old-parser thumbnails and gallery items caption via divs.
+        for _, token in ipairs({ "thumbcaption", "gallerytext" }) do
+            local open_start, open_end = region:find(
+                [[<div[^>]-class%s*=%s*"[^"]*]] .. token .. [[[^" ]*"[^>]*>]])
+            if open_start then
+                local close_start = wutil.findMatchingClose(region, "div", open_end)
+                if close_start then
+                    text = region:sub(open_end + 1, close_start - 1)
+                    break
+                end
+            end
+        end
+    end
+    if not text then
+        return nil
+    end
+    return finalizeCaption(text)
+end
+
+-- force: per-item grid captions overwrite box-level defaults.
+local function regionCaption(captions, region, cap, force)
+    if not cap then return false end
+    for attrs in region:gmatch("<img%s([^>]*)>") do
+        local src = attrs:match([[src%s*=%s*"([^"]*)"]])
+        if src and src:sub(1, 5) ~= "data:" then
+            if src:sub(1, 2) == "//" then src = "https:" .. src end
+            captions[src] = force and cap or (captions[src] or cap)
+        end
+    end
+    return true
+end
+
+-- {{Multiple image}} grids caption per item; boxCaptionText on the whole
+-- grid would stamp the first item's caption on all of them.
+local function tsingleCaptions(region, captions, force)
+    local got = false
+    local pos = 1
+    while true do
+        local t_open, t_end = region:find(
+            [[<div[^>]-class%s*=%s*"[^"]*tsingle[^" ]*"[^>]*>]], pos)
+        if not t_open then break end
+        local t_close = wutil.findMatchingClose(region, "div", t_end)
+        local tsingle = region:sub(t_end + 1, t_close and t_close - 1 or #region)
+        pos = t_close and t_close + 1 or #region + 1
+        if tsingleCaptions(tsingle, captions, force) then
+            got = true
+        else
+            local cap = boxCaptionText(tsingle)
+            if not cap then
+                -- Parsoid's tmulti captions items via text-align-* divs.
+                local d_open, d_end = tsingle:find(
+                    [[<div[^>]-class%s*=%s*"[^"]*text%-align[^" ]*"[^>]*>]])
+                if d_open then
+                    local d_close = wutil.findMatchingClose(tsingle, "div", d_end)
+                    if d_close then
+                        cap = finalizeCaption(tsingle:sub(d_end + 1, d_close - 1))
+                    end
+                end
+            end
+            got = regionCaption(captions, tsingle, cap, force) or got
+        end
+    end
+    return got
+end
+
+-- Kept infoboxes caption via table shapes, not thumbcaptions: a figcaption
+-- in the image's figure, an .infobox-caption cell/div in the row, or --
+-- Speciesbox and the biota family -- a text-only row directly below, marked
+-- by the templates' stable caption markers (88% style / infobox-caption).
+local function infoboxCaptions(region, captions)
+    local srcs = {} -- rebuilt per row
+    local function collectRowImgs(row)
+        srcs = {}
+        for attrs in row:gmatch("<img([^>]*)>") do
+            local src = attrs:match([[src%s*=%s*"([^"]*)"]])
+            if src and src:sub(1, 5) ~= "data:" then
+                if src:sub(1, 2) == "//" then src = "https:" .. src end
+                srcs[#srcs + 1] = src
+            end
+        end
+    end
+    local function assign(list, cap)
+        if cap and cap ~= "" then
+            for _, src in ipairs(list) do
+                captions[src] = captions[src] or cap
+            end
+        end
+        return cap and cap ~= ""
+    end
+    -- Image rows only match their marker-marked caption row directly below
+    -- them, so a random single-cell row later on can't steal the caption.
+    local pending = nil
+    local pos = 1
+    while true do
+        local r_open, r_end = region:find("<tr[^>]*>", pos)
+        if not r_open then break end
+        local close_start = wutil.findMatchingClose(region, "tr", r_end)
+        local row = region:sub(r_end + 1, close_start and close_start - 1 or #region)
+        pos = close_start and close_start + 1 or #region + 1
+        collectRowImgs(row)
+        if #srcs > 0 then
+            local captioned = false
+            -- A {{Multiple image}} grid without a div.thumb wrapper (kept
+            -- infoboxes unwrap it) lives in the row's cell: pair its
+            -- per-item captions first.
+            if tsingleCaptions(row, captions, true) then
+                captioned = true
+            end
+            -- Figures caption their own images.
+            local fpos = 1
+            while true do
+                local f_open, f_end = row:find("<figure[^>]*>", fpos)
+                if not f_open then break end
+                local f_close = wutil.findMatchingClose(row, "figure", f_end)
+                local fig = row:sub(f_end + 1, f_close and f_close - 1 or #row)
+                fpos = f_close and f_close + 1 or #row + 1
+                local fig_srcs = {}
+                for attrs in fig:gmatch("<img([^>]*)>") do
+                    local src = attrs:match([[src%s*=%s*"([^"]*)"]])
+                    if src then fig_srcs[#fig_srcs + 1] = src end
+                end
+                if assign(fig_srcs, boxCaptionText(fig)) then captioned = true end
+            end
+            -- An .infobox-caption cell (td) or div in the row captions the
+            -- whole row's images (map cells, grouped media cells). Lua
+            -- patterns have no alternation, so the two shapes are probed.
+            local cap_open, cap_end = row:find(
+                [[<td[^>]-class%s*=%s*"[^"]*infobox%-caption[^" ]*"[^>]*>]])
+            local cap_close
+            if cap_open then
+                local td_close = wutil.findMatchingClose(row, "td", cap_end)
+                if td_close then cap_close = td_close - 1 end
+            else
+                cap_open, cap_end = row:find(
+                    [[<div[^>]-class%s*=%s*"[^"]*infobox%-caption[^" ]*"[^>]*>]])
+                if cap_open then
+                    local div_close = wutil.findMatchingClose(row, "div", cap_end)
+                    if div_close then cap_close = div_close - 1 end
+                end
+            end
+            if cap_open and cap_close
+                and assign(srcs, captionPlainText(row:sub(cap_end + 1, cap_close))) then
+                captioned = true
+            end
+            pending = not captioned and #srcs > 0 and srcs or nil
+        elseif pending then
+            -- Speciesbox-style caption row: one bare marker-marked cell.
+            if row:find("font%-size%s*:%s*88%%")
+                and (row:find("<td[^>]*>") or row:find("<th[^>]*>"))
+                and assign(pending, captionPlainText(row)) then
+                pending = nil
+            else
+                pending = nil
+            end
+        end
+    end
+end
+
+-- Fills `captions[src] = caption text`, keyed by the image's original 1x
+-- URL (protocol-relative normalized). Read-only identity walk: infobox rows
+-- are captured unconditionally, independent of the rewriting passes.
+function M.collectImageCaptions(html, captions)
+    walkImageBoxes(html, function(attrs)
+        -- Identity replacement: this pass only reads the box regions.
+        return "<img" .. attrs .. ">"
+    end, {
+        treat_infobox_as_imagebox = true,
+        region_fn = function(region)
+            if tsingleCaptions(region, captions) then
+                return
+            end
+            regionCaption(captions, region, boxCaptionText(region))
+        end,
+        infobox_fn = function(region)
+            infoboxCaptions(region, captions)
+        end,
+    })
 end
 
 -- QR mode: every boxed image becomes a QR code of its File:
