@@ -720,11 +720,20 @@ fallback entries resolve to at swap time.
 -- Minimal entity decoding for caption text (Parsoid only ever uses these
 -- named entities and numeric references in captions).
 local NAMED_ENTITIES = {
-    amp = "&", lt = "<", gt = ">", quot = '"', apos = "'",
-    nbsp = " ", shy = "",
-    ndash = "\226\128\147", mdash = "\226\128\148",
-    hellip = "\226\128\166", rsquo = "\226\128\153", lsquo = "\226\128\152",
-    ldquo = "\226\128\156", rdquo = "\226\128\157",
+    amp = "&",
+    lt = "<",
+    gt = ">",
+    quot = '"',
+    apos = "'",
+    nbsp = " ",
+    shy = "",
+    ndash = "\226\128\147",
+    mdash = "\226\128\148",
+    hellip = "\226\128\166",
+    rsquo = "\226\128\153",
+    lsquo = "\226\128\152",
+    ldquo = "\226\128\156",
+    rdquo = "\226\128\157",
 }
 
 local function codepointToUtf8(c)

@@ -74,7 +74,7 @@ local WikiReader = WidgetContainer:extend {
 -- (FileManager, Reader), so instance fields reset right when it matters --
 -- going from "opened from the menu" to "tapped a link inside the article".
 -- Module-level locals survive that jump.
-local nav_history = {}  -- stack of {title=.., lang=..}, oldest first
+local nav_history = {} -- stack of {title=.., lang=..}, oldest first
 -- Values come from untyped KOReader APIs; nil is guarded at every read
 -- site, so strict typing only generates false hints.
 ---@type any
@@ -229,16 +229,16 @@ function WikiReader:init()
         -- Also patch onGoToExternalLink so that, when the "skip link dialog"
         -- setting is enabled, Wikipedia links show a short preview popup
         -- (instead of the external-link dialog or a full download right away).
-            local wiki_reader_self = self
-            local original_onGoToExternalLink = self.ui.link.onGoToExternalLink
-            self.ui.link.onGoToExternalLink = function(link_self, link_url)
-                -- Caption sentinel from epub.lua's captionLink(): viewing
-                -- happens on hold (see the onHold hook below); tap stays inert.
-                if link_url:find("wikireader.invalid/imgcap=", 1, true) then
-                    return true
-                end
+        local wiki_reader_self = self
+        local original_onGoToExternalLink = self.ui.link.onGoToExternalLink
+        self.ui.link.onGoToExternalLink = function(link_self, link_url)
+            -- Caption sentinel from epub.lua's captionLink(): viewing
+            -- happens on hold (see the onHold hook below); tap stays inert.
+            if link_url:find("wikireader.invalid/imgcap=", 1, true) then
+                return true
+            end
 
-                -- Sentinel URLs from htmlclean.addRotateHints: step the page
+            -- Sentinel URLs from htmlclean.addRotateHints: step the page
             -- one notch in the tapped direction. Our labels describe the
             -- visible page pivot, which is inverted vs KOReader's device-
             -- turn naming (buffer rotation inverts the constants; see
@@ -298,7 +298,7 @@ function WikiReader:init()
                             local caption_face = Font:getFace("smallinfofont", 20)
                             TitleBar.title_face_fullscreen = caption_face
                             TitleBar.title_face_not_fullscreen = caption_face
-                            UIManager:show(ImageViewer:new{
+                            UIManager:show(ImageViewer:new {
                                 image = image,
                                 with_title_bar = true,
                                 title_text = socket_url.unescape(encoded),

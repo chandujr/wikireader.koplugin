@@ -2006,9 +2006,11 @@ local function settlementColsConvert(inner, in_row)
             table.insert(items, wrap("vertical-align:middle"))
             pos = c_end + 1
         elseif tokenInClass(cls, "ib-settlement-cols-row") then
-            table.insert(items, { s = "<tr>"
-                .. settlementColsConvert(inner:sub(d_end + 1, c_start - 1), true)
-                .. "</tr>" })
+            table.insert(items, {
+                s = "<tr>"
+                    .. settlementColsConvert(inner:sub(d_end + 1, c_start - 1), true)
+                    .. "</tr>"
+            })
             pos = c_end + 1
         else
             -- Caption links etc. pass through verbatim.

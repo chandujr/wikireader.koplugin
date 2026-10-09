@@ -515,8 +515,10 @@ function M.buildEpub(epub_path, title, lang, callback, fixed_path)
                         '<item id="wrmath%05d" href="%s" media-type="image/svg+xml"/>',
                         idx, mathimg.imgpath))
                     math_pending[idx] = {
-                        src = mathimg.src, imgpath = mathimg.imgpath,
-                        mimetype = mathimg.mimetype, section = mathimg.section or 0,
+                        src = mathimg.src,
+                        imgpath = mathimg.imgpath,
+                        mimetype = mathimg.mimetype,
+                        section = mathimg.section or 0,
                         math = true,
                     }
                 end
