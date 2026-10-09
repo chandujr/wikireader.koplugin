@@ -812,6 +812,36 @@ function M.centerInfoboxCells(html)
     end))
 end
 
+-- {{Infobox settlement}} wraps label/header footnote markers (often the
+-- whole "(Jan 2026[4])" qualifier) in a block-level div.ib-settlement-fn;
+-- crengine honors the block display, so refs drop onto their own line
+-- below the label. Wikipedia's stylesheet lines the div up inline, so
+-- unwrap it.
+function M.unwrapSettlementFnDivs(html)
+    local out = {}
+    local pos = 1
+    while true do
+        local open_start, open_end = html:find(
+            [[<div[^>]-class%s*=%s*"[^"]*ib%-settlement%-fn[^" ]*"[^>]*>]], pos)
+        if not open_start then
+            table.insert(out, html:sub(pos))
+            break
+        end
+        local close_start, close_end = wutil.findMatchingClose(html, "div", open_end)
+        if not close_start then
+            -- Unclosed stray: drop just the open tag.
+            table.insert(out, html:sub(pos, open_start - 1))
+            pos = open_end + 1
+        else
+            table.insert(out, html:sub(pos, open_start - 1))
+            -- Markers stay; only the wrapper goes.
+            table.insert(out, html:sub(open_end + 1, close_start - 1))
+            pos = close_end + 1
+        end
+    end
+    return table.concat(out)
+end
+
 -- Sizes Template:Legend color chips (<span class="legend-color">) inline.
 -- Their box comes from a TemplateStyles <style> block crengine never
 -- applies, so the chip's inline background-color renders as a one-space-

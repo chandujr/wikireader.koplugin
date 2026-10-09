@@ -265,6 +265,9 @@ function M.buildEpub(epub_path, title, lang, callback, fixed_path)
                 -- has no .infobox rules and crengine ignores descendant
                 -- selectors), mirroring Wikipedia's own alignment.
                 html = htmlclean.centerInfoboxCells(html)
+                -- {{Infobox settlement}} blocks its footnote markers below
+                -- the label (see unwrapSettlementFnDivs).
+                html = htmlclean.unwrapSettlementFnDivs(html)
             end
             html = htmlclean.forceFullWidthStyledTables(html, forceFullWidthStyle)
             -- Border infoboxes and wikitables as grids, inline (see
