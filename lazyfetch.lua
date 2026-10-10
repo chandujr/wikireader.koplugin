@@ -44,7 +44,7 @@ end
 -- non-blocking sockets have no timeout of their own: a stalled fetch must
 -- not wedge the batch (and step_running with it).
 local TICK_S = 0.05
-local MAX_CONCURRENT = 6
+local MAX_CONCURRENT = 10
 local FETCH_DEADLINE_S = 30
 
 local PENDING_ENTRY = "OEBPS/wikireader-pending.json"
