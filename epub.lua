@@ -44,13 +44,29 @@ end
 -- the real bitmap in. One copy per image (each pending img points at its
 -- own ".loading.svg" path). Sand drawn half-drained: a pile left in the
 -- top bulb's lower half, the bottom bulb filled to its midline.
-local LOADING_SVG =
-[[<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" stroke="#888" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-<g transform="translate(12 12)">
+local LOADING_ICON = [[<g transform="translate(12 12)">
 <path d="M5 2h14M5 22h14M17 2v4.172a2 2 0 0 1-.586 1.414L12 12l-4.414-4.414A2 2 0 0 1 7 6.172V2M7 22v-4.172a2 2 0 0 1 .586-1.414L12 12l4.414 4.414a2 2 0 0 1 .586 1.414V22"/>
 <path fill="#888" stroke="none" d="M8 8h8L12 12ZM7.5 17h9l.5 5H7Z"/>
-</g>
-</svg>]]
+</g>]]
+
+-- Hourglass "loading" icon shown inside an image box until lazyfetch swaps
+-- in the real bitmap; one copy per image (each pending img points at its
+-- own ".loading.svg" path), shaped to the image's aspect ratio (w/h, nil
+-- without source dimensions). Grid/capped footprints reserve only a width,
+-- so crengine derives the loading height from the icon's intrinsic ratio:
+-- a square canvas would reserve page-breaking squares for wide images.
+local function loadingSvg(aspect)
+    local h = aspect and aspect > 0 and 48 / aspect or 48
+    -- Wide canvases must scale the icon in; tall ones just center it.
+    local s = h < 48 and h / 48 or 1
+    return string.format(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 %g" width="48" height="%g"'
+        .. ' fill="none" stroke="#888" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">'
+        .. '<g transform="translate(24 %g) scale(%g) translate(-24 -24)">%s</g></svg>',
+        h, h, h / 2, s, LOADING_ICON)
+end
+-- Exposed for tests.
+M.loadingSvg = loadingSvg
 
 -- KOReader paints table headers/captions with absolute greys (th #DDD,
 -- caption #EEE, in its embedded Wikipedia stylesheet and base
@@ -395,7 +411,8 @@ function M.buildEpub(epub_path, title, lang, callback, fixed_path)
                         local loading_src = img.imgpath .. ".loading.svg"
                         if not loading_written[loading_src] then
                             loading_written[loading_src] = true
-                            original_addFileFromMemory(self, "OEBPS/" .. loading_src, LOADING_SVG, mtime)
+                            original_addFileFromMemory(self, "OEBPS/" .. loading_src,
+                                loadingSvg(img.aspect), mtime)
                         end
                         local img_tag = string.format('<img src="%s" style="%s" alt=""/>',
                             loading_src, img.style or "")
@@ -1169,7 +1186,8 @@ function M.buildMainPageEpub(date_str, lang, sections, lazy_images)
                 local loading_src = img.imgpath .. ".loading.svg"
                 if not seen_loading[loading_src] then
                     seen_loading[loading_src] = true
-                    table.insert(extras.files, { path = "OEBPS/" .. loading_src, content = LOADING_SVG })
+                    table.insert(extras.files, { path = "OEBPS/" .. loading_src,
+                        content = loadingSvg(img.aspect) })
                 end
                 return string.format('<img src="%s" style="%s" alt=""/>', loading_src, img.style or "")
             end)

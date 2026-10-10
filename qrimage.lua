@@ -248,6 +248,9 @@ local function lazyImageTag(attrs, lazy_images, seen, section, centered, infobox
         style_props[#style_props + 1] = "display:block"
         style_props[#style_props + 1] = "margin:0 auto"
     end
+    -- epub.lua's loading placeholder needs the source aspect for
+    -- width-only reserved styles (grid/capped footprints).
+    local aspect = width and height and height > 0 and width / height or nil
     local style = table.concat(style_props, "; ")
     -- The same image file can recur in different contexts (infobox media
     -- vs article body, or a different rendered footprint) that lazyfetch
@@ -267,6 +270,7 @@ local function lazyImageTag(attrs, lazy_images, seen, section, centered, infobox
         imgpath = string.format("images/wrimg%05d.%s", index, ext),
         mimetype = EXT_MIMETYPE[ext],
         style = style,
+        aspect = aspect,
         section = section,
         fallback = fallback,
         infobox = infobox,
