@@ -4,8 +4,8 @@
 -- absolute). This pass composites each div.locmap into ONE RGB PNG --
 -- the downloaded base map thumb with filled circles drawn at the
 -- template's marker positions -- replacing the block with a marker span
--- the EPUB builder swaps for a real <img>. Only runs in lazy ("show")
--- mode; other modes drop locmaps entirely (qrimage/htmlclean).
+-- the EPUB builder swaps for a real <img>. Only runs when "Show images"
+-- is on; with images disabled htmlclean drops locmap divs entirely.
 --
 -- Any per-locmap failure (fetch, decode, unknown format, caps) falls back
 -- to the bare base map as an ordinary lazy placeholder -- a marker-less
@@ -37,7 +37,7 @@ local FILL = { 0xCC, 0x2A, 0x2A }
 local RING = { 0x8B, 0x11, 0x11 }
 
 --[[-------------------------------------------------------------------------
-RGB PNG encoder (color type 2) -- same chunk scheme as qrimage.lua
+RGB PNG encoder (color type 2)
 --]]
 
 local crc_table
@@ -77,9 +77,7 @@ local function png_chunk(ctype, data)
 end
 
 -- `scanlines` holds the image rows, each prefixed with its PNG filter byte
--- (always 0, "None"). Duplicated from qrimage rather than shared: the
--- greyscale/color-type-2 split would leak internals across both modules,
--- and the whole writer is ~40 lines.
+-- (always 0, "None").
 local function encodeRgbPng(width, height, scanlines)
     local ihdr = be32(width) .. be32(height) .. string.char(8, 2, 0, 0, 0)
     local idat = zlib.zlib_compress(scanlines)
@@ -287,37 +285,33 @@ local function compositeLocMap(block, composites, opts)
     end
     if #markers == 0 then return nil end
 
-    -- Download the 1x src, or a sharper derivative in mid/high quality
-    -- (still emitting the 1x footprint, same as the lazy images).
+    -- Download a sharper derivative of the 1x src (still emitting the
+    -- 1x footprint, same as the lazy images).
     local url = src
-    if opts.hi_res == "high" or opts.hi_res == "mid" then
-        -- Same sharper-thumb rewrite as qrimage.pickDownloadSrc, snapped
-        -- to qrimage.THUMB_LADDER (any other width is a 400) and capped
-        -- at MAX_DECODED_WIDTH: without this the srcset's 960px "2x"
-        -- entry usually exceeds the cap and locmaps decode at 1x.
-        if opts.hi_res == "high" then
-            local file_w = tonumber(base_attrs:match([[data%-file%-width%s*=%s*"(%d+)"]]))
-            local wpx = tonumber(src:match("/(%d+)px-"))
-            if wpx and file_w and file_w > wpx then
-                local wider
-                for _, size in ipairs(qrimage.THUMB_LADDER) do
-                    if size > wpx and size <= file_w and size <= MAX_DECODED_WIDTH then
-                        wider = size
-                    end
-                end
-                if wider then
-                    url = src:gsub("/%d+px-", "/" .. wider .. "px-")
-                end
+    -- Same sharper-thumb rewrite as qrimage.pickDownloadSrc, snapped
+    -- to qrimage.THUMB_LADDER (any other width is a 400) and capped
+    -- at MAX_DECODED_WIDTH: without this the srcset's 960px "2x"
+    -- entry usually exceeds the cap and locmaps decode at 1x.
+    local file_w = tonumber(base_attrs:match([[data%-file%-width%s*=%s*"(%d+)"]]))
+    local wpx = tonumber(src:match("/(%d+)px-"))
+    if wpx and file_w and file_w > wpx then
+        local wider
+        for _, size in ipairs(qrimage.THUMB_LADDER) do
+            if size > wpx and size <= file_w and size <= MAX_DECODED_WIDTH then
+                wider = size
             end
         end
-        if url == src then
-            local srcset = " " .. (base_attrs:match([[srcset%s*=%s*"([^"]*)"]]) or "") .. ", "
-            local variant = srcset:match([[ (%S+) 2x, ]]) or srcset:match([[ (%S+) 1.5x, ]])
-            local vurl = variant and absoluteUrl(variant)
-            local vw = variant and tonumber(variant:match("/(%d+)px%-"))
-            if vurl and vurl ~= src and (not vw or vw <= MAX_DECODED_WIDTH) then
-                url = vurl
-            end
+        if wider then
+            url = src:gsub("/%d+px-", "/" .. wider .. "px-")
+        end
+    end
+    if url == src then
+        local srcset = " " .. (base_attrs:match([[srcset%s*=%s*"([^"]*)"]]) or "") .. ", "
+        local variant = srcset:match([[ (%S+) 2x, ]]) or srcset:match([[ (%S+) 1.5x, ]])
+        local vurl = variant and absoluteUrl(variant)
+        local vw = variant and tonumber(variant:match("/(%d+)px%-"))
+        if vurl and vurl ~= src and (not vw or vw <= MAX_DECODED_WIDTH) then
+            url = vurl
         end
     end
 
@@ -360,8 +354,8 @@ Public pass
 -- on failure, a lazy placeholder of the bare base map; the trailing
 -- caption div survives in both cases. composites collects
 -- { path = ..., png = ... } entries the EPUB builder injects via its
--- Archiver hooks. opts = { hi_res = bool, lazy_images = table (needed by
--- the fallback path to register the placeholder) }.
+-- Archiver hooks. opts.lazy_images is needed by the fallback path to
+-- register the placeholder.
 function M.replaceLocMaps(html, composites, opts)
     opts = opts or {}
     local out = {}
@@ -396,7 +390,7 @@ function M.replaceLocMaps(html, composites, opts)
             local od_start = block:find('<div[^>]-class%s*=%s*"od', 1)
             local base_attrs = firstImgAttrs(od_start and block:sub(1, od_start) or block)
             if base_attrs then
-                marker = qrimage.makeLazyImageTag(base_attrs, opts.lazy_images or {}, {}, 0, opts.hi_res, true)
+                marker = qrimage.makeLazyImageTag(base_attrs, opts.lazy_images or {}, {}, 0, true)
             end
         end
         if marker then

@@ -362,7 +362,7 @@ Media removal inside kept infobox tables and inline flags
 --]]
 
 -- Cleans the inside of a kept infobox table so it shows text only,
--- running before the QR pass. For each cell it:
+-- running before the image pass. For each cell it:
 --   * drops genuine media cells (image/figure/audio/video/kartographer
 --     mapframe) along with their caption, so the box keeps only text data;
 --   * removes small inline icon bubbles (flagicon spans and tiny <=24px
@@ -1451,7 +1451,7 @@ end
 -- tsingle div becomes one proportional display:inline-block <div>, all
 -- enclosed in a single full-width <td colspan=N>; every theader div keeps
 -- its own full-width <td colspan=N>. Everything else -- the
--- thumbimage/thumbcaption divs nested inside a tsingle, QR markers,
+-- thumbimage/thumbcaption divs nested inside a tsingle, lazy markers,
 -- links, text -- passes through untouched.
 -- Proportional (not equal) shares: the browser scales a row's images to
 -- one shared height, so their widths are aspect-proportional -- equal

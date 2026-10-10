@@ -2,7 +2,7 @@
 Background completion of lazily-built WikiReader EPUBs (formula SVGs and
 photographs).
 
-With formulas and/or "Fetch images in background", epub.lua builds the
+With formulas and/or "Show images" on, epub.lua builds the
 article EPUB immediately, with each boxed image as a placeholder <img> and
 each formula as a placeholder <img> whose zip entries do not exist yet, and
 an OEBPS/wikireader-pending.json entry listing the URLs to fetch (formula

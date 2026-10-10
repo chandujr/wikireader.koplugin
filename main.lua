@@ -13,11 +13,10 @@ Wikipedia conversion (ui/wikipedia.lua), so headings and the table of
 contents render normally. The last 10 distinct articles are cached on disk
 (for up to a day) as real EPUB files, which also backs the back-history.
 
-Images are never downloaded upfront. The "Image settings" submenu picks one
-of three modes: images dropped entirely, images downloaded in the
-background while you read (reserved boxes fill in via a flashless
-document reload), or each image box replaced by a small QR code pointing
-at its File: description page.
+Images are never downloaded upfront. With the "Show images" setting on
+(the default), they download in the background while you read (reserved
+boxes fill in via a flashless document reload); with it off, they are
+dropped entirely for a text-only read.
 
 Infoboxes, navboxes, sidebars, route-map tables, the short-description
 metadata, the category list, hatnotes/maintenance banners, and quote
@@ -61,7 +60,6 @@ local epub = require("epub")
 local lazyfetch = require("lazyfetch")
 local history = require("wikireader-history")
 local mainpage = require("mainpage")
-local qrimage = require("qrimage")
 local wutil = require("wikiutil")
 
 local WikiReader = WidgetContainer:extend {
@@ -376,7 +374,8 @@ function WikiReader:onCloseDocument()
 end
 
 -- Page turns in an open lazy EPUB re-check for pending downloads (formula
--- SVGs in every image mode, photographs outside "none"); this covers
+-- SVGs even with images off, photographs only when "Show images" is on);
+-- this covers
 -- articles opened outside the fetch flow (history, cache) and interrupted
 -- batches resumed after reopen. lazyfetch coalesces the overlapping
 -- checks and downloads everything in one batch (a cheap no-pending-exit
@@ -463,88 +462,16 @@ function WikiReader:addToMainMenu(menu_items)
                         end,
                     },
                     {
-                        text = _("Image settings"),
+                        text = _("Show images"),
+                        keep_menu_open = true,
+                        checked_func = function()
+                            return G_reader_settings:nilOrTrue("wikireader_show_images")
+                        end,
+                        callback = function()
+                            G_reader_settings:flipNilOrTrue("wikireader_show_images")
+                        end,
                         help_text = _(
-                            "Choose what happens to article images: dropped entirely for a text-only read, downloaded in the background while you read (they appear in place once ready), or replaced by small QR codes linking to their file pages."),
-                        sub_item_table = {
-                            {
-                                text = _("No images"),
-                                keep_menu_open = true,
-                                radio = true,
-                                checked_func = function()
-                                    return G_reader_settings:readSetting("wikireader_image_mode") == "none"
-                                end,
-                                callback = function()
-                                    G_reader_settings:saveSetting("wikireader_image_mode", "none")
-                                end,
-                            },
-                            {
-                                text = _("Show images"),
-                                keep_menu_open = true,
-                                radio = true,
-                                checked_func = function()
-                                    local mode = G_reader_settings:readSetting("wikireader_image_mode")
-                                    return not mode or mode == "show"
-                                end,
-                                callback = function()
-                                    G_reader_settings:saveSetting("wikireader_image_mode", "show")
-                                end,
-                            },
-                            {
-                                text = _("Show images as QR codes"),
-                                keep_menu_open = true,
-                                separator = true,
-                                radio = true,
-                                checked_func = function()
-                                    return G_reader_settings:readSetting("wikireader_image_mode") == "qr"
-                                end,
-                                callback = function()
-                                    G_reader_settings:saveSetting("wikireader_image_mode", "qr")
-                                end,
-                            },
-                            {
-                                text = _("Image quality"),
-                                enabled_func = function()
-                                    local mode = G_reader_settings:readSetting("wikireader_image_mode")
-                                    return not mode or mode == "show"
-                                end,
-                                sub_item_table = {
-                                    {
-                                        text = _("Low"),
-                                        keep_menu_open = true,
-                                        radio = true,
-                                        checked_func = function()
-                                            return wutil.imageQuality() == "low"
-                                        end,
-                                        callback = function()
-                                            G_reader_settings:saveSetting("wikireader_image_quality", "low")
-                                        end,
-                                    },
-                                    {
-                                        text = _("Medium"),
-                                        keep_menu_open = true,
-                                        radio = true,
-                                        checked_func = function()
-                                            return wutil.imageQuality() == "mid"
-                                        end,
-                                        callback = function()
-                                            G_reader_settings:saveSetting("wikireader_image_quality", "mid")
-                                        end,
-                                    },
-                                    {
-                                        text = _("High"),
-                                        keep_menu_open = true,
-                                        radio = true,
-                                        checked_func = function()
-                                            return wutil.imageQuality() == "high"
-                                        end,
-                                        callback = function()
-                                            G_reader_settings:saveSetting("wikireader_image_quality", "high")
-                                        end,
-                                    },
-                                },
-                            },
-                        },
+                            "Download article images in the background while you read (they appear in place once ready). Disable for a text-only read."),
                     },
                     {
                         text = _("Skip Wikipedia links dialog box"),
@@ -580,7 +507,7 @@ function WikiReader:addToMainMenu(menu_items)
                             G_reader_settings:flipNilOrFalse("wikireader_show_infoboxes")
                         end,
                         help_text = _(
-                            "Keep the summary tables (infoboxes) that appear at the top of many articles. When \"Show images as QR codes\" option is selected, images inside are removed for a cleaner reading view."),
+                            "Keep the summary tables (infoboxes) that appear at the top of many articles."),
                     },
                     {
                         text = _("Disable hyperlinks"),
@@ -1245,18 +1172,13 @@ function WikiReader:openMainPage()
         UIManager:show(info)
 
         UIManager:scheduleIn(0, function()
-            local image_mode = G_reader_settings:readSetting("wikireader_image_mode") or "show"
-            local qr_images, lazy_images
-            if image_mode == "qr" then
-                qr_images = {}
-            elseif image_mode == "show" then
+            local show_images = G_reader_settings:nilOrTrue("wikireader_show_images")
+            local lazy_images
+            if show_images then
                 lazy_images = {}
             end
-            local sections, err = mainpage.fetchSections(image_mode, {
-                qr_images = qr_images,
+            local sections, err = mainpage.fetchSections(show_images, {
                 lazy_images = lazy_images,
-                qr_size = G_reader_settings:readSetting("wikireader_qr_size") or qrimage.DEFAULT_QR_SIZE,
-                hi_res = wutil.imageQuality(),
             })
             UIManager:close(info)
 
@@ -1270,7 +1192,7 @@ function WikiReader:openMainPage()
             end
 
             local ok_build, epub_path = epub.buildMainPageEpub(os.date("%Y-%m-%d"), "en", sections,
-                image_mode, qr_images, lazy_images)
+                lazy_images)
             if not ok_build then
                 UIManager:show(InfoMessage:new {
                     text = _("Couldn't build the main page."),
@@ -1324,8 +1246,8 @@ function WikiReader:fetchAndOpen(title, lang, open_fn)
 end
 
 -- Kicks off background completion for a lazily-built EPUB (formula SVGs
--- in every image mode, photographs outside "none"); lazyfetch checks for
--- pending work either way.
+-- even with images off, photographs only when "Show images" is on);
+-- lazyfetch checks for pending work either way.
 function WikiReader:maybeCompleteLazyImages(epub_path)
     lazyfetch.scheduleCompletion(epub_path)
 end

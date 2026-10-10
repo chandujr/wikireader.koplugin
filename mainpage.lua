@@ -3,9 +3,9 @@
 -- three news boxes ("In the news", "Did you know", "On this day") by their
 -- long-stable element ids, then strips everything that doesn't survive
 -- reflow or leads to project-space pages. The boxes' floated thumbnails
--- are routed through qrimage per the image settings (QR codes / lazy
--- placeholders); only the English edition is supported: other wikis use
--- localized titles with different, often id-less markup.
+-- are routed through the lazy-image pipeline when "Show images" is on;
+-- only the English edition is supported: other wikis use localized titles
+-- with different, often id-less markup.
 
 local socket_url = require("socket.url")
 local logger = require("logger")
@@ -78,7 +78,7 @@ local function cleanBoxHtml(html, image_transform)
         -- <span typeof="mw:File"> wrappers left empty by the image removal.
         html = html:gsub('<span[^>]-typeof="mw:File[^"]*"[^>]->.-</span>', "")
     else
-        -- The image pass replaces each thumbnail with a QR/lazy placeholder
+        -- The image pass replaces each thumbnail with a lazy placeholder
         -- span, unwrapping its File: host anchor. It must run before the
         -- junk-anchor removal below, which would otherwise delete those
         -- File: anchors whole, host image included. The walker treats
@@ -122,14 +122,11 @@ end
 -- nil with an error kind ("network"/"parse"/"layout") like
 -- categories.fetchSections().
 --
--- image_mode / opts: when image_mode is "qr" or "show", the boxes'
--- thumbnails are routed through the qrimage pipeline using
--- opts.qr_size / opts.hi_res, collected into opts.qr_images /
--- opts.lazy_images ("none" drops them, as before). The collected QR PNGs /
--- lazy download records are stitched into the EPUB by
--- epub.buildMainPageEpub; lazyfetch.lua then completes the lazy ones.
-function M.fetchSections(image_mode, opts)
-    if image_mode == "none" then image_mode = nil end
+-- show_images: false drops the boxes' thumbnails; true routes them
+-- through the lazy-image pipeline into opts.lazy_images, stitched into
+-- the EPUB by epub.buildMainPageEpub and completed in the background by
+-- lazyfetch.lua.
+function M.fetchSections(show_images, opts)
     local url = string.format(
         "https://en.wikipedia.org/w/api.php?action=parse&page=%s&format=json&formatversion=2&prop=text",
         socket_url.escape(M.MAIN_PAGE_TITLE)
@@ -149,15 +146,9 @@ function M.fetchSections(image_mode, opts)
         local box = extractBox(html, spec.id)
         if box then
             local transform
-            if image_mode == "qr" then
+            if show_images then
                 transform = function(box_html)
-                    return qrimage.replaceImagesWithQr(box_html, opts.qr_images,
-                        opts.qr_size, "en")
-                end
-            elseif image_mode == "show" then
-                transform = function(box_html)
-                    return qrimage.replaceImagesWithLazy(box_html, opts.lazy_images,
-                        opts.hi_res)
+                    return qrimage.replaceImagesWithLazy(box_html, opts.lazy_images)
                 end
             end
             sections[spec.key] = cleanBoxHtml(box, transform)

@@ -1,46 +1,23 @@
 --[[--
-QR-code image generation for WikiReader.
+Image-box walker and lazy-image placeholders for WikiReader.
 
-Articles are cached as EPUBs with images permanently disabled: the actual
-photographs/diagrams are never downloaded, because an article can contain
-dozens of them and each can be several hundred KB, and without replacement
-the image box (image *and* caption) would be lost entirely.
+Articles are cached as EPUBs built immediately: the actual
+photographs/diagrams are not downloaded during the build (an article can
+carry dozens of them, each several hundred KB). This module instead finds
+every boxed image (figure, legacy thumb, gallery box) and replaces it with
+a placeholder span that reserves the image's real footprint; the EPUB
+builder records the download URLs and lazyfetch.lua fetches them in the
+background after the article opens, filling the placeholders in.
 
-Instead, this module replaces each article image with a small QR code
-of the image's File: description page: the box (and its caption) stays
-in the document, and scanning the QR code with a phone opens that page
-(which shows the real image instead of a huge original download).
-Nothing is ever fetched; a tiny
-black-and-white PNG is embedded per figure.
-
-Media inside infobox tables is stripped (genuine image cells dropped, and
-inline flag icons removed while keeping the name text they sit beside), so
-kept infoboxes show text only; prose icons inside
-<span typeof="mw:File"> remain untouched.
-
-The QR encoding itself is KOReader's own pure-Lua implementation
-(ffi/qrencode -- the same one the built-in QR sharing widget uses), and
-the PNG is written with a minimal chunk writer, with the IDAT payload
-deflated by KOReader's zlib binding (ffi/zlib).
+Media inside kept infobox tables keeps only genuine media (inline flag
+icons are removed while keeping the name text they sit beside), routed
+through the same placeholder pipeline.
 ]]
 
 local bit = require("bit")
-local zlib = require("ffi/zlib")
-local qrencode = require("ffi/qrencode")
 local wutil = require("wikiutil")
 
--- Display width/height, in CSS pixels, each QR image is given in the EPUB.
--- (The embedded PNG is generated at a slightly higher resolution and scaled
--- down by crengine, so it stays crisp when the reader zooms in.)
-local DEFAULT_QR_SIZE = 150
--- Quiet zone: number of empty modules left around the QR grid on each side,
--- so a phone camera can locate and frame the code reliably.
-local QR_QUIET = 4
-
 local M = {}
-
--- Exposed so the EPUB builder can use it as the fallback display size.
-M.DEFAULT_QR_SIZE = DEFAULT_QR_SIZE
 
 -- Image formats we are willing to background-download (lazy-image mode),
 -- with the mimetype their EPUB manifest item needs.
@@ -64,158 +41,6 @@ local MAX_LAZY_IMAGES = 60
 local THUMB_LADDER = { 20, 40, 60, 120, 250, 330, 500, 960, 1280, 1920, 3840 }
 -- Exposed for locmap.lua's hi-res rewrite (keeps the ladder in one place).
 M.THUMB_LADDER = THUMB_LADDER
-
---[[-------------------------------------------------------------------------
-Minimal PNG writer (8-bit greyscale, zlib-compressed)
---]]
-
--- CRC-32 (reflected polynomial 0xEDB88320), as required for PNG chunks.
-local crc_table
-local function crc32(s)
-    if not crc_table then
-        crc_table = {}
-        for i = 0, 255 do
-            local c = i
-            for _ = 1, 8 do
-                if bit.band(c, 1) == 1 then
-                    c = bit.bxor(bit.rshift(c, 1), 0xEDB88320)
-                else
-                    c = bit.rshift(c, 1)
-                end
-            end
-            crc_table[i] = c
-        end
-    end
-    local crc = 0xFFFFFFFF
-    for i = 1, #s do
-        crc = bit.bxor(crc_table[bit.band(bit.bxor(crc, s:byte(i)), 0xFF)], bit.rshift(crc, 8))
-    end
-    return bit.bxor(crc, 0xFFFFFFFF)
-end
-
-local function be32(n)
-    return string.char(
-        bit.band(bit.rshift(n, 24), 0xFF),
-        bit.band(bit.rshift(n, 16), 0xFF),
-        bit.band(bit.rshift(n, 8), 0xFF),
-        bit.band(n, 0xFF))
-end
-
-local function png_chunk(ctype, data)
-    local body = ctype .. data
-    return be32(#data) .. body .. be32(crc32(body))
-end
-
--- `raw_scanlines` is the concatenated image rows, each prefixed with its
--- PNG filter byte (we always use filter 0, "None").
-local function encode_png(width, height, raw_scanlines)
-    local ihdr = be32(width) .. be32(height) .. string.char(8, 0, 0, 0, 0)
-    -- bit depth 8, color type 0 (greyscale), compression 0, filter 0, interlace 0
-    local idat = zlib.zlib_compress(raw_scanlines)
-    return "\137PNG\r\n\26\n"
-        .. png_chunk("IHDR", ihdr)
-        .. png_chunk("IDAT", idat)
-        .. png_chunk("IEND", "")
-end
-
---[[-------------------------------------------------------------------------
-QR generation
---]]
-
--- Returns the bytes of a PNG (greyscale, black on white, with quiet zone)
--- encoding `url`, or nil if the QR could not be generated.
-function M.qrPng(url, qr_size)
-    local ok, grid = qrencode.qrcode(url)
-    if not ok or not grid then
-        return nil
-    end
-    local n = #grid
-    local dim_modules = n + 2 * QR_QUIET
-    -- Rasterize at enough pixels per module that the PNG is never smaller
-    -- than the display size the EPUB requests for it.
-    local module_px = math.max(2, math.ceil((qr_size or DEFAULT_QR_SIZE) / dim_modules))
-    local dim = dim_modules * module_px
-    -- grid[x][y]: 1-based, x = column (left to right), y = row (top to bottom).
-    -- Values > 0 are dark modules, < 0 are light.
-    local raw_parts = {}
-    for y = 0, dim - 1 do
-        local grow = math.floor(y / module_px) - QR_QUIET + 1
-        local row = {}
-        for x = 0, dim - 1 do
-            local gcol = math.floor(x / module_px) - QR_QUIET + 1
-            local dark = grow >= 1 and grow <= n and gcol >= 1 and gcol <= n
-                and grid[gcol][grow] > 0
-            row[#row + 1] = dark and 0 or 255
-        end
-        raw_parts[#raw_parts + 1] = "\0" .. string.char(table.unpack(row))
-    end
-    return encode_png(dim, dim, table.concat(raw_parts))
-end
-
---[[-------------------------------------------------------------------------
-Image URL handling
---]]
-
--- Resolves a Wikipedia <img>/<media> src to an absolute URL, free of
--- tracking query params, and upgraded from the original full-size file
--- when the src is a thumbnail URL. Used by filePageUrl() to recover the
--- original filename. Returns nil for URLs we can't make sense of
--- (relative paths, data: URIs, ...).
-function M.cleanImageUrl(src)
-    if src:sub(1, 2) == "//" then
-        src = "https:" .. src
-    elseif src:sub(1, 1) == "/" then
-        return nil
-    elseif not src:find("^https?://") then
-        return nil
-    end
-    src = src:gsub("[?#].*$", "")
-    -- Thumb URL: .../wikipedia/commons/thumb/X/XY/File.ext/NNNpx-File.ext
-    -- Original: .../wikipedia/commons/X/XY/File.ext
-    local prefix, hashpath = src:match("^(https?://[^/]+/wikipedia/[^/]+/)thumb/([^/]+/[^/]+/[^/]+)/%d+px%-")
-    if prefix and hashpath then
-        return prefix .. hashpath
-    end
-    return src
-end
-
--- Builds the File: description-page URL for the upload.wikimedia.org media
--- URL `mediaUrl` points at, on the wiki edition `lang`. The filename always
--- occurs in the file's upload path, so we can recover it from the original
--- or thumbnail URL. Some URLs point at a /transcoded/ derived form rather
--- than the original; those are handled too. Returns nil if no filename
--- could be extracted (or no lang was given).
-function M.filePageUrl(mediaUrl, lang)
-    -- EasyTimeline and similar live-rendered charts: hash-named,
-    -- no File: page exists.
-    if not mediaUrl or not lang
-        or mediaUrl:match("/wikipedia/[^/]+/timeline/") then
-        return nil
-    end
-    if mediaUrl:sub(1, 2) == "//" then
-        mediaUrl = "https:" .. mediaUrl
-    end
-    local filename
-    if mediaUrl:find("/transcoded/", 1, true) then
-        -- Transcoded media derivative, e.g.
-        --   .../wikipedia/commons/transcoded/c/dd/Original.ext/Original.ext.360p.vp9.webm
-        -- The original filename is the path segment right before the final
-        -- (derivative) segment, whatever the derivative's own name.
-        filename = mediaUrl:match("^.+/([^/]+)/[^/]+$")
-    else
-        -- Thumbnail or plain original: resolve to the original full-size
-        -- file, whose last path segment is the original filename.
-        local original = M.cleanImageUrl(mediaUrl)
-        if not original then
-            return nil
-        end
-        filename = original:match("([^/]+)$")
-    end
-    if not filename then
-        return nil
-    end
-    return string.format("https://%s.wikipedia.org/wiki/File:%s", lang, filename)
-end
 
 --[[-------------------------------------------------------------------------
 HTML transform
@@ -244,26 +69,18 @@ local VOID_TAGS = {
 -- Classifies an open tag for the walker: <figure> with a mw:File/mw:Image
 -- typeof, div.thumb (legacy thumbs, multiple-image boxes, gallery thumbs)
 -- and li.gallerybox are all "image box" contexts -- any <img> inside one of
--- those becomes a QR code.
+-- those becomes a lazy placeholder.
 --
 -- Note: <span typeof="mw:File"> is deliberately NOT an image-box context:
 -- MediaWiki uses those spans for small inline icons in the prose (moon
--- phase symbols, flags, ...), which would be silly as QR codes. Images in
--- galleries are covered anyway via their div.thumb/li.gallerybox parents.
+-- phase symbols, flags, ...), which are not worth background-downloading.
+-- Images in galleries are covered anyway via their div.thumb/li.gallerybox
+-- parents.
 -- Kept infoboxes (the "Show infoboxes" option) are an image-box context
 -- only when opts.treat_infobox_as_imagebox is set: htmlclean leaves their
 -- media cells in place (stripImageCells with keep_images) and img_fn turns
--- those imgs into lazy placeholders or QR codes. Inline icons are removed
+-- those imgs into lazy placeholders. Inline icons are removed
 -- by stripImageCells first, so only genuine media survives inside the box.
-local function hasClass(cls, token)
-    for w in cls:gmatch("[^%s]+") do
-        if w == token then
-            return true
-        end
-    end
-    return false
-end
-
 local function className(attrs)
     return (attrs:match([[class%s*=%s*"([^"]*)"]]) or ""):lower()
 end
@@ -275,7 +92,7 @@ local function classify(tag, attrs)
             or typeof:find("mw:image") ~= nil then
             return { tag = tag, is_img = true }
         end
-        -- Video/audio figures have no image to show or QR-encode; mark
+        -- Video/audio figures have no image to show; mark
         -- the whole figure for the walker's locmap-style suppression so
         -- it, its caption and its media all vanish (no empty dashed box).
         if typeof:find("mw:video") ~= nil
@@ -318,24 +135,10 @@ local function inInfobox(stack)
     return false
 end
 
--- Generates the QR PNG for `url`, appends it to `qr_images` and returns
--- the marker span. Returns "" if the URL could not be QR-coded. `src` is
--- the image's original (already https-prefixed) URL, recorded so the EPUB
--- builder can look the image's caption up for the full-screen viewer.
-local function makeQr(url, qr_images, qr_size, src)
-    local index = #qr_images + 1
-    local png = M.qrPng(url, qr_size)
-    if not png then
-        return ""
-    end
-    qr_images[index] = { path = string.format("images/qr%05d.png", index), png = png, url = url, src = src }
-    return string.format('<span class="wikireader-qrimg" data-qrindex="%d"></span>', index)
-end
-
 -- Picks the URL lazyfetch should download for an <img> with these attrs:
--- in mid/high quality a sharper derivative of the 1x src, else the 1x src
--- itself. Returns the URL or nil if the tag has no usable src.
-local function pickDownloadSrc(attrs, hi_res)
+-- a sharper derivative of the 1x src. Returns the URL or nil if the tag
+-- has no usable src.
+local function pickDownloadSrc(attrs)
     local src = attrs:match([[src%s*=%s*"([^"]*)"]])
     if not src or src:sub(1, 5) == "data:" then
         return nil
@@ -347,25 +150,27 @@ local function pickDownloadSrc(attrs, hi_res)
     -- change (crengine just scales the sharper bitmap); the 1x src stays
     -- as lazyfetch's failure fallback.
     local download_src, fallback = src, nil
-    if hi_res == "high" or hi_res == "mid" then
+    do
         -- The srcset tops out at a ~960px "2x" entry, still low-res zoomed
         -- in on E-ink; THUMB_LADDER's bigger standard sizes are the only
-        -- other widths Wikimedia serves (anything else gets a 400). So in
-        -- "high", rewrite the /NNNpx- thumb segment to the next step at or
-        -- above 4x the rendered width, clamped to the original's
-        -- data-file-width; "mid" and the no-rewrite fallback use the
-        -- srcset variant like KOReader's ui/wikipedia.lua.
+        -- other widths Wikimedia serves (anything else gets a 400). Rewrite
+        -- the /NNNpx- thumb segment to the next step at or above 4x the
+        -- rendered width, clamped to the original's data-file-width; when
+        -- no rewrite applies, use the srcset variant like KOReader's
+        -- ui/wikipedia.lua.
         local variant
         local file_w = tonumber(attrs:match([[data%-file%-width%s*=%s*"(%d+)"]]))
         local w = tonumber(src:match("/(%d+)px-"))
-        if w and hi_res == "high" then
+        if w then
             -- Clamp to the original so tiny files aren't upscaled; the
             -- step above the clamp may still be (up to ~33%, harmless).
             local target = math.min(file_w or math.huge, w * 4)
             for _, size in ipairs(THUMB_LADDER) do
                 if size >= target then
                     if size > w then
-                        variant = src:gsub("/%d+px-", "/" .. size .. "px-")
+                        -- Replacement string: '%' is only pattern-magic on
+                        -- the left side.
+                        variant = src:gsub("/%d+px%-", "/" .. size .. "px-")
                     end
                     break
                 end
@@ -403,8 +208,8 @@ end
 -- True if an <img> with these attrs is both downloadable and displayable
 -- by crengine (the same rules lazyImageTag enforces before reserving a
 -- placeholder).
-local function usableLazyImg(attrs, hi_res)
-    local src = pickDownloadSrc(attrs, hi_res)
+local function usableLazyImg(attrs)
+    local src = pickDownloadSrc(attrs)
     if not src then return false end
     local ext = src:gsub("%?.*$", ""):match(".*%.(%S%S%S?%S?%S?)$")
     ext = ext and ext:lower()
@@ -419,8 +224,8 @@ end
 -- drop_unsupported predicate the whole box is removed then, otherwise
 -- only the <img> vanishes (caption-only box). Returns "" for over-cap
 -- images in either case.
-local function lazyImageTag(attrs, lazy_images, seen, section, hi_res, centered, infobox)
-    local download_src, fallback = pickDownloadSrc(attrs, hi_res)
+local function lazyImageTag(attrs, lazy_images, seen, section, centered, infobox)
+    local download_src, fallback = pickDownloadSrc(attrs)
     if not download_src then
         return ""
     end
@@ -471,24 +276,6 @@ local function lazyImageTag(attrs, lazy_images, seen, section, hi_res, centered,
         index, style)
 end
 
--- Replaces one <img> tag with a QR placeholder span, appending the
--- generated PNG to `qr_images`. Returns the marker HTML, or "" if the
--- image had no usable URL / could not be QR-coded (the caption survives).
-local function qrImageTag(attrs, qr_images, qr_size, lang)
-    local src = attrs:match([[src%s*=%s*"([^"]*)"]])
-    if not src or src:sub(1, 5) == "data:" then
-        return ""
-    end
-    local url = M.filePageUrl(src, lang)
-    if not url then
-        return ""
-    end
-    if src:sub(1, 2) == "//" then
-        src = "https:" .. src
-    end
-    return makeQr(url, qr_images, qr_size, src)
-end
-
 -- Walks the article HTML and replaces every <img> that sits inside an
 -- "image box" (figure, gallerybox, div.thumb) with a placeholder span
 -- via the img_fn handler. The placeholders are later swapped for real
@@ -500,15 +287,13 @@ end
 -- lazy-image mode can record which article section each image sits under
 -- (the TOC entry order matches the heading order).
 -- opts (all optional):
---   drop_locmap: suppress div.locmap blocks entirely (qr mode; in lazy
---     mode locmaps are composited to marker spans by locmap.lua first).
 --   treat_infobox_as_imagebox: also treat class=infobox subtrees as
 --     image-box context (lazy mode with "Show infoboxes": their kept
 --     media imgs become lazy placeholders).
 -- Blocks of media are suppressed whole when they contain no image -- a
 -- figure whose content is a <video>/<audio> (Parsoid types those
 -- mw:File/Thumb like images, so classify() can't tell) has nothing to
--- show or encode, and keeping it would leave a caption-only stub.
+-- show, and keeping it would leave a caption-only stub.
 -- drop_unsupported additionally suppresses the box when ANY contained
 -- <img> fails the predicate (lazy mode: unusable format) instead of
 -- leaving a caption-only stub. Infobox entries are exempt: losing an
@@ -592,17 +377,9 @@ local function walkImageBoxes(html, img_fn, opts)
                 if tagname:match("^h[2-6]$") then
                     headings = headings + 1
                 end
-                -- A location map (<div class="locmap">) is meant to be seen as
-                -- its base map with marker overlays composited on top. With
-                -- media images disabled we could only offer a bare, marker-
-                -- less map as a QR, which would be meaningless to the reader.
-                -- Drop the whole figure -- map, overlays and caption alike.
                 -- Video/audio figures are dropped the same way (no image to
                 -- keep, so no empty caption stub).
-                if opts.drop_locmap and tagname == "div"
-                    and hasClass(className(attrs), "locmap") then
-                    entry.is_dropped = true
-                elseif opts.treat_infobox_as_imagebox
+                if opts.treat_infobox_as_imagebox
                     and className(attrs):find("infobox", 1, true) then
                     entry.is_img = true
                     entry.is_infobox = true
@@ -651,7 +428,6 @@ local function walkImageBoxes(html, img_fn, opts)
     local result = table.concat(out)
     -- Some layouts wrap the image in a link to the file page; drop that
     -- wrapper around our markers so they aren't a confusing tap target.
-    result = result:gsub('(<a[^>]*>%s*)(<span class="wikireader%-qrimg"[^>]*></span>)(%s*</a>)', '%2')
     result = result:gsub('(<a[^>]*>%s*)(<span class="wikireader%-lazyimg"[^>]*></span>)(%s*</a>)', '%2')
     return result
 end
@@ -662,17 +438,16 @@ timeline-wrapper blocks (EasyTimeline)
 {{#tag:timeline}} renders as a bare
 <div class="timeline-wrapper"><map name="..."></map><img usemap="#..."
 src="//upload.wikimedia.org/wikipedia/en/timeline/<hash>.png"/></div>:
-hash-named, no thumb box, no width/height, no File: page. The walker
+hash-named, no thumb box, no width/height. The walker
 sees no image box here, so this pass routes the chart through the same
 placeholder machinery first. The PNG's real size never appears in the
 markup, so the natural 900x500 canvas is reserved as the lazy footprint
-(lazyfetch's realImageSizeStyle() re-caps it later); in QR mode the
-chart PNG's own URL is encoded since there is no File: page.
+(lazyfetch's realImageSizeStyle() re-caps it later).
 --]]
 -- Only this src layout identifies an EasyTimeline render.
 local RENDER_PAT = [[src%s*=%s*"(//upload%.wikimedia%.org/wikipedia/[^/]+/timeline/[^/%"]+)%"]]
 
-function M.replaceTimelineWrappers(html, marker_table, seen, hi_res, qr_mode)
+function M.replaceTimelineWrappers(html, lazy_images, seen)
     return html:gsub(
         '<div class="timeline%-wrapper">(.-)</div>',
         function(inner)
@@ -680,27 +455,14 @@ function M.replaceTimelineWrappers(html, marker_table, seen, hi_res, qr_mode)
             if not attrs or not attrs:match(RENDER_PAT) then
                 return nil -- leave anything else with that class alone
             end
-            local marker = qr_mode
-                and qrImageTag(attrs, marker_table.qr, marker_table.qr_size, marker_table.lang)
-                or lazyImageTag(attrs, marker_table.lazy, seen, 0, hi_res, true, false)
-            if marker == "" and qr_mode then
-                -- Hash render: no File: page, so the QR carries the
-                -- chart PNG itself.
-                local src = attrs:match([[src%s*=%s*"([^"]*)"]])
-                if src and src:sub(1, 5) ~= "data:" then
-                    marker = makeQr(src:gsub("^//", "https://"),
-                        marker_table.qr, marker_table.qr_size)
-                end
-            end
+            local marker = lazyImageTag(attrs, lazy_images, seen, 0, true, false)
             if marker == "" then
-                return "" -- unencodable: drop the box
+                return "" -- unusable: drop the box
             end
             -- No width/height in the render to reserve; graft the
-            -- natural-canvas footprint (QR markers have no style).
-            if not qr_mode then
-                marker = marker:gsub('style="',
-                    'style="width:900px; height:500px; ', 1)
-            end
+            -- natural-canvas footprint.
+            marker = marker:gsub('style="',
+                'style="width:900px; height:500px; ', 1)
             return marker
         end)
 end
@@ -985,20 +747,6 @@ function M.collectImageCaptions(html, captions)
     })
 end
 
--- QR mode: every boxed image becomes a QR code of its File:
--- description page. Bare EasyTimeline charts (see below) go through
--- replaceTimelineWrappers first.
-function M.replaceImagesWithQr(html, qr_images, qr_size, lang, opts)
-    return walkImageBoxes(html,
-        function(attrs)
-            return qrImageTag(attrs, qr_images, qr_size, lang)
-        end,
-        {
-            drop_locmap = true,
-            treat_infobox_as_imagebox = opts and opts.treat_infobox_as_imagebox,
-        })
-end
-
 -- Lazy-image mode: boxed <img>s become placeholders whose zip entries are
 -- filled in later by lazyfetch.lua; each placeholder records the index of
 -- the article section it sits in, which the background scheduler maps to
@@ -1006,17 +754,17 @@ end
 -- infobox media (htmlclean keeps the image cells here) is routed through
 -- the same placeholders. locmap divs are already gone by now: locmap.lua
 -- replaces them with composite/lazy markers before this runs.
-function M.replaceImagesWithLazy(html, lazy_images, hi_res, opts)
+function M.replaceImagesWithLazy(html, lazy_images, opts)
     local seen = {}
     return walkImageBoxes(html,
         function(attrs, section, infobox)
-            return lazyImageTag(attrs, lazy_images, seen, section or 0, hi_res,
+            return lazyImageTag(attrs, lazy_images, seen, section or 0,
                 infobox, infobox)
         end,
         {
             treat_infobox_as_imagebox = opts and opts.treat_infobox_as_imagebox,
             drop_unsupported = function(attrs)
-                return not usableLazyImg(attrs, hi_res)
+                return not usableLazyImg(attrs)
             end
         })
 end
@@ -1025,8 +773,8 @@ end
 -- <img> attrs, registering it in `lazy_images` like the walker does.
 -- (centered only centers the placeholder; infobox marks infobox media,
 -- which lazyfetch sizes cap-only, without the article images' floor.)
-function M.makeLazyImageTag(attrs, lazy_images, seen, section, hi_res, centered, infobox)
-    return lazyImageTag(attrs, lazy_images, seen, section or 0, hi_res, centered, infobox)
+function M.makeLazyImageTag(attrs, lazy_images, seen, section, centered, infobox)
+    return lazyImageTag(attrs, lazy_images, seen, section or 0, centered, infobox)
 end
 
 return M
