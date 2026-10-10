@@ -2,6 +2,7 @@
 -- These are functions needed by multiple modules (htmlclean, latex, epub, main).
 
 local logger = require("logger")
+local Meta = require("_meta")
 
 local M = {}
 
@@ -62,7 +63,8 @@ function M.httpGetJSON(url)
             method = "GET",
             sink = socketutil.table_sink(sink),
             headers = {
-                ["User-Agent"] = "KOReader-WikiReader-plugin/0.1 (personal use)",
+                ["User-Agent"] = "KOReader-WikiReader/" .. Meta.version
+                    .. " (https://github.com/chandujr/wikireader.koplugin)",
             },
         }
         if not request_ok then
