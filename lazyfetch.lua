@@ -7,19 +7,22 @@ article EPUB immediately, with each boxed image as a placeholder <img> and
 each formula as a placeholder <img> whose zip entries do not exist yet, and
 an OEBPS/wikireader-pending.json entry listing the URLs to fetch (formula
 SVGs first: the downloader runs the list in order, so its concurrency slots
-fill with formulas before photos). This module downloads the whole pending
-set as ONE background batch after the document opens (each transfer in a
-coroutine over non-blocking sockets, resumed only from scheduler ticks, so
-downloads never hold the UI thread or block the open), rewrites the zip with
-the downloads added and the pending entry dropped, and seamlessly reloads
-the open document — that single reload is the article's only partial refresh.
-A cached article interrupted mid-download keeps its pending entry, so the
-next open finishes it the same way. Failed downloads are removed from
-content.html and content.opf so no blank squares remain. Page turns
-re-trigger the check (debounced via main.lua's onPageUpdate) but are
-absorbed while a batch runs; a batch is abandoned only when the document
-is closed, never on a page turn — every listed download is wanted whatever
-page the reader is on.
+fill with formulas before photos). Downloading runs in coroutines over
+non-blocking sockets, resumed only from scheduler ticks, so it never holds
+the UI thread or blocks the open. Fresh builds first pre-download the
+pending head (INITIAL_PRELOAD, also mostly formulas by that ordering) so
+the document opens with its leading pages already filled. The rest then
+follows in page-priority batches around the reading position: the read
+page's images (via its sentinel links) plus document-order neighbours
+standing in for the adjacent pages, whose link boxes crengine cannot give.
+Every batch reloads the document seamlessly the moment it lands (the step
+debounce keeps successive reloads ≥1s apart). Failed downloads are
+removed from content.html
+and content.opf so no blank squares remain. Page turns re-trigger the
+check (debounced via main.lua's onPageUpdate) but are absorbed while a
+batch runs; a batch is abandoned only when the document is closed, never
+on a page turn — every listed download is wanted whatever page the reader
+is on.
 ]]
 
 local Archiver = require("ffi/archiver")
@@ -52,6 +55,17 @@ local PENDING_ENTRY = "OEBPS/wikireader-pending.json"
 -- Images are capped at HEIGHT_CAP_VH of the page height, expressed as a
 -- max width of HEIGHT_CAP_VH*vh*(w/h) (see realImageSizeStyle).
 local HEIGHT_CAP_VH = 33
+
+-- How many entries beyond a page's own images the priority batch takes in
+-- on each side (document order): the window approximates the images of the
+-- pages that surround the read one, whose link boxes crengine cannot give.
+local NEIGHBOUR_WINDOW = 4
+
+-- How many pending entries (formulas first, then photographs, in reading
+-- order) download before a freshly built article opens, so the document
+-- renders with its leading pages already filled: a first open lands on
+-- page 1, whose images sit at the head of the list.
+local INITIAL_PRELOAD = 8
 
 -- Final inline style for a real image, from its reserved px footprint
 -- (style): the px height is dropped so crengine keeps the aspect ratio.
@@ -478,6 +492,18 @@ local function downloadAll(images, on_all_done, is_abandoned)
     end
 end
 
+-- Seamlessly reloads `epub_path` into the live reader (self.ui may be the
+-- filemanager instance when the article was opened from a menu). XPointers
+-- are paragraph-anchored, so the reading position is kept even when images
+-- reflow the text.
+local function reloadIfLive(epub_path)
+    local ReaderUI = require("apps/reader/readerui")
+    local ui = ReaderUI.instance
+    if ui and ui.document and ui.document.file == epub_path then
+        ui:reloadDocument(nil, true)
+    end
+end
+
 -- Returns the live cre document while it is still showing `epub_path`.
 local function liveDocument(epub_path)
     local ReaderUI = require("apps/reader/readerui")
@@ -534,13 +560,45 @@ function M.onNetworkConnected()
     net_blocked = {}
 end
 
+-- Pending images whose wrimg number appears in `links` (the current page's
+-- sentinel-link URIs; epub.lua wires the wridx= tail on every placeholder);
+-- positions[j] carries subset item j's full-list index. Empty when links
+-- are missing or nothing there is pending. Exposed for tests.
+function M.pageSubset(images, links)
+    local on_page = {}
+    for _, link in ipairs(links or {}) do
+        local n = link.uri and link.uri:match("wridx=(%d+)")
+        if n then on_page[tonumber(n)] = true end
+    end
+    local subset, positions = {}, nil
+    if next(on_page) then
+        local taken = {}
+        for i, img in ipairs(images) do
+            if not img.math then
+                local n = tonumber(img.imgpath:match("wrimg(%d+)"))
+                if n and on_page[n] then
+                    for j = math.max(1, i - NEIGHBOUR_WINDOW), math.min(#images, i + NEIGHBOUR_WINDOW) do
+                        if not images[j].math and not taken[j] then
+                            taken[j] = true
+                            positions = positions or {}
+                            positions[#subset + 1] = j
+                            subset[#subset + 1] = images[j]
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return subset, positions
+end
+
 function M._step(epub_path)
     if step_running[epub_path] then
         return -- a batch for this EPUB is already downloading
     end
     local images = readPendingCached(epub_path)
     if not images then
-        return -- nothing pending: build is complete (or not a lazy build)
+        return -- nothing pending: build complete (or not a lazy build)
     end
     if NetworkMgr:isOnline() then
         net_blocked[epub_path] = nil
@@ -558,31 +616,75 @@ function M._step(epub_path)
         logger.dbg("WikiReader lazy: article no longer open, pausing completion")
         return
     end
+    -- Prioritise the pending images around where the user is reading:
+    -- their batch completes fast, and the reload right after puts real
+    -- images in view (sentinel wridx= tails give the membership, see
+    -- pageSubset). A page with no pending images (or an unavailable link
+    -- scan) falls through to the whole-article batch. Every batch reloads
+    -- right after its swap, and planStep's debounce keeps any two reloads
+    -- ≥1s apart.
+    local ok, links = pcall(doc.getPageLinks, doc, false)
+    local subset, positions = M.pageSubset(images, ok and type(links) == "table" and links or nil)
+    local batch = #subset > 0 and subset or images
+    if #subset == 0 then positions = nil end
     step_running[epub_path] = true
-    -- Whole-article batch, run to completion even across page turns: the
-    -- single seamless reload below is this build's only partial refresh.
-    downloadAll(images, function(results)
+    -- A subset batch maps back onto the full pending list (swap keeps the
+    -- absent entries pending and rewrites wikireader-pending.json from it);
+    -- positions[j] carries batch item j's full-list index.
+    downloadAll(batch, function(results)
         step_running[epub_path] = false
         if not results then
             return -- reader closed mid-batch; leftovers surface at the next open
         end
+        local mapped = results
+        if positions then
+            mapped = {}
+            for j = 1, #batch do mapped[positions[j]] = results[j] end
+        end
         -- Failed downloads lost their placeholders in the swap, and
         -- nothing remains pending: build is complete, no re-check needed.
-        local ok = swapInImages(epub_path, images, results)
-        if ok then
-            -- XPointers are paragraph-anchored, so the reload keeps the
-            -- reading position even though images reflow the text. Resolve
-            -- the LIVE reader (self.ui may be the filemanager instance when
-            -- the article was opened from a menu); skip when the reader has
-            -- moved on — the images persist in the zip and surface at the
-            -- next open.
-            local ReaderUI = require("apps/reader/readerui")
-            local ui = ReaderUI.instance
-            if ui and ui.document and ui.document.file == epub_path then
-                ui:reloadDocument(nil, true)
-            end
+        if not swapInImages(epub_path, images, mapped) then
+            return
+        end
+        local pending_left = false
+        for i = 1, #images do
+            if mapped[i] == nil then pending_left = true break end
+        end
+        -- Refresh into the current view for every completed batch, final
+        -- ones included: each completion renders in place immediately.
+        reloadIfLive(epub_path)
+        if pending_left then
+            planStep(epub_path)
         end
     end, function() return liveDocument(epub_path) == nil end)
+end
+
+-- Downloads the pending list's head into the EPUB before the article
+-- opens (fresh builds via fetchAndOpen) and then runs `on_open`: the first
+-- render carries its leading images filled. The download ticks via the
+-- scheduler, so the UI stays live; failures and offline episodes pass
+-- straight through to `on_open`, where the post-open flow takes over the
+-- leftovers.
+function M.preload(epub_path, on_open)
+    local images = readPendingCached(epub_path)
+    if not images or not NetworkMgr:isOnline() then
+        on_open()
+        return
+    end
+    local batch = {}
+    for i = 1, math.min(INITIAL_PRELOAD, #images) do
+        batch[i] = images[i]
+    end
+    step_running[epub_path] = true
+    downloadAll(batch, function(results)
+        step_running[epub_path] = false
+        if results then
+            local mapped = {}
+            for j = 1, #batch do mapped[j] = results[j] end
+            swapInImages(epub_path, images, mapped)
+        end
+        on_open()
+    end, function() return false end)
 end
 
 -- Raw pending list of any EPUB path (save flow checks the open article).

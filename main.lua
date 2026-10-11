@@ -247,6 +247,13 @@ function WikiReader:init()
                 return true
             end
 
+            -- The remaining sentinels on our reserved host are machine-only
+            -- (e.g. lazyfetch's wridx markers around every lazy image):
+            -- inert on tap, hold is handled separately below.
+            if link_url:find("wikireader.invalid/", 1, true) then
+                return true
+            end
+
             local cat_section_index = wutil.parseCategoryLink(link_url)
             if cat_section_index then
                 local cat_title = categories.category_section_titles[cat_section_index]
@@ -279,7 +286,11 @@ function WikiReader:init()
             if ui.rolling and ui.document and isWikiEpubPath(ui.document.file) then
                 local ok, link = pcall(ui.document.getLinkFromPosition, ui.document, ges.pos)
                 if ok and type(link) == "string" then
-                    local encoded = link:match("^https://wikireader%.invalid/imgcap=(.+)$")
+                    -- epub.lua appends &wridx=<index> after the caption for
+                    -- lazyfetch's page prioritisation; accept both shapes
+                    -- (cached EPUBs predate the marker).
+                    local encoded = link:match("^https://wikireader%.invalid/imgcap=(.-)&wridx=%d+$")
+                        or link:match("^https://wikireader%.invalid/imgcap=(.+)$")
                     if encoded then
                         local hold_pos = hl_self.view:screenToPageTransform(ges.pos)
                         local image = hold_pos and ui.document:getImageFromPosition(hold_pos, true, true)
@@ -1239,8 +1250,16 @@ function WikiReader:fetchAndOpen(title, lang, open_fn)
                 return
             end
             cache.pruneCache(keep_path)
-            open_fn(used_path or epub_path, resolved_title)
-            self:maybeCompleteLazyImages(used_path or epub_path)
+            -- Fresh open starts at the head: download the pending list's
+            -- head before showing the document; the post-open
+            -- page-priority flow covers the rest.
+            local info = InfoMessage:new { text = _("Please wait…") }
+            UIManager:show(info)
+            lazyfetch.preload(used_path or epub_path, function()
+                UIManager:close(info)
+                open_fn(used_path or epub_path, resolved_title)
+                self:maybeCompleteLazyImages(used_path or epub_path)
+            end)
         end)
     end)
 end

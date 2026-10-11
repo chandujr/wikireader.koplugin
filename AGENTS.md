@@ -19,7 +19,7 @@ drops them entirely for a text-only read.
 | File | Role |
 |---|---|
 | `main.lua` | Plugin entry point: menus, search/featured/category browsing, link handler, back-history nav, hold-on-image full-screen caption viewer (decodes epub.lua's sentinel caption links), refetch/save/share/clear-cache actions. Start here for any UI or user-facing behavior change. |
-| `epub.lua` | Orchestrates article → EPUB: monkey-patches `Wikipedia` + `Archiver` hooks, sets per-feature HTML-cleaning options, injects stylesheet + metadata, and wraps each captioned image in a sentinel link whose URL carries the caption (decoded by main.lua's hold hook for the full-screen image viewer). Change here to alter the fetch/build pipeline or which passes run. |
+| `epub.lua` | Orchestrates article → EPUB: monkey-patches `Wikipedia` + `Archiver` hooks, sets per-feature HTML-cleaning options, injects stylesheet + metadata, and wraps each placeholder image in a sentinel link carrying the index (`wridx=`, lazyfetch's page-priority matcher) plus, when captioned, the caption text (decoded by main.lua's hold hook for the full-screen image viewer). Change here to alter the fetch/build pipeline or which passes run. |
 | `htmlclean.lua` | All HTML transformations: strip clutter (navboxes, hatnotes, timeline bars), unwrap article links, drop infobox media cells (or, in lazy mode, keep image cells for the lazy pipeline and drop only video/audio/mapframe), center infobox cells, border infobox/wikitable tables, insert tap-to-rotate hints above/below data tables (rotation handled by main.lua's link handler), merge quote attributions, rewrite `{{Multiple image}}` flexbox into one tiny table per image (boxes inside a kept infobox are hoisted into the infobox's own rows instead, emitted as one full-width cell per row holding proportional inline-block items whose media re-footprints to fill them -- the browser grid), and convert `{{Infobox settlement/columns}}`'s display:table scaffold into a real nested table (crengine ignores display:table); also collects each image box's caption text, keyed by the image's original URL, for epub.lua's sentinel links. Splitting/crengine rationale lives in the code comments. |
 | `qrimage.lua` | Owns the shared image-box walker (figure/div.thumb/li.gallerybox, plus kept infoboxes via `treat_infobox_as_imagebox`) and turns every boxed `<img>` into a lazy placeholder span reserving its footprint (lazy placeholders centered via `display:block; margin:0 auto`); rewrites the thumb URL to a sharper standard-size derivative, with the 1x src kept as lazyfetch's failure fallback; drops non-image media (video/audio) wholesale; also collects each image box's caption text keyed by the original image URL for epub.lua's sentinel links. Image mode's name is historical: no QR remains here. |
 | `locmap.lua` | Locator maps (Template:Location map): in lazy mode composites each `div.locmap` into ONE PNG — base map thumb downloaded and decoded (`ffi/png`/`ffi/jpeg`) with red marker dots drawn at the template's percentages — and keeps the caption; failures fall back to a plain lazy placeholder of the bare base map. With images disabled htmlclean drops locmaps. |
@@ -29,7 +29,7 @@ drops them entirely for a text-only read.
 | `wikireader-cache.lua` | EPUB cache (10 entries / 24 h), stale-file removal, sidecar-aware delete, cache dir handling. |
 | `wikireader-history.lua` | Last-10-articles reading history (title/lang references persisted in `G_reader_settings`, no files). |
 | `wikireader-bookmarks.lua` | User-bookmarked articles (max 50, newest first), stored as title/lang references in `G_reader_settings` (`wikireader_bookmarks`); never evicts automatically, only via explicit remove/clear. |
-| `lazyfetch.lua` | Background completion of lazily-built EPUBs: downloads the whole pending set (formula SVGs first, then photographs) in one batch, triggered by article opens and page turns (`main.lua`'s `onPageUpdate`, coalesced per EPUB so overlapping checks can't stack). Rewrites the zip in place (`.tmp` + rename), keeps the pending entry until nothing remains, removes failed downloads (their `<img>` + manifest item) so no blank squares remain, and seamlessly reloads the open document after each batch. |
+| `lazyfetch.lua` | Background completion of lazily-built EPUBs: downloads the pending set in page-priority batches — the read page's images (matched from its `wridx=` sentinel link URIs, widened by a document-order window that stands in for the adjacent pages crengine cannot inspect) first, the rest after — triggered by article opens and page turns (`main.lua`'s `onPageUpdate`, coalesced per EPUB so overlapping checks can't stack). Rewrites the zip in place (`.tmp` + rename), keeps the pending entry until nothing remains, removes failed downloads (their `<img>` + manifest item) so no blank squares remain, and seamlessly reloads the open document after every batch update; fresh builds additionally pre-download the pending list's head before the document opens (`preload`). |
 | `categories.lua` | Featured-articles category tree built from the API's flat section list; module-level lookup used by the link handler. |
 | `mainpage.lua` | Scrapes today's English Wikipedia main page for its "In the news" / "Did you know" / "On this day" boxes (by their stable `mp-*` ids), cleans them, routes their thumbnails through the lazy pipeline when "Show images" is on (`epub.buildMainPageEpub` stitches them in; `lazyfetch` completes the lazy ones), and absolutizes the article links. English-only: other wikis have different main-page titles and id-less markup. |
 | `_meta.lua` | Plugin name/version metadata shown in the About dialog. |
@@ -46,11 +46,13 @@ drops them entirely for a text-only read.
 4. `Wikipedia.createEpub` builds the EPUB; patched `Archiver` hooks inject
    locator-map composites, the formula-SVG `<img>`s (zip entries
    left for lazyfetch), stylesheet, metadata, and the pending-URL list.
-5. Result cached as `<lang> - <Title>.epub`; opened via ReaderUI.
-6. `lazyfetch` then downloads the whole pending set in the background
-   (formula SVGs first, then photographs; the photos list is empty when
-   "Show images" is off) and re-triggers on every page
-   turn (zip swap + seamless reload per batch).
+5. `lazyfetch.preload` downloads the pending list's head (formula SVGs
+   and leading photos), so the opened document starts filled; result
+   cached as `<lang> - <Title>.epub`; opened via ReaderUI.
+6. `lazyfetch` then completes the rest as page-priority batches — the
+   read page's images first, the rest next; the photos list is empty when
+   "Show images" is off — and re-triggers on every page turn (zip swap +
+   seamless reload per batch update).
 
 The "Wikipedia main page" flow skips steps 2–4: `mainpage.fetchSections`
 scrapes and cleans the three main-page boxes itself, and

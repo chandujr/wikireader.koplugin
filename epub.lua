@@ -25,19 +25,29 @@ local wutil = require("wikiutil")
 
 local M = {}
 
--- Caption-bearing images are wrapped in a sentinel link carrying the
--- percent-encoded caption for main.lua's hold-on-image hook. Absolute https
--- URI required (unknown schemes get mangled by crengine's base-URI
--- resolution; the reserved .invalid host never sees a fetch).
+-- Every lazy placeholder is wrapped in a sentinel anchor on the reserved
+-- .invalid host (an https URI is required: unknown schemes get mangled by
+-- crengine's base-URI resolution; the reserved host never sees a fetch).
+-- Captioned ones carry the percent-encoded caption for main.lua's
+-- hold-on-image hook; the wridx= tail on all of them lets lazyfetch tell
+-- which pending images the page being read shows -- page link URIs are
+-- the only page-scoped data crengine exposes.
 local IMG_CAPTION_URL = "https://wikireader.invalid/imgcap="
-local function captionLink(img_html, caption, img_style)
-    local a_open = '<a href="' .. IMG_CAPTION_URL .. socket_url.escape(caption) .. '"'
+local IMG_INDEX_URL = "https://wikireader.invalid/wridx="
+local function sentinelLink(img_html, href, img_style)
+    local a_open = '<a href="' .. href .. '"'
     -- A block img (centered placeholders) inside an inline anchor would be
     -- laid out inline: keep the anchor's layout matching the img's.
     if img_style and img_style:find("display:block", 1, true) then
         a_open = a_open .. ' style="display:block"'
     end
     return a_open .. ">" .. img_html .. "</a>"
+end
+local function sentinelHref(caption, idx)
+    if caption then
+        return string.format("%s%s&wridx=%05d", IMG_CAPTION_URL, socket_url.escape(caption), idx)
+    end
+    return string.format("%s%05d", IMG_INDEX_URL, idx)
 end
 
 -- Hourglass "loading" icon shown inside an image box until lazyfetch swaps
@@ -108,7 +118,7 @@ function M.buildEpub(epub_path, title, lang, callback, fixed_path)
     local lazy_enabled = G_reader_settings:nilOrTrue("wikireader_show_images")
     local lazy_images = {}
     -- Box-caption texts keyed by original image URL, collected during the
-    -- HTML pass and resolved in the marker swaps below (see captionLink).
+    -- HTML pass and resolved in the marker swaps below (see sentinelLink).
     local image_captions = {}
     -- Read once at build scope: both the HTML-cleaning hook and the Archiver
     -- stylesheet hook below need it, and the Archiver hook must not read a
@@ -397,9 +407,10 @@ function M.buildEpub(epub_path, title, lang, callback, fixed_path)
             end
             -- Swap each lazy placeholder for a pending <img> pointing at a
             -- per-image copy of the loading icon, keeping the real footprint
-            -- reserved on the img so the box never changes size. The unique
-            -- path embeds the real imgpath (what lazyfetch's page partition
-            -- matches on) and is what its src rewrite keys on.
+            -- reserved so the box never changes size; the sentinel anchor's
+            -- wridx= tail (sentinelHref) is how lazyfetch tells this page's
+            -- images, and the unique loading path is what its src rewrite
+            -- keys on.
             if next(lazy_images) then
                 local loading_written = {}
                 content = content:gsub('<span class="wikireader%-lazyimg" data%-lazyindex="(%d+)"[^>]*></span>',
@@ -417,7 +428,7 @@ function M.buildEpub(epub_path, title, lang, callback, fixed_path)
                         local img_tag = string.format('<img src="%s" style="%s" alt=""/>',
                             loading_src, img.style or "")
                         local caption = image_captions[img.fallback or img.src]
-                        return caption and captionLink(img_tag, caption, img.style) or img_tag
+                        return sentinelLink(img_tag, sentinelHref(caption, tonumber(idx)), img.style)
                     end)
             end
             -- Locator map composites (locmap.lua): swap each marker span
@@ -1189,7 +1200,9 @@ function M.buildMainPageEpub(date_str, lang, sections, lazy_images)
                     table.insert(extras.files, { path = "OEBPS/" .. loading_src,
                         content = loadingSvg(img.aspect) })
                 end
-                return string.format('<img src="%s" style="%s" alt=""/>', loading_src, img.style or "")
+                return sentinelLink(
+                    string.format('<img src="%s" style="%s" alt=""/>', loading_src, img.style or ""),
+                    sentinelHref(nil, tonumber(idx)), img.style)
             end)
         local pending = {}
         for i, img in ipairs(lazy_images) do
