@@ -538,6 +538,13 @@ end
 -- Captions show on the viewer's title bar, which reflows on its own, so
 -- tag runs collapse to spaces and <br> is treated as a plain break there.
 local function captionPlainText(text)
+    -- Legend/key captions can't survive the viewer's plain-text title bar
+    -- (their color keys are CSS); suppress them rather than approximate.
+    if text:find('class="legend', 1, true) then
+        return ""
+    end
+    -- TemplateStyles CSS inside captions would otherwise surface as text.
+    text = text:gsub("<style[^>]*>.-</style%s*>", " ")
     text = text:gsub("%s*<%s*br%s*/?>%s*", " ")
     -- Footnote/reference markers ([2], [note 1]) ride in <sup> elements;
     -- the title bar wants the caption text alone. Balanced surgery keeps
