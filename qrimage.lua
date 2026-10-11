@@ -638,6 +638,24 @@ local function tsingleCaptions(region, captions, force)
                     end
                 end
             end
+            if not cap then
+                -- Legacy-parser tmulti captions items with a bare unmarked
+                -- div: the item's last child. Image-only items yield empty
+                -- text there, so nothing false-pairs.
+                local last_div
+                local cpos = 1
+                while true do
+                    local do_start, do_end = tsingle:find("<div[^>]*>", cpos)
+                    if not do_start then break end
+                    local dc_start, dc_end = wutil.findMatchingClose(tsingle, "div", do_end)
+                    if not dc_start then break end
+                    last_div = { do_end + 1, dc_start - 1 }
+                    cpos = dc_end + 1
+                end
+                if last_div then
+                    cap = finalizeCaption(tsingle:sub(last_div[1], last_div[2]))
+                end
+            end
             got = regionCaption(captions, tsingle, cap, force) or got
         end
     end
