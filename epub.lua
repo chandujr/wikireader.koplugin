@@ -29,9 +29,8 @@ local M = {}
 -- .invalid host (an https URI is required: unknown schemes get mangled by
 -- crengine's base-URI resolution; the reserved host never sees a fetch).
 -- Captioned ones carry the percent-encoded caption for main.lua's
--- hold-on-image hook; the wridx= tail on all of them lets lazyfetch tell
--- which pending images the page being read shows -- page link URIs are
--- the only page-scoped data crengine exposes.
+-- hold-on-image hook; uncaptioned ones get an index-only href, still
+-- under the reserved host so tap stays inert.
 local IMG_CAPTION_URL = "https://wikireader.invalid/imgcap="
 local IMG_INDEX_URL = "https://wikireader.invalid/wridx="
 local function sentinelLink(img_html, href, img_style)
@@ -45,9 +44,9 @@ local function sentinelLink(img_html, href, img_style)
 end
 local function sentinelHref(caption, idx)
     if caption then
-        return string.format("%s%s&wridx=%05d", IMG_CAPTION_URL, socket_url.escape(caption), idx)
+        return IMG_CAPTION_URL .. socket_url.escape(caption)
     end
-    return string.format("%s%05d", IMG_INDEX_URL, idx)
+    return IMG_INDEX_URL .. string.format("%05d", idx)
 end
 
 -- Hourglass "loading" icon shown inside an image box until lazyfetch swaps
@@ -407,10 +406,9 @@ function M.buildEpub(epub_path, title, lang, callback, fixed_path)
             end
             -- Swap each lazy placeholder for a pending <img> pointing at a
             -- per-image copy of the loading icon, keeping the real footprint
-            -- reserved so the box never changes size; the sentinel anchor's
-            -- wridx= tail (sentinelHref) is how lazyfetch tells this page's
-            -- images, and the unique loading path is what its src rewrite
-            -- keys on.
+            -- reserved so the box never changes size; the sentinel anchor
+            -- (sentinelHref) keeps the placeholder inert on tap, and the
+            -- unique loading path is what lazyfetch's src rewrite keys on.
             if next(lazy_images) then
                 local loading_written = {}
                 content = content:gsub('<span class="wikireader%-lazyimg" data%-lazyindex="(%d+)"[^>]*></span>',

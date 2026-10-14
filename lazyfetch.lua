@@ -12,17 +12,13 @@ non-blocking sockets, resumed only from scheduler ticks, so it never holds
 the UI thread or blocks the open. Fresh builds first pre-download the
 pending head (INITIAL_PRELOAD, also mostly formulas by that ordering) so
 the document opens with its leading pages already filled. The rest then
-follows in page-priority batches around the reading position: the read
-page's images (via its sentinel links) plus document-order neighbours
-standing in for the adjacent pages, whose link boxes crengine cannot give.
-Every batch reloads the document seamlessly the moment it lands (the step
-debounce keeps successive reloads ≥1s apart). Failed downloads are
-removed from content.html
-and content.opf so no blank squares remain. Page turns re-trigger the
-check (debounced via main.lua's onPageUpdate) but are absorbed while a
-batch runs; a batch is abandoned only when the document is closed, never
-on a page turn — every listed download is wanted whatever page the reader
-is on.
+follows in document-order batches that chain themselves one after the
+next. Every batch reloads the document seamlessly the moment it lands
+(the step debounce keeps successive reloads ≥1s apart). Failed downloads
+are removed from content.html and content.opf so no blank squares
+remain. A batch is abandoned only when the document is closed (the
+reader navigated elsewhere) — every listed download is wanted whatever
+page the reader is on.
 ]]
 
 local Archiver = require("ffi/archiver")
@@ -55,11 +51,6 @@ local PENDING_ENTRY = "OEBPS/wikireader-pending.json"
 -- Images are capped at HEIGHT_CAP_VH of the page height, expressed as a
 -- max width of HEIGHT_CAP_VH*vh*(w/h) (see realImageSizeStyle).
 local HEIGHT_CAP_VH = 33
-
--- How many entries beyond a page's own images the priority batch takes in
--- on each side (document order): the window approximates the images of the
--- pages that surround the read one, whose link boxes crengine cannot give.
-local NEIGHBOUR_WINDOW = 4
 
 -- How many pending entries (formulas first, then photographs, in reading
 -- order) download before a freshly built article opens, so the document
@@ -515,10 +506,10 @@ local function liveDocument(epub_path)
 end
 
 -- Coalescing, per EPUB: scheduleCompletion is called on article open and
--- again on every page turn, and a batch download can outlive several of
--- those triggers; step_running[path] marks that path's download as in
--- flight so overlapping _step passes (stacked timers) can't double-fetch
--- the same images or race the same zip rewrite.
+-- again after each batch re-arms the chain, and a batch download can
+-- outlive several of those triggers; step_running[path] marks that path's
+-- download as in flight so overlapping _step passes (stacked timers) can't
+-- double-fetch the same images or race the same zip rewrite.
 local step_running = {}
 
 -- epub_path -> true while offline and waiting on (or already declined for)
@@ -531,8 +522,8 @@ local net_blocked = {}
 local scheduled_step = {} -- epub_path -> the pending (debounced) step action
 
 local function planStep(epub_path)
-    -- Trailing-edge debounce: a burst of page turns collapses into one
-    -- check ~1s after the LAST trigger, instead of stacking a step per turn.
+    -- Trailing-edge debounce: repeated triggers collapse into one check
+    -- ~1s after the last.
     local prev = scheduled_step[epub_path]
     if prev then
         UIManager:unschedule(prev)
@@ -551,45 +542,13 @@ local function planStep(epub_path)
 end
 
 function M.scheduleCompletion(epub_path)
-    -- No network check here: this fires on every page turn of every wiki
-    -- EPUB; _step gates the wifi prompt on actual pending work.
+    -- No network check here: _step gates the wifi prompt on actual
+    -- pending work.
     planStep(epub_path)
 end
 
 function M.onNetworkConnected()
     net_blocked = {}
-end
-
--- Pending images whose wrimg number appears in `links` (the current page's
--- sentinel-link URIs; epub.lua wires the wridx= tail on every placeholder);
--- positions[j] carries subset item j's full-list index. Empty when links
--- are missing or nothing there is pending. Exposed for tests.
-function M.pageSubset(images, links)
-    local on_page = {}
-    for _, link in ipairs(links or {}) do
-        local n = link.uri and link.uri:match("wridx=(%d+)")
-        if n then on_page[tonumber(n)] = true end
-    end
-    local subset, positions = {}, nil
-    if next(on_page) then
-        local taken = {}
-        for i, img in ipairs(images) do
-            if not img.math then
-                local n = tonumber(img.imgpath:match("wrimg(%d+)"))
-                if n and on_page[n] then
-                    for j = math.max(1, i - NEIGHBOUR_WINDOW), math.min(#images, i + NEIGHBOUR_WINDOW) do
-                        if not images[j].math and not taken[j] then
-                            taken[j] = true
-                            positions = positions or {}
-                            positions[#subset + 1] = j
-                            subset[#subset + 1] = images[j]
-                        end
-                    end
-                end
-            end
-        end
-    end
-    return subset, positions
 end
 
 function M._step(epub_path)
@@ -616,39 +575,20 @@ function M._step(epub_path)
         logger.dbg("WikiReader lazy: article no longer open, pausing completion")
         return
     end
-    -- Prioritise the pending images around where the user is reading:
-    -- their batch completes fast, and the reload right after puts real
-    -- images in view (sentinel wridx= tails give the membership, see
-    -- pageSubset). A page with no pending images (or an unavailable link
-    -- scan) falls through to the whole-article batch. Every batch reloads
-    -- right after its swap, and planStep's debounce keeps any two reloads
-    -- ≥1s apart.
-    local ok, links = pcall(doc.getPageLinks, doc, false)
-    local subset, positions = M.pageSubset(images, ok and type(links) == "table" and links or nil)
-    local batch = #subset > 0 and subset or images
-    if #subset == 0 then positions = nil end
     step_running[epub_path] = true
-    -- A subset batch maps back onto the full pending list (swap keeps the
-    -- absent entries pending and rewrites wikireader-pending.json from it);
-    -- positions[j] carries batch item j's full-list index.
-    downloadAll(batch, function(results)
+    downloadAll(images, function(results)
         step_running[epub_path] = false
         if not results then
             return -- reader closed mid-batch; leftovers surface at the next open
         end
-        local mapped = results
-        if positions then
-            mapped = {}
-            for j = 1, #batch do mapped[positions[j]] = results[j] end
-        end
         -- Failed downloads lost their placeholders in the swap, and
         -- nothing remains pending: build is complete, no re-check needed.
-        if not swapInImages(epub_path, images, mapped) then
+        if not swapInImages(epub_path, images, results) then
             return
         end
         local pending_left = false
         for i = 1, #images do
-            if mapped[i] == nil then pending_left = true break end
+            if results[i] == nil then pending_left = true break end
         end
         -- Refresh into the current view for every completed batch, final
         -- ones included: each completion renders in place immediately.

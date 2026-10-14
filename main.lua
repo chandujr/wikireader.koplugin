@@ -248,7 +248,7 @@ function WikiReader:init()
             end
 
             -- The remaining sentinels on our reserved host are machine-only
-            -- (e.g. lazyfetch's wridx markers around every lazy image):
+            -- (e.g. the lazy-image sentinels around every lazy image):
             -- inert on tap, hold is handled separately below.
             if link_url:find("wikireader.invalid/", 1, true) then
                 return true
@@ -286,12 +286,9 @@ function WikiReader:init()
             if ui.rolling and ui.document and isWikiEpubPath(ui.document.file) then
                 local ok, link = pcall(ui.document.getLinkFromPosition, ui.document, ges.pos)
                 if ok and type(link) == "string" then
-                    -- epub.lua appends &wridx=<index> after the caption for
-                    -- lazyfetch's page prioritisation; accept both shapes
-                    -- (cached EPUBs predate the marker).
-                    local encoded = link:match("^https://wikireader%.invalid/imgcap=(.-)&wridx=%d+$")
-                        or link:match("^https://wikireader%.invalid/imgcap=(.+)$")
-                    if encoded then
+                    -- epub.lua's caption sentinel: the whole tail is the
+                    -- percent-encoded caption.
+                    local encoded = link:match("^https://wikireader%.invalid/imgcap=(.+)$")                    if encoded then
                         local hold_pos = hl_self.view:screenToPageTransform(ges.pos)
                         local image = hold_pos and ui.document:getImageFromPosition(hold_pos, true, true)
                         if image then
@@ -384,22 +381,9 @@ function WikiReader:onCloseDocument()
     end
 end
 
--- Page turns in an open lazy EPUB re-check for pending downloads (formula
--- SVGs even with images off, photographs only when "Show images" is on);
--- this covers
--- articles opened outside the fetch flow (history, cache) and interrupted
--- batches resumed after reopen. lazyfetch coalesces the overlapping
--- checks and downloads everything in one batch (a cheap no-pending-exit
--- otherwise, so it can fire on any turn in any wiki EPUB).
+-- Clears per-article wifi-prompt blockers when the device comes online.
 function WikiReader:onNetworkConnected()
     lazyfetch.onNetworkConnected()
-end
-
-function WikiReader:onPageUpdate()
-    local path = currentDocumentPath(self)
-    if isWikiEpubPath(path) then
-        lazyfetch.scheduleCompletion(path)
-    end
 end
 
 -- Whether the quick-add entry belongs in the Bookmarks menu: needs a real
