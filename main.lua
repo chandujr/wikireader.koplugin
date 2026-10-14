@@ -1198,8 +1198,15 @@ function WikiReader:openMainPage()
             nav_history = {}
             nav_current = { title = _("Wikipedia main page"), lang = "en", path = epub_path, helper = true }
             local ReaderUI = require("apps/reader/readerui")
-            ReaderUI:showReader(epub_path)
-            self:maybeCompleteLazyImages(epub_path)
+            -- Same pre-open fill as fetchAndOpen: the pending list is only
+            -- a few thumbs, so the whole main page loads beforehand.
+            local wait = InfoMessage:new { text = _("Please wait…") }
+            UIManager:show(wait)
+            lazyfetch.preload(epub_path, function()
+                UIManager:close(wait)
+                ReaderUI:showReader(epub_path)
+                self:maybeCompleteLazyImages(epub_path)
+            end)
         end)
     end)
 end
