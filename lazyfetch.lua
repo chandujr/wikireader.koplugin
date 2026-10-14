@@ -28,6 +28,7 @@ local lfs = require("libs/libkoreader-lfs")
 local NetworkMgr = require("ui/network/manager")
 local UIManager = require("ui/uimanager")
 local logger = require("logger")
+local _ = require("gettext")
 
 -- Non-blocking HTTP for the downloader: core's httpasync when the build
 -- ships it (>= 2026.10), the vendored plugin copy otherwise — core's
@@ -486,11 +487,20 @@ end
 -- Seamlessly reloads `epub_path` into the live reader (self.ui may be the
 -- filemanager instance when the article was opened from a menu). XPointers
 -- are paragraph-anchored, so the reading position is kept even when images
--- reflow the text.
+-- reflow the text. The reopen blocks input while crengine re-parses the
+-- document, and the seamless flag hides KOReader's "Opening file" hint, so
+-- paint our own toast first (reloadDocument's forceRePaint flushes it to
+-- screen before the freeze) and let its timeout close it.
 local function reloadIfLive(epub_path)
+    local InfoMessage = require("ui/widget/infomessage")
     local ReaderUI = require("apps/reader/readerui")
     local ui = ReaderUI.instance
     if ui and ui.document and ui.document.file == epub_path then
+        UIManager:show(InfoMessage:new {
+            text = _("Updating images..."),
+            timeout = 2,
+            name = "wikireader_reloading",
+        })
         ui:reloadDocument(nil, true)
     end
 end
@@ -588,7 +598,10 @@ function M._step(epub_path)
         end
         local pending_left = false
         for i = 1, #images do
-            if results[i] == nil then pending_left = true break end
+            if results[i] == nil then
+                pending_left = true
+                break
+            end
         end
         -- Refresh into the current view for every completed batch, final
         -- ones included: each completion renders in place immediately.
