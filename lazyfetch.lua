@@ -484,24 +484,42 @@ local function downloadAll(images, on_all_done, is_abandoned)
     end
 end
 
+-- Shows the "Updating images..." toast for `epub_path` if it is the live
+-- document, flushed to screen before returning so it covers the following
+-- synchronous work (zip rewrite, reopen re-parse). The 2 s timeout is only
+-- a cleanup fallback for paths that never reach the explicit close (e.g. a
+-- failed swap), since a stuck modal toast blocks input until tapped.
+local function showUpdateToast(epub_path)
+    local InfoMessage = require("ui/widget/infomessage")
+    local ReaderUI = require("apps/reader/readerui")
+    local ui = ReaderUI.instance
+    if ui and ui.document and ui.document.file == epub_path then
+        local toast = InfoMessage:new {
+            text = _("Updating images..."),
+            timeout = 2,
+            name = "wikireader_reloading",
+        }
+        UIManager:show(toast)
+        UIManager:forceRePaint()
+        return toast
+    end
+end
+
 -- Seamlessly reloads `epub_path` into the live reader (self.ui may be the
 -- filemanager instance when the article was opened from a menu). XPointers
 -- are paragraph-anchored, so the reading position is kept even when images
 -- reflow the text. The reopen blocks input while crengine re-parses the
 -- document, and the seamless flag hides KOReader's "Opening file" hint, so
--- paint our own toast first (reloadDocument's forceRePaint flushes it to
--- screen before the freeze) and let its timeout close it.
-local function reloadIfLive(epub_path)
-    local InfoMessage = require("ui/widget/infomessage")
+-- paint our own toast first (the caller usually passes the one it showed
+-- before the swap) and close it as soon as the reopen is done, since
+-- lingering over the freshly rendered page tells the user nothing.
+local function reloadIfLive(epub_path, toast)
     local ReaderUI = require("apps/reader/readerui")
     local ui = ReaderUI.instance
     if ui and ui.document and ui.document.file == epub_path then
-        UIManager:show(InfoMessage:new {
-            text = _("Updating images..."),
-            timeout = 2,
-            name = "wikireader_reloading",
-        })
+        if not toast then toast = showUpdateToast(epub_path) end
         ui:reloadDocument(nil, true)
+        UIManager:close(toast)
     end
 end
 
@@ -593,6 +611,9 @@ function M._step(epub_path)
         end
         -- Failed downloads lost their placeholders in the swap, and
         -- nothing remains pending: build is complete, no re-check needed.
+        -- Toast before the swap: the zip rewrite freezes input for its full
+        -- duration, so the toast must precede it to explain the lag.
+        local toast = showUpdateToast(epub_path)
         if not swapInImages(epub_path, images, results) then
             return
         end
@@ -605,7 +626,7 @@ function M._step(epub_path)
         end
         -- Refresh into the current view for every completed batch, final
         -- ones included: each completion renders in place immediately.
-        reloadIfLive(epub_path)
+        reloadIfLive(epub_path, toast)
         if pending_left then
             planStep(epub_path)
         end
