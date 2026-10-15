@@ -697,7 +697,7 @@ span.mw-editsection {
   padding: 0.6em 0.8em;
   margin: 0 0 1em 0;
   font-style: italic;
-  font-size: 80%;
+  font-size: 75%;
 }
 
 blockquote {
