@@ -16,7 +16,7 @@ A KOReader plugin for reading Wikipedia articles as formatted books, with a clea
 - and more...
 
 > [!NOTE]
-> When an article is opened, it is saved as a temporary EPUB file in the koreader cache folder. The cache size is limited to 10 EPUBs, with newer articles automatically replacing older ones. Readers can clear this cache from WikiReader Settings, if needed.
+> When an article is opened, it is saved as a temporary EPUB file in the koreader cache folder. The cache holds at most 10 EPUBs, with newer articles automatically replacing older ones. The cache can grow anywhere from 20 MB to 200 MB, depending on how image-heavy the articles you've read are. You can clear this cache from WikiReader Settings, if needed.
 
 ## Usage
 - Download the plugin from the [releases page](https://github.com/chandujr/wikireader.koplugin/releases)
