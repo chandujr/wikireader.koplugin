@@ -594,7 +594,6 @@ table.wikireader-tmulti {
     margin-bottom: 0.5em !important;
     padding: 0 0.5em 0 0.5em;
     text-align: center;
-    font-size: 80%;
     page-break-inside: avoid;
 }
 /* Belt-and-braces per-cell centering, not relying on inheritance from
