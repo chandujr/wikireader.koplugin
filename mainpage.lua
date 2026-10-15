@@ -128,7 +128,7 @@ end
 -- lazyfetch.lua.
 function M.fetchSections(show_images, opts)
     local url = string.format(
-        "https://en.wikipedia.org/w/api.php?action=parse&page=%s&format=json&formatversion=2&prop=text",
+        "https://en.wikipedia.org/w/api.php?action=parse&page=%s&format=json&formatversion=2&prop=text&parser=legacy",
         socket_url.escape(M.MAIN_PAGE_TITLE)
     )
     local ok, code, sink = wutil.httpGetJSON(url)

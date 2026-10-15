@@ -135,6 +135,11 @@ function M.buildEpub(epub_path, title, lang, callback, fixed_path)
     -- Patch redirects support
     local original_phtml_redirects = Wikipedia.wiki_phtml_params.redirects
     Wikipedia.wiki_phtml_params.redirects = ""
+    -- Oct-2026: enwiki defaulted action=parse to Parsoid, whose
+    -- data-mw/typeof transclusion metadata crengine renders as raw
+    -- wikitext garbage; the cleaning pipeline targets legacy-parser HTML.
+    local original_phtml_parser = Wikipedia.wiki_phtml_params.parser
+    Wikipedia.wiki_phtml_params.parser = "legacy"
 
     local original_getFullPageHtml = Wikipedia.getFullPageHtml
     Wikipedia.getFullPageHtml = function(self, wiki_title, wiki_lang)
@@ -792,6 +797,7 @@ pre.wikireader-cladogram {
         local ok, success = pcall(Wikipedia.createEpub, Wikipedia, epub_path, title, lang, false)
         -- Always restore all patches
         Wikipedia.wiki_phtml_params.redirects = original_phtml_redirects
+        Wikipedia.wiki_phtml_params.parser = original_phtml_parser
         Wikipedia.getFullPageHtml = original_getFullPageHtml
         Archiver.Writer.addFileFromMemory = original_addFileFromMemory
         if ok and success then
