@@ -270,6 +270,9 @@ function M.buildEpub(epub_path, title, lang, callback, fixed_path)
                 -- on an e-ink page.
                 html = htmlclean.cleanElementClasses(html, "table", { "infobox" }, { "floatleft", "floatright" },
                     forceFullWidthStyle)
+                -- Nested sub-boxes span the infobox only via their own
+                -- TemplateStyles (see forceNestedTableWidth).
+                html = htmlclean.forceNestedTableWidth(html, { "infobox" }, forceFullWidthStyle)
                 -- {{Infobox element}}'s periodic-table diagram is
                 -- TemplateStyles/CSS art crengine can't render; drop it
                 -- (with its header row) before the other infobox passes.

@@ -318,6 +318,58 @@ function M.cleanElementClasses(html, tag, class_patterns, classes_to_remove, rem
     return table.concat(out)
 end
 
+-- Nested sub-boxes inside a kept infobox (e.g. {{Collapsed infobox
+-- section begin}}'s .cisb-table) span it only via their own
+-- TemplateStyles, which crengine ignores, so they'd shrink-to-fit at the
+-- cell's left edge. Width-treat every table chained under a table
+-- matching `class_patterns`; styleFn returns the %% splice escapes.
+function M.forceNestedTableWidth(html, class_patterns, styleFn)
+    local function matches(tag)
+        local class_attr = (tag:match([[class%s*=%s*"([^"]*)"]] ) or ""):lower()
+        for _, pat in ipairs(class_patterns) do
+            if class_attr:find(pat, 1, true) then
+                return true
+            end
+        end
+        return false
+    end
+    -- Per open table: whether the chain open above it (or itself) matched.
+    local stack = {}
+    local out, pos = {}, 1
+    while true do
+        local o_start, o_end = html:find("<table[^>]*>", pos)
+        local c_start, c_end = html:find("</table%s*>", pos)
+        if not o_start and not c_start then
+            table.insert(out, html:sub(pos))
+            break
+        end
+        if c_start and (not o_start or c_start < o_start) then
+            if #stack > 0 then stack[#stack] = nil end
+            table.insert(out, html:sub(pos, c_end))
+            pos = c_end + 1
+        else
+            local open_tag = html:sub(o_start, o_end)
+            local chain = (#stack > 0 and stack[#stack]) or matches(open_tag)
+            if chain then
+                local style = open_tag:match('style%s*=%s*"([^"]*)"')
+                local new_style = styleFn(style or "")
+                if style then
+                    open_tag = open_tag:gsub('style%s*=%s*"[^"]*"',
+                        'style="' .. new_style .. '"')
+                else
+                    open_tag = open_tag:gsub('^(<[^>]+)',
+                        '%1 style="' .. new_style .. '"')
+                end
+            end
+            table.insert(out, html:sub(pos, o_start - 1))
+            table.insert(out, open_tag)
+            pos = o_end + 1
+            stack[#stack + 1] = chain
+        end
+    end
+    return table.concat(out)
+end
+
 -- TemplateStyles tables carry the same layout-killing inline width/float
 -- as wikitables but no class to match ({{Historical populations}} emits
 -- <table class="table-pale" style="width:15em;...;float:right">).
