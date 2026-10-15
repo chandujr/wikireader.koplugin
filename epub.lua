@@ -226,6 +226,7 @@ function M.buildEpub(epub_path, title, lang, callback, fixed_path)
             -- instead (see styleLegendChips).
             html = htmlclean.styleLegendChips(html)
 
+            html = htmlclean.stripTextIndent(html)
             -- Strip clutter tables: chronology/nav/sidebar/route-map boxes
             -- are always dropped; infoboxes only while "Show infoboxes" is
             -- off (the default).

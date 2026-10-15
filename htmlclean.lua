@@ -1055,7 +1055,27 @@ function M.unwrapColumnLayouts(html)
             pos = close_end + 1
         end
     end
-    return table.concat(out)
+     return table.concat(out)
+end
+
+-- {{Indented plainlist}} and friends hang "margin-left:1em;text-indent:-1em"
+-- on a plainlist div; on the site the template's own bullet-hiding
+-- TemplateStyles makes that safe, but crengine never applies them, so the
+-- negative indent pulls each <li>'s first line onto its bullet disc. The
+-- indent doesn't survive the reflow anyway; expect addRotateHints' own
+-- text-indent:0 to arrive after this pass.
+function M.stripTextIndent(html)
+    return html:gsub('%s*style%s*=%s*"([^"]*)"', function(style)
+        if not style:find("text%-indent") then
+            return nil
+        end
+        style = style:gsub("text%-indent%s*:%s*[^;]+;?", "")
+        style = style:gsub("^%s*;?%s*", ""):gsub(";;*%s*$", "")
+        if style == "" then
+            return ""
+        end
+        return ' style="' .. style .. '"'
+    end)
 end
 
 --[[-------------------------------------------------------------------------
