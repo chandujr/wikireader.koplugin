@@ -1195,8 +1195,10 @@ function M.buildMainPageEpub(date_str, lang, sections, lazy_images)
                 local loading_src = img.imgpath .. ".loading.svg"
                 if not seen_loading[loading_src] then
                     seen_loading[loading_src] = true
-                    table.insert(extras.files, { path = "OEBPS/" .. loading_src,
-                        content = loadingSvg(img.aspect) })
+                    table.insert(extras.files, {
+                        path = "OEBPS/" .. loading_src,
+                        content = loadingSvg(img.aspect)
+                    })
                 end
                 return sentinelLink(
                     string.format('<img src="%s" style="%s" alt=""/>', loading_src, img.style or ""),

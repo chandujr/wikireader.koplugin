@@ -288,7 +288,8 @@ function WikiReader:init()
                 if ok and type(link) == "string" then
                     -- epub.lua's caption sentinel: the whole tail is the
                     -- percent-encoded caption.
-                    local encoded = link:match("^https://wikireader%.invalid/imgcap=(.+)$")                    if encoded then
+                    local encoded = link:match("^https://wikireader%.invalid/imgcap=(.+)$")
+                    if encoded then
                         local hold_pos = hl_self.view:screenToPageTransform(ges.pos)
                         local image = hold_pos and ui.document:getImageFromPosition(hold_pos, true, true)
                         if image then
