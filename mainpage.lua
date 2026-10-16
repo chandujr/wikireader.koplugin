@@ -148,6 +148,8 @@ function M.fetchSections(show_images, opts)
             local transform
             if show_images then
                 transform = function(box_html)
+                    -- Capture captions while the <img> tags are still original.
+                    qrimage.collectImageCaptions(box_html, opts.image_captions or {})
                     return qrimage.replaceImagesWithLazy(box_html, opts.lazy_images)
                 end
             end

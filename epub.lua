@@ -1148,8 +1148,9 @@ Main page EPUB builder
 -- lazy_images comes from the fetchSections call that produced `sections`
 -- (nil when "Show images" is off): loading placeholders plus a
 -- wikireader-pending.json entry that lazyfetch.lua completes in the
--- background (same mechanics as the article EPUBs).
-function M.buildMainPageEpub(date_str, lang, sections, lazy_images)
+-- background (same mechanics as the article EPUBs). image_captions comes
+-- from the same call: src-keyed box captions for the sentinel links.
+function M.buildMainPageEpub(date_str, lang, sections, lazy_images, image_captions)
     local year, month, day = date_str:match("^(%d+)%-(%d+)%-(%d+)$")
     local display_date = date_str
     if year then
@@ -1211,7 +1212,8 @@ function M.buildMainPageEpub(date_str, lang, sections, lazy_images)
                 end
                 return sentinelLink(
                     string.format('<img src="%s" style="%s" alt=""/>', loading_src, img.style or ""),
-                    sentinelHref(nil, tonumber(idx)), img.style)
+                    sentinelHref(image_captions and image_captions[img.fallback or img.src], tonumber(idx)),
+                    img.style)
             end)
         local pending = {}
         for i, img in ipairs(lazy_images) do

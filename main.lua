@@ -1169,12 +1169,14 @@ function WikiReader:openMainPage()
 
         UIManager:scheduleIn(0, function()
             local show_images = G_reader_settings:nilOrTrue("wikireader_show_images")
-            local lazy_images
+            local lazy_images, image_captions
             if show_images then
                 lazy_images = {}
+                image_captions = {}
             end
             local sections, err = mainpage.fetchSections(show_images, {
                 lazy_images = lazy_images,
+                image_captions = image_captions,
             })
             UIManager:close(info)
 
@@ -1188,7 +1190,7 @@ function WikiReader:openMainPage()
             end
 
             local ok_build, epub_path = epub.buildMainPageEpub(os.date("%Y-%m-%d"), "en", sections,
-                lazy_images)
+                lazy_images, image_captions)
             if not ok_build then
                 UIManager:show(InfoMessage:new {
                     text = _("Couldn't build the main page."),
