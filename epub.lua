@@ -1175,12 +1175,22 @@ function M.buildMainPageEpub(date_str, lang, sections, lazy_images, image_captio
 
     local section_headings = {
         itn = _("In the news"),
+        mostread = _("Most read articles"),
         dyk = _("Did you know"),
         otd = _("On this day"),
+        potd = _("Picture of the day"),
     }
     local chapters = {}
-    for _, key in ipairs({ "itn", "dyk", "otd" }) do
+    local section_count = 0
+    for _, key in ipairs({ "itn", "mostread", "otd", "potd", "dyk" }) do
         if sections[key] then
+            section_count = section_count + 1
+            -- A page break between sections keeps each chapter's heading
+            -- off the previous section's tail (same-page headings collapse
+            -- into one TOC entry); the first section flows under the title.
+            if section_count > 1 then
+                table.insert(html_parts, '<div style="page-break-before: always"></div>\n')
+            end
             table.insert(html_parts, string.format('<h2 class="wikireader-mainpage-section" id="%s">', key))
             table.insert(html_parts, section_headings[key])
             table.insert(html_parts, '</h2>\n')
@@ -1242,21 +1252,22 @@ h2.wikireader-mainpage-section {
     if extras then
         css = css .. [[
 
-/* Image boxes full-width and centered, like the article figures (their
-   TemplateStyles floats are stripped with the other <style> blocks, and
-   the wrappers' inline floats/widths are stripped in mainpage.lua). */
-div.itn-img, div.dyk-img, #mp-otd-img {
+/* Single-page EPUBs get no KOReader base stylesheet, so style the feed
+   figures here like the article pipeline does: full width, no float,
+   dashed border box, the inline placeholder (and later the real img)
+   centered via text-align -- the placeholders qrimage emits are only
+   auto-margined in infoboxes. */
+figure[typeof~='mw:File/Thumb'] {
   float: none;
-  width: 100%;
-  margin: 0.5em 0;
-}
-div.thumbinner {
   border: 1px dashed rgba(0,0,0,0.33);
-  padding: 4px;
   width: 100%;
+  max-width: 100%;
+  margin: 0.5em 0;
+  padding-top: 0.5em;
   text-align: center;
+  page-break-inside: avoid;
 }
-div.thumbcaption {
+figure figcaption {
   text-align: center;
 }
 ]]

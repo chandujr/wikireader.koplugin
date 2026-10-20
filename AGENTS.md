@@ -32,7 +32,7 @@ drops them entirely for a text-only read.
 | `wikireader-httpasync.lua` | Vendored copy of core's `httpasync` (non-blocking downloads for lazyfetch), under its own name: core's `fetch_url` return order differs between versions. |
 | `lazyfetch.lua` | Background completion of lazily-built EPUBs: downloads the pending set in document-order batches that chain themselves after each other (one whole-list batch at a time), triggered on article open (coalesced per EPUB so overlapping checks can't stack). Rewrites the zip in place (`.tmp` + rename), keeps the pending entry until nothing remains, removes failed downloads (their `<img>` + manifest item) so no blank squares remain, and seamlessly reloads the open document after every batch update; fresh builds additionally pre-download the pending list's head before the document opens (`preload`). |
 | `categories.lua` | Featured-articles category tree built from the API's flat section list; module-level lookup used by the link handler. |
-| `mainpage.lua` | Scrapes today's English Wikipedia main page for its "In the news" / "Did you know" / "On this day" boxes (by their stable `mp-*` ids), cleans them, routes their thumbnails through the lazy pipeline when "Show images" is on (`epub.buildMainPageEpub` stitches them in; `lazyfetch` completes the lazy ones), and absolutizes the article links. English-only: other wikis have different main-page titles and id-less markup. |
+| `mainpage.lua` | Powers the "Wikipedia main page" menu entry via the Wikimedia featured-feed API (`api.wikimedia.org/feed/v1/wikipedia/{lang}/featured/{Y}/{M}/{D}`, UTC date): renders whichever of In the news / Most read / On this day / Commons Picture of the day / Did you know the feed serves for the configured wiki language into cleaned section HTML (feed images route through the lazy pipeline when "Show images" is on); unavailable sections are omitted (per-wiki feed coverage varies). `epub.buildMainPageEpub` stitches them in; `lazyfetch` completes the lazy ones. |
 | `_meta.lua` | Plugin name/version metadata shown in the About dialog. |
 
 ## Data flow (one pass each, order matters)
@@ -55,11 +55,15 @@ drops them entirely for a text-only read.
    "Show images" is off (zip swap + seamless reload per batch update).
 
 The "Wikipedia main page" flow skips steps 2–4: `mainpage.fetchSections`
-scrapes and cleans the three main-page boxes itself, and
-`epub.buildMainPageEpub` writes the EPUB directly via the shared
-`writeSinglePageEpub` writer (also used by the search/category builders).
-Its cache key embeds the date (`__mainpage__<date>`), so a copy never
-outlives the day's news.
+pulls today's sections from the Wikimedia featured-feed API for the
+language set in the settings (UTC date — a local-time "today" can be a
+future UTC date the feed answers without sections), and
+`epub.buildMainPageEpub` stitches the served sections into the EPUB via
+the shared `writeSinglePageEpub` writer (also used by the
+search/category builders). Its cache key embeds the UTC date and
+language (`__mainpage__<date>`), so a copy never outlives the day's
+news; a language whose feed serves nothing shows a friendly "no
+sections" message.
 
 ## Commenting strategy
 
@@ -71,7 +75,7 @@ outlives the day's news.
   them — but never delete rationale-bearing content.
 - Add comments **only if necessary** (important). I repeat, do not add comments unnecessarily.
 
-## Notes for LLMs
+## Other Notes
 
 - Lua 5.1-compatible; no external dependencies beyond KOReader's runtime.
 - `nav_history`/`nav_current` in `main.lua` are module-level on purpose

@@ -4,9 +4,11 @@ WikiReader: read Wikipedia articles as formatted EPUBs inside KOReader.
 Adds a "WikiReader" entry to the main menu and to the Search menu (right
 after the built-in Wikipedia history). From it you can search Wikipedia,
 open a featured article (today's, a picked date, or a random one), browse
-featured articles by category, read today's English Wikipedia main page
-("In the news", "Did you know", "On this day"), view history and bookmarks, set the Wikipedia language,
-and step back through articles you've read.
+featured articles by category, read today's Wikipedia main page for the
+currently set language (news, most read, on this day, today's featured
+picture, did you know — whatever the wiki's feed serves), view history
+and bookmarks, set the Wikipedia language, and step back through
+articles you've read.
 
 Articles are fetched and converted to EPUBs with KOReader's own built-in
 Wikipedia conversion (ui/wikipedia.lua), so headings and the table of
@@ -1168,13 +1170,18 @@ function WikiReader:openMainPage()
         UIManager:show(info)
 
         UIManager:scheduleIn(0, function()
+            -- The feed serves sections by UTC day; a local-time "today"
+            -- in a positive offset can be a future UTC date the feed
+            -- answers without sections (same convention as the TFA feed).
+            local lang = self.lang or "en"
+            local date_str = os.date("!%Y-%m-%d")
             local show_images = G_reader_settings:nilOrTrue("wikireader_show_images")
             local lazy_images, image_captions
             if show_images then
                 lazy_images = {}
                 image_captions = {}
             end
-            local sections, err = mainpage.fetchSections(show_images, {
+            local sections, err = mainpage.fetchSections(lang, show_images, {
                 lazy_images = lazy_images,
                 image_captions = image_captions,
             })
@@ -1182,14 +1189,14 @@ function WikiReader:openMainPage()
 
             if not sections then
                 UIManager:show(InfoMessage:new {
-                    text = err == "layout"
-                        and _("Couldn't find the news sections on the Wikipedia main page (its layout may have changed).")
+                    text = err == "empty"
+                        and _("This language's wiki has no main-page sections available today.")
                         or _("Couldn't fetch the Wikipedia main page. Check your connection and try again."),
                 })
                 return
             end
 
-            local ok_build, epub_path = epub.buildMainPageEpub(os.date("%Y-%m-%d"), "en", sections,
+            local ok_build, epub_path = epub.buildMainPageEpub(date_str, lang, sections,
                 lazy_images, image_captions)
             if not ok_build then
                 UIManager:show(InfoMessage:new {
@@ -1199,7 +1206,7 @@ function WikiReader:openMainPage()
             end
             cache.pruneCache(currentDocumentPath(self))
             nav_history = {}
-            nav_current = { title = _("Wikipedia main page"), lang = "en", path = epub_path, helper = true }
+            nav_current = { title = _("Wikipedia main page"), lang = lang, path = epub_path, helper = true }
             local ReaderUI = require("apps/reader/readerui")
             -- Same pre-open fill as fetchAndOpen: the pending list is only
             -- a few thumbs, so the whole main page loads beforehand.

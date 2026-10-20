@@ -1,166 +1,255 @@
--- Scraping of the English Wikipedia main page for the "Wikipedia main
--- page" menu entry. Fetches the rendered main page once and cuts out its
--- three news boxes ("In the news", "Did you know", "On this day") by their
--- long-stable element ids, then strips everything that doesn't survive
--- reflow or leads to project-space pages. The boxes' floated thumbnails
--- are routed through the lazy-image pipeline when "Show images" is on;
--- only the English edition is supported: other wikis use localized titles
--- with different, often id-less markup.
+-- "Wikipedia main page" menu entry, from the Wikimedia featured-feed
+-- API (the structured JSON behind the official mobile apps):
+-- https://api.wikimedia.org/feed/v1/wikipedia/{lang}/featured/{Y}/{M}/{D}
+-- Serves In the news, Most read, Did you know, On this day and Picture of
+-- the day as data for any language whose wiki populates the feed; missing
+-- sections are omitted (feed coverage varies per wiki).
 
-local socket_url = require("socket.url")
 local logger = require("logger")
 
-local htmlclean = require("htmlclean")
 local qrimage = require("qrimage")
 local wutil = require("wikiutil")
 
 local M = {}
 
-M.MAIN_PAGE_TITLE = "Main Page"
+local FEED_URL = "https://api.wikimedia.org/feed/v1/wikipedia/%s/featured/%s"
 
--- Box id -> section key, in EPUB section order.
-local SECTION_IDS = {
-    { key = "itn", id = "mp-itn" },
-    { key = "dyk", id = "mp-dyk" },
-    { key = "otd", id = "mp-otd" },
-}
-
--- Link namespaces whose pages are editor-facing ("Archive",
--- "Nominate an article") rather than readable articles. Whole anchors
--- are removed, label included: without their target the labels are noise.
-local JUNK_NAMESPACES = {
-    "Wikipedia", "Wikipedia_talk", "Template", "Template_talk",
-    "Help", "Help_talk", "Category", "Category_talk", "Portal",
-    "Portal_talk", "File", "File_talk", "Special", "MediaWiki",
-    "MediaWiki_talk", "User", "User_talk", "Draft", "Module",
-}
-
--- Returns the inner HTML of the <div id="id"> box, or nil. Box divs nest
--- arbitrarily (image wrappers, footer lists), so the matching close tag
--- must be depth-walked, not pattern-matched.
-local function extractBox(html, id)
-    local open_start, open_end = html:find('<div id="' .. id .. '"', 1, true)
-    if not open_start then return nil end
-    local open_tag_end = html:find(">", open_end, true)
-    if not open_tag_end then return nil end
-    local close_start = wutil.findMatchingClose(html, "div", open_tag_end)
-    if not close_start then return nil end
-    return html:sub(open_tag_end + 1, close_start - 1)
+local function escapeHtml(s)
+    if not s then return "" end
+    return (s:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"))
 end
 
-local function cleanBoxHtml(html, image_transform)
-    -- TemplateStyles blocks and their dedup <link> stubs.
+-- Feed HTML is Parsoid output: wiki links are relative ("./Title") and
+-- media URLs are protocol-relative. Unwraps every anchor that doesn't
+-- point at an article (external/interwiki/special — keep its label, the
+-- target is noise), rewrites the rest to absolute wiki URLs the link
+-- handler recognises, and normalizes <img> srcs for the lazy pipeline.
+local function cleanFeedHtml(html, lang, image_transform)
     html = html:gsub("<style[^>]*>.-</style>", "")
     html = html:gsub("<link[^>]*>", "")
-
-    if not image_transform then
-        -- Box images (float-right thumbs, "(pictured)") are dropped
-        -- wholesale, wrappers included; same for the footer nav boxes,
-        -- which MediaWiki marks noprint -- stripping them whole keeps
-        -- their labels from surviving as dangling text once their anchors
-        -- are removed below.
-        html = htmlclean.stripElementsByClass(html, "div", {
-            "dyk-img", "itn-img", "otd-img", "thumb", "thumbinner", "mp-thumb",
-            "dyk-footer", "itn-footer", "otd-footer", "noprint",
-        })
-
-        -- Every anchor that doesn't lead to a readable article:
-        -- project-space pages, redlinks (/w/index.php?...redlink=1),
-        -- external sites (the mailing-list "By email" link), and any
-        -- leftover <img> icons.
-        for _, ns in ipairs(JUNK_NAMESPACES) do
-            html = html:gsub('<a[^>]-href="/wiki/' .. ns .. ':[^"]*"[^>]->.-</a>', "")
+    html = html:gsub("<!%-%-.-%-%->", "")
+    html = html:gsub('<a[^>]-href="([^"]*)"[^>]->(.-)</a>', function(href, label)
+        if href:sub(1, 2) == "./"
+            or href:match('^https?://%w+%.wikipedia%.org/wiki/') then
+            return nil
         end
-        html = html:gsub('<a[^>]-href="/w/index%.php[^"]*"[^>]->.-</a>', "")
-        html = html:gsub('<a[^>]-href="https?:[^"]*"[^>]->.-</a>', "")
-        html = html:gsub("<img[^>]*>", "")
+        return label
+    end)
+    html = html:gsub('href="./', 'href="https://' .. lang .. '.wikipedia.org/wiki/')
+    html = html:gsub('src="//', 'src="https://')
+    -- Thumb URLs come with an ?utm_source=... tail that would ride along
+    -- into qrimage's px-rewrite and lazyfetch's fallback matching.
+    html = html:gsub('src="(https://[^"%?]*)%?[^"]*"', 'src="%1"')
 
-        -- <span typeof="mw:File"> wrappers left empty by the image removal.
-        html = html:gsub('<span[^>]-typeof="mw:File[^"]*"[^>]->.-</span>', "")
-    else
-        -- The image pass replaces each thumbnail with a lazy placeholder
-        -- span, unwrapping its File: host anchor. It must run before the
-        -- junk-anchor removal below, which would otherwise delete those
-        -- File: anchors whole, host image included. The walker treats
-        -- div.thumbinner as an image-box context (the same "thumb"
-        -- classification articles use).
-        html = image_transform(html)
-
-        -- Inline styles would out-rank the builder's stylesheet (thumbinner
-        -- border/full-width, wrapper floats, caption centering), so they
-        -- go; the footer nav boxes go as in drop mode. The thumb wrappers
-        -- stay around the placeholder for the builder's CSS.
-        html = html:gsub('(<div class="thumbinner[^"]*") style="[^"]*"', "%1")
-        html = html:gsub('(<div class="thumbcaption[^"]*") style="[^"]*"', "%1")
-        html = html:gsub('(<div[^>]-class="[^"]*%-img[^"]*") style="[^"]*"', "%1")
-        html = html:gsub('(<div) style="[^"]*"([^>]-id="mp%-otd%-img")', "%1%2")
-        html = htmlclean.stripElementsByClass(html, "div", {
-            "dyk-footer", "itn-footer", "otd-footer", "noprint",
-        })
-
-        -- Same anchor cleanup as drop mode. Images are placeholders now, so
-        -- no blanket <img> removal and no mw:File span stripping (the span
-        -- now holds the placeholder). "(pictured)"/File: text links still
-        -- vanish with their labels; the real thumb was unwrapped above.
-        for _, ns in ipairs(JUNK_NAMESPACES) do
-            html = html:gsub('<a[^>]-href="/wiki/' .. ns .. ':[^"]*"[^>]->.-</a>', "")
-        end
-        html = html:gsub('<a[^>]-href="/w/index%.php[^"]*"[^>]->.-</a>', "")
-        html = html:gsub('<a[^>]-href="https?:[^"]*"[^>]->.-</a>', "")
+    if image_transform then
+        -- Captions must be collected before the <img> tags are replaced.
+        qrimage.collectImageCaptions(html, image_transform.captions)
+        html = qrimage.replaceImagesWithLazy(html, image_transform.lazy)
     end
-
-    -- The link handler only recognises absolute wiki URLs (see
-    -- wikiutil.parseWikiLink); fragments can stay, the handler opens
-    -- the full article from the top.
-    html = html:gsub('href="/wiki/', 'href="https://en.wikipedia.org/wiki/')
-
     return html
 end
 
--- Fetches today's English main page and returns cleaned section HTML,
--- keyed itn/dyk/otd (sections whose box can't be found are omitted), or
--- nil with an error kind ("network"/"parse"/"layout") like
+-- The pictured page is identified structurally, any language: its name
+-- directly followed by a short parenthetical note ("(pictured)",
+-- "(Bild)", ...), or -- where the aggregator stripped the note entirely
+-- (en ITN/DYK) -- by an empty <i> wrapper. Its lead-image thumbnail
+-- (links[].thumbnail / pages[].thumbnail) is the picture.
+local function escapePattern(s)
+    return (s:gsub("[%^%$%(%)%%%.%[%]%*%+%-%?]", "%%%0"))
+end
+
+local function thumbFigure(entry)
+    local thumb = entry.thumbnail
+    if not (thumb and thumb.source and thumb.width and thumb.height) then
+        return nil
+    end
+    -- Link titles are dbkeys (underscores); captions read better spaced.
+    return string.format(
+        '<figure typeof="mw:File/Thumb"><img src="%s" width="%d" height="%d" alt=""/><figcaption>%s</figcaption></figure>',
+        thumb.source, thumb.width, thumb.height,
+        escapeHtml(entry.title:gsub("_", " ")))
+end
+
+local function picturedFigure(items, text_of, entries_of)
+    for _, item in ipairs(items) do
+        local text = text_of(item) or ""
+        local entries = entries_of(item)
+        if #entries > 0 then
+            -- Tags stripped so a name inside an anchor stays adjacent to
+            -- its note; soft hyphens (the feed sprinkles them through
+            -- words) would break the name match.
+            local lower_text = text:gsub("<[^>]*>", " "):gsub("\194\173", ""):lower()
+            for _, entry in ipairs(entries) do
+                if entry.thumbnail then
+                    local name = escapePattern(entry.title:gsub("_", " "):lower())
+                    -- A leading digit would be a year range, not a note.
+                    if lower_text:find(name .. "%s*%([^%d%)][^%)]*%)") then
+                        local figure = thumbFigure(entry)
+                        if figure then return figure end
+                    end
+                end
+            end
+            -- Note and its link adjacency stripped: any thumbnailed entry
+            -- of the marked item is the best the feed can offer.
+            if text:find("<i[^>]*>%s*</i>") then
+                for _, entry in ipairs(entries) do
+                    local figure = thumbFigure(entry)
+                    if figure then return figure end
+                end
+            end
+        end
+    end
+end
+
+local function buildItn(data, lang, image_transform)
+    local news = data.news
+    if not news or #news == 0 then return nil end
+    -- Figure outside the <ul>: a figure can't be a list child.
+    local figure = picturedFigure(news, function(item) return item.story end,
+        function(item) return item.links or {} end)
+    local items = {}
+    for _, item in ipairs(news) do
+        local story = item.story
+        if story and story ~= "" then
+            table.insert(items, "<li>" .. story .. "</li>")
+        end
+    end
+    if #items == 0 and not figure then return nil end
+    local html = figure and figure .. "\n" or ""
+    if #items > 0 then
+        html = html .. "<ul>\n" .. table.concat(items, "\n") .. "\n</ul>"
+    end
+    return cleanFeedHtml(html, lang, image_transform)
+end
+
+-- Trailing-24h pageview ranking (the feed's own date field lags a day);
+-- capped: the full 44-entry ranking would swamp the news boxes.
+local MOSTREAD_LIMIT = 5
+
+local function buildMostread(data)
+    local mostread = data.mostread
+    if not mostread or not mostread.articles then return nil end
+    local parts = {}
+    for _, article in ipairs(mostread.articles) do
+        if #parts >= MOSTREAD_LIMIT then break end
+        local page_url = article.content_urls
+            and article.content_urls.desktop
+            and article.content_urls.desktop.page
+        local title = article.normalizedtitle
+        if page_url and title and article.extract and article.extract ~= "" then
+            table.insert(parts, string.format(
+                '<li><a href="%s">%s</a> &mdash; %s</li>',
+                page_url, escapeHtml(title), escapeHtml(article.extract)))
+        end
+    end
+    if #parts == 0 then return nil end
+    return "<ul>" .. table.concat(parts) .. "</ul>"
+end
+
+local function buildDyk(data, lang, image_transform)
+    local dyk = data.dyk
+    if not dyk or #dyk == 0 then return nil end
+    local parts = {}
+    for _, item in ipairs(dyk) do
+        local html = type(item) == "table" and item.html or item
+        if html and html ~= "" then
+            table.insert(parts, "<li>" .. html .. "</li>")
+        end
+    end
+    if #parts == 0 then return nil end
+    return "<ul>" .. cleanFeedHtml(table.concat(parts, "\n"), lang, image_transform) .. "</ul>"
+end
+
+local function buildOtd(data, lang, image_transform)
+    local events = data.onthisday
+    if not events or #events == 0 then return nil end
+    -- Figure outside the <ul>: a figure can't be a list child.
+    local figure = picturedFigure(events, function(item) return item.text end,
+        function(item) return item.pages or {} end)
+    local items = {}
+    for _, event in ipairs(events) do
+        local text = event.text
+        if text and text ~= "" then
+            -- The feed's event text omits the year the en main page shows.
+            local html = event.year
+                and ("<b>" .. event.year .. "</b> &ndash; " .. text)
+                or text
+            table.insert(items, "<li>" .. html .. "</li>")
+        end
+    end
+    if #items == 0 and not figure then return nil end
+    local html = figure and figure .. "\n" or ""
+    if #items > 0 then
+        html = html .. "<ul>\n" .. table.concat(items, "\n") .. "\n</ul>"
+    end
+    return cleanFeedHtml(html, lang, image_transform)
+end
+
+local function buildPotd(data, lang, image_transform)
+    local image = data.image
+    if not image then return nil end
+    local thumb = image.thumbnail and image.thumbnail.source
+    local caption = image.description and image.description.text or ""
+    if caption == "" and not thumb then return nil end
+    if thumb and image_transform then
+        -- Feed thumbnail dims reserve the placeholder's real footprint
+        -- (the lazy tag only carries dims it finds on the <img>).
+        local dims = image.thumbnail
+        local dim_attrs = dims and dims.width and dims.height
+            and string.format(' width="%d" height="%d"', dims.width, dims.height)
+            or ""
+        local html = string.format(
+            '<figure typeof="mw:File/Thumb"><img src="%s"%s alt=""/><figcaption>%s</figcaption></figure>',
+            thumb, dim_attrs, escapeHtml(caption))
+        return cleanFeedHtml(html, lang, image_transform)
+    end
+    return "<p>" .. escapeHtml(caption) .. "</p>"
+end
+
+local BUILDERS = {
+    itn = buildItn,
+    mostread = buildMostread,
+    dyk = buildDyk,
+    otd = buildOtd,
+    potd = buildPotd,
+}
+
+-- Fetches today's feed for `lang` (UTC date: a local-time "today" can
+-- be a future UTC date the feed answers without the news sections).
+-- Returns section HTML keyed itn/mostread/dyk/otd/potd — unavailable
+-- sections omitted — or nil with an error kind like
 -- categories.fetchSections().
---
--- show_images: false drops the boxes' thumbnails; true routes them
--- through the lazy-image pipeline into opts.lazy_images, stitched into
--- the EPUB by epub.buildMainPageEpub and completed in the background by
--- lazyfetch.lua.
-function M.fetchSections(show_images, opts)
-    local url = string.format(
-        "https://en.wikipedia.org/w/api.php?action=parse&page=%s&format=json&formatversion=2&prop=text&parser=legacy",
-        socket_url.escape(M.MAIN_PAGE_TITLE)
-    )
+function M.fetchSections(lang, show_images, opts)
+    lang = lang or "en"
+    opts = opts or {}
+    local image_transform
+    if show_images then
+        image_transform = {
+            lazy = opts.lazy_images or {},
+            captions = opts.image_captions or {},
+        }
+    end
+
+    local url = string.format(FEED_URL, lang, os.date("!%Y/%m/%d"))
     local ok, code, sink = wutil.httpGetJSON(url)
     if not ok or code ~= 200 then return nil, "network" end
     local JSON = require("json")
     local parse_ok, data = pcall(JSON.decode, table.concat(sink))
-    if not parse_ok or not data or not data.parse or not data.parse.text then
+    if not parse_ok or type(data) ~= "table" then
         return nil, "parse"
     end
-    local html = data.parse.text
 
     local sections = {}
-    local found = 0
-    for _, spec in ipairs(SECTION_IDS) do
-        local box = extractBox(html, spec.id)
-        if box then
-            local transform
-            if show_images then
-                transform = function(box_html)
-                    -- Capture captions while the <img> tags are still original.
-                    qrimage.collectImageCaptions(box_html, opts.image_captions or {})
-                    return qrimage.replaceImagesWithLazy(box_html, opts.lazy_images)
-                end
-            end
-            sections[spec.key] = cleanBoxHtml(box, transform)
-            found = found + 1
-        else
-            logger.warn("wikireader: main page box not found:", spec.id)
+    for key in pairs(BUILDERS) do
+        local ok_build, section_html = pcall(BUILDERS[key], data, lang, image_transform)
+        if not ok_build then
+            logger.warn("wikireader: main page section failed:", key, section_html)
+        elseif section_html and section_html ~= "" then
+            sections[key] = section_html
         end
     end
-    if found == 0 then
-        return nil, "layout"
+    if next(sections) == nil then
+        return nil, "empty"
     end
     return sections
 end
