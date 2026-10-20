@@ -1138,7 +1138,10 @@ local function fetchFeaturedArticle(reader, date_str, allow_fallback)
                 end
             end
             UIManager:show(InfoMessage:new {
-                text = _("The featured article for that date isn't available (yet). Try again later or pick a different date."),
+                text = _("The featured article for that date isn't available (yet). Try again later or pick a different date.")
+                    .. (reader.lang ~= "en"
+                        and _("\n\nNote: not every language's wiki publishes a daily featured article.")
+                        or ""),
             })
             return
         end
