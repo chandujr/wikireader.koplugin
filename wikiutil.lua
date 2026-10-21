@@ -101,21 +101,6 @@ function M.parseWikiLink(link_url)
     return link_url:match("^https?://([%w%-]+)%.wikipedia%.org/wiki/([^/?#]+)")
 end
 
--- Matches a category-navigation link in a featured-articles EPUB:
--- https://en.wikipedia.org/wiki/Wikipedia:Featured_articles#section_<N>
--- and returns the section index (e.g. "51").
-function M.parseCategoryLink(link_url)
-    if not link_url then return nil end
-    local lang, title, fragment = link_url:match("^https?://([%w%-]+)%.wikipedia%.org/wiki/([^/?#]+)#(.+)$")
-    if lang and title == "Wikipedia:Featured_articles" and fragment then
-        local section_index = fragment:match("^section_(%d+)$")
-        if section_index then
-            return section_index
-        end
-    end
-    return nil
-end
-
 --[[-------------------------------------------------------------------------
 HTML tree helpers
 --]]

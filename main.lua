@@ -249,19 +249,23 @@ function WikiReader:init()
                 return true
             end
 
-            -- The remaining sentinels on our reserved host are machine-only
-            -- (e.g. the lazy-image sentinels around every lazy image):
-            -- inert on tap, hold is handled separately below.
-            if link_url:find("wikireader.invalid/", 1, true) then
-                return true
-            end
-
-            local cat_section_index = wutil.parseCategoryLink(link_url)
+            -- Category navigation sentinel from epub.buildCategoryEpub:
+            -- tap descends the category tree (index may be a plain number
+            -- or a transcluded "T-N"). Must precede the generic
+            -- wikireader.invalid early-return, which would swallow it.
+            local cat_section_index = link_url:match("^https://wikireader%.invalid/catsection=(.+)$")
             if cat_section_index then
                 local cat_title = categories.category_section_titles[cat_section_index]
                 if cat_title then
                     wiki_reader_self:fetchFeaturedCategoryArticles(cat_section_index, cat_title)
                 end
+                return true
+            end
+
+            -- The remaining sentinels on our reserved host are machine-only
+            -- (e.g. the lazy-image sentinels around every lazy image):
+            -- inert on tap, hold is handled separately below.
+            if link_url:find("wikireader.invalid/", 1, true) then
                 return true
             end
 
@@ -1875,6 +1879,8 @@ function WikiReader:showFeaturedCategories()
                 UIManager:show(InfoMessage:new {
                     text = err == "parse"
                         and _("Couldn't parse featured article categories.")
+                        or err == "unsupported"
+                        and _("This language's wiki has no featured-article category listing.")
                         or _("Couldn't load featured article categories."),
                 })
                 return

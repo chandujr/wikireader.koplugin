@@ -1079,8 +1079,10 @@ function M.buildCategoryEpub(nodes, title, lang, direct_articles)
 
     for _, node in ipairs(nodes) do
         local escaped_title = node.title:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"):gsub('"', "&quot;")
-        local link = string.format('https://%s.wikipedia.org/wiki/Wikipedia:Featured_articles#section_%s',
-            lang, node.section_index)
+        -- Sentinel host instead of the listing page's URL: the link
+        -- handler matches only the section index, immune to crengine's
+        -- href normalization of the localized (non-ASCII) title.
+        local link = string.format('https://wikireader.invalid/catsection=%s', node.section_index)
         table.insert(html_parts, string.format(
             '<p class="category-link"><a href="%s">▸ %s</a></p>\n',
             link, escaped_title))
