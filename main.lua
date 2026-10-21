@@ -1067,7 +1067,7 @@ function WikiReader:showLanguageDialog()
     dialog = InputDialog:new {
         title = _("Set Wikipedia language"),
         input = self.lang,
-        input_hint = _("Language code"),
+        input_hint = _("Default: en"),
         description = _("Enter the code of the Wikipedia edition to read from (e.g. en, de, fr, es, hi, zh…)."),
         buttons = {
             {
@@ -1082,12 +1082,10 @@ function WikiReader:showLanguageDialog()
                     text = _("Set"),
                     is_enter_default = true,
                     callback = function()
-                        local lang = dialog:getInputText()
-                        if lang and lang ~= "" then
-                            lang = lang:lower():gsub("%s+", "")
-                            self.lang = lang
-                            G_reader_settings:saveSetting("wikireader_lang", lang)
-                        end
+                        local lang = dialog:getInputText():lower():gsub("%s+", "")
+                        -- empty input resets to the default instead of keeping the old value
+                        self.lang = lang ~= "" and lang or "en"
+                        G_reader_settings:saveSetting("wikireader_lang", self.lang)
                         UIManager:close(dialog)
                     end,
                 },
