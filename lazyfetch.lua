@@ -30,12 +30,11 @@ local UIManager = require("ui/uimanager")
 local logger = require("logger")
 local _ = require("gettext")
 
--- Non-blocking HTTP for the downloader: core's httpasync when the build
--- ships it (>= 2026.10), the vendored plugin copy otherwise — core's
--- frontend paths precede plugin paths on package.path. The blocking
--- socket.http branch below is the last-resort fallback if this cannot
--- load at all.
-local ok_httpasync, httpasync = pcall(require, "httpasync")
+-- Non-blocking HTTP for the downloader: always the vendored copy, never
+-- core's "httpasync" (its fetch_url return order differs by version). The
+-- blocking socket.http branch below is the last-resort fallback if this
+-- cannot load at all.
+local ok_httpasync, httpasync = pcall(require, "wikireader-httpasync")
 if not (ok_httpasync and type(httpasync) == "table" and httpasync.fetch_url) then
     httpasync = nil
 end
@@ -300,12 +299,8 @@ local function downloadAll(images, on_all_done, is_abandoned)
         local function start(item)
             active[#active + 1] = {
                 co = coroutine.create(function()
-                    -- fetch_url returns (true, content_type, content) or
-                    -- (false, err): only the 3rd value is the body, and
-                    -- unpacking it as a pair silently loses it (upstream
-                    -- bug #16135).
-                    local ok, meta, content = httpasync.fetch_url(item.url)
-                    coroutine.yield(DONE, ok and content or nil, ok and nil or meta)
+                    local ok, content_or_err = httpasync.fetch_url(item.url)
+                    coroutine.yield(DONE, ok and content_or_err or nil, ok and nil or content_or_err)
                 end),
                 item = item,
                 deadline = os.time() + FETCH_DEADLINE_S,
