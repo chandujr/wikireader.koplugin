@@ -5,8 +5,8 @@ Adds a "WikiReader" entry to the main menu and to the Search menu (right
 after the built-in Wikipedia history). From it you can search Wikipedia,
 open a featured article (today's, a picked date, or a random one), browse
 featured articles by category, read today's Wikipedia main page for the
-currently set language (news, most read, on this day, today's featured
-picture, did you know — whatever the wiki's feed serves), view history
+currently set language (its article of the day, news, did you know and on
+this day boxes), view history
 and bookmarks, set the Wikipedia language, and step back through
 articles you've read.
 
@@ -402,281 +402,305 @@ local function canBookmarkCurrentArticle()
 end
 
 function WikiReader:addToMainMenu(menu_items)
-    menu_items.wikireader = {
-        text = _("WikiReader"),
-        sorting_hint = "search",
+    local featured_articles_menu = {
+        text = _("Featured Articles"),
+        keep_menu_open = true,
+        separator = true,
+        help_text = _("English Wikipedia's featured article of the day."),
         sub_item_table = {
             {
-                text = _("Search Wikipedia"),
-                keep_menu_open = true,
+                text = _("Today's Featured Article"),
                 callback = function()
-                    self:showLanding()
+                    self:openFeaturedArticle()
                 end,
             },
             {
-                text = _("Wikipedia main page"),
+                text = _("Pick a Date"),
                 callback = function()
-                    self:openMainPage()
+                    self:showDatePicker()
                 end,
             },
             {
-                text = _("Featured Articles"),
-                keep_menu_open = true,
-                separator = true,
-                help_text = _(
-                    "This relies on the \"featured article of the day\" feed, which may be missing or unreliable for languages other than English."),
-                sub_item_table = {
-                    {
-                        text = _("Today's Featured Article"),
-                        callback = function()
-                            self:openFeaturedArticle()
-                        end,
-                    },
-                    {
-                        text = _("Pick a Date"),
-                        callback = function()
-                            self:showDatePicker()
-                        end,
-                    },
-                    {
-                        text = _("Random Date"),
-                        callback = function()
-                            self:openRandomFeaturedArticle()
-                        end,
-                    },
-                    {
-                        text = _("Browse by category"),
-                        callback = function()
-                            self:showFeaturedCategories()
-                        end,
-                    },
-                },
-            },
-            {
-                text = _("Settings"),
-                sub_item_table = {
-                    {
-                        text_func = function()
-                            return T(_("Wikipedia language: %1"), self.lang:upper())
-                        end,
-                        callback = function()
-                            self:showLanguageDialog()
-                        end,
-                    },
-                    {
-                        text = _("Show images"),
-                        keep_menu_open = true,
-                        checked_func = function()
-                            return G_reader_settings:nilOrTrue("wikireader_show_images")
-                        end,
-                        callback = function()
-                            G_reader_settings:flipNilOrTrue("wikireader_show_images")
-                        end,
-                        help_text = _(
-                            "Download article images in the background while you read (they appear in place once ready). Disable for a text-only read."),
-                    },
-                    {
-                        text = _("Skip Wikipedia links dialog box"),
-                        keep_menu_open = true,
-                        checked_func = function()
-                            return G_reader_settings:nilOrTrue("wikireader_skip_link_dialog")
-                        end,
-                        callback = function()
-                            G_reader_settings:flipNilOrTrue("wikireader_skip_link_dialog")
-                        end,
-                        help_text = _(
-                            "Whenever you tap a Wikipedia link inside an article, show a short preview of that article instead of the intermediate dialog box, with a button to open it fully."),
-                    },
-                    {
-                        text = _("Exclude from KOReader statistics and history"),
-                        keep_menu_open = true,
-                        checked_func = function()
-                            return not G_reader_settings:isTrue("wikireader_count_in_stats")
-                        end,
-                        callback = function()
-                            G_reader_settings:flipNilOrFalse("wikireader_count_in_stats")
-                        end,
-                        help_text = _(
-                            "Wikipedia reading don't pollute your normal book reading stats or history. Untick to count WikiReader articles like any other book."),
-                    },
-                    {
-                        text = _("Show infoboxes"),
-                        keep_menu_open = true,
-                        checked_func = function()
-                            return G_reader_settings:isTrue("wikireader_show_infoboxes")
-                        end,
-                        callback = function()
-                            G_reader_settings:flipNilOrFalse("wikireader_show_infoboxes")
-                        end,
-                        help_text = _(
-                            "Keep the summary tables (infoboxes) that appear at the top of many articles."),
-                    },
-                    {
-                        text = _("Disable hyperlinks"),
-                        keep_menu_open = true,
-                        separator = true,
-                        checked_func = function()
-                            return G_reader_settings:isTrue("wikireader_disable_hyperlinks")
-                        end,
-                        callback = function()
-                            G_reader_settings:flipNilOrFalse("wikireader_disable_hyperlinks")
-                        end,
-                        help_text = _(
-                            "Remove links to other Wikipedia articles from downloaded EPUBs, keeping their text. Links to references, footnotes and external sites are kept."),
-                    },
-                    {
-                        text = _("Clear history"),
-                        enabled_func = function()
-                            return #history.getList() > 0
-                        end,
-                        callback = function()
-                            UIManager:show(ConfirmBox:new {
-                                text = _("Forget all articles in the WikiReader history?"),
-                                ok_text = _("Clear"),
-                                ok_callback = function()
-                                    history.clear()
-                                    UIManager:show(InfoMessage:new {
-                                        text = T("History cleared."),
-                                    })
-                                end,
-                            })
-                        end,
-                        help_text = _(
-                            "Forget the list of the last 10 articles shown in the History menu. Cached EPUB files are not deleted."),
-                    },
-                    {
-                        text = _("Clear bookmarks"),
-                        enabled_func = function()
-                            return #bookmarks.getList() > 0
-                        end,
-                        callback = function()
-                            UIManager:show(ConfirmBox:new {
-                                text = _("Remove all WikiReader bookmarks?"),
-                                ok_text = _("Clear"),
-                                ok_callback = function()
-                                    bookmarks.clear()
-                                    UIManager:show(InfoMessage:new {
-                                        text = T("Bookmarks cleared."),
-                                    })
-                                end,
-                            })
-                        end,
-                        help_text = _("Remove all articles from the Bookmarks menu. Cached EPUB files are not deleted."),
-                    },
-                    {
-                        text = _("Clear cache"),
-                        separator = true,
-                        enabled_func = function()
-                            return not cache.isEmpty()
-                        end,
-                        callback = function()
-                            UIManager:show(ConfirmBox:new {
-                                text = _("Delete all cached WikiReader articles?\nIf an article is currently open, it will be closed."),
-                                ok_text = _("Delete"),
-                                ok_callback = function()
-                                    self:clearCache()
-                                end,
-                            })
-                        end,
-                        help_text = _(
-                            "Remove all cached WikiReader EPUB files and their reading progress. Closes the current article if one is open."),
-                    },
-                    {
-                        text = _("Gestures"),
-                        keep_menu_open = true,
-                        callback = function()
-                            UIManager:show(InfoMessage:new {
-                                text = _("You can bind gestures to WikiReader actions through the Gesture manager:\n\n• Back to previous article\n  \"General > WikiReader: back to previous article\"\n\n• Open WikiReader menu\n  \"General > WikiReader: open WikiReader menu\""),
-                            })
-                        end,
-                    },
-                    {
-                        text = _("About"),
-                        keep_menu_open = true,
-                        callback = function()
-                            self:showAbout()
-                        end,
-                    },
-                },
-                separator = true,
-            },
-            {
-                text = _("History"),
-                enabled_func = function()
-                    return #history.getList() > 0
-                end,
-                help_text = _("Articles you opened recently. Tap to open; long-press to remove one."),
-                sub_item_table_func = function()
-                    -- Built when the menu is opened, so it reflects opens
-                    -- that happened after the main menu was registered.
-                    return self:buildHistoryMenu()
-                end,
-            },
-            {
-                text = _("Bookmarks"),
-                enabled_func = function()
-                    -- Also enabled on an empty list: the quick-add for the
-                    -- current article lives inside this submenu.
-                    return #bookmarks.getList() > 0 or canBookmarkCurrentArticle()
-                end,
-                help_text = _("Articles you bookmarked for reading later. Tap to open; long-press to remove one."),
-                sub_item_table_func = function()
-                    return self:buildBookmarksMenu()
-                end,
-            },
-            {
-                text = _("Save current article"),
-                keep_menu_open = true,
-                enabled_func = function()
-                    return nav_reader_alive and nav_current ~= nil and nav_current.path ~= nil and not nav_current
-                        .helper
-                end,
+                text = _("Random Date"),
                 callback = function()
-                    self:saveCurrentArticle()
+                    self:openRandomFeaturedArticle()
                 end,
-                help_text = _(
-                    "Copy the EPUB of the article you are reading, with its image handling as currently built, to the built-in Wikipedia save folder."),
             },
             {
-                text = _("Share current article link"),
-                keep_menu_open = true,
-                enabled_func = function()
-                    return nav_reader_alive and nav_current ~= nil and nav_current.title ~= nil and
-                        not nav_current.helper
-                end,
+                text = _("Browse by category"),
                 callback = function()
-                    self:shareCurrentArticleLink()
-                end,
-                help_text = _(
-                    "Copies the current article's Wikipedia link to the clipboard and shows a QR code of it that you can scan from another device."),
-            },
-            {
-                text = _("Refetch current article"),
-                enabled_func = function()
-                    return nav_reader_alive and nav_current ~= nil and nav_current.title ~= nil and
-                        not nav_current.helper
-                end,
-                callback = function()
-                    self:refetchCurrentArticle()
-                end,
-                help_text = _(
-                    "Delete the cached copy of the article you are reading and download it again. Your reading position is kept."),
-            },
-            {
-                text_func = function()
-                    if #nav_history > 0 then
-                        return T(_("Back to previous article (%1)"), #nav_history)
-                    end
-                    return _("Back to previous article")
-                end,
-                enabled_func = function()
-                    return nav_reader_alive and #nav_history > 0
-                end,
-                callback = function()
-                    self:onWikiReaderGoBack()
+                    self:showFeaturedCategories()
                 end,
             },
         },
+    }
+    local mainpage_menu = {
+        text = _("Wikipedia main page"),
+        callback = function()
+            self:openMainPage()
+        end,
+    }
+    local main_menu_items = {
+        {
+            text = _("Search Wikipedia"),
+            keep_menu_open = true,
+            callback = function()
+                self:showLanding()
+            end,
+        },
+        mainpage_menu,
+        featured_articles_menu,
+        {
+            text = _("Settings"),
+            sub_item_table = {
+                {
+                    text_func = function()
+                        return T(_("Wikipedia language: %1"), self.lang:upper())
+                    end,
+                    callback = function()
+                        self:showLanguageDialog()
+                    end,
+                },
+                {
+                    text = _("Show images"),
+                    keep_menu_open = true,
+                    checked_func = function()
+                        return G_reader_settings:nilOrTrue("wikireader_show_images")
+                    end,
+                    callback = function()
+                        G_reader_settings:flipNilOrTrue("wikireader_show_images")
+                    end,
+                    help_text = _(
+                        "Download article images in the background while you read (they appear in place once ready). Disable for a text-only read."),
+                },
+                {
+                    text = _("Skip Wikipedia links dialog box"),
+                    keep_menu_open = true,
+                    checked_func = function()
+                        return G_reader_settings:nilOrTrue("wikireader_skip_link_dialog")
+                    end,
+                    callback = function()
+                        G_reader_settings:flipNilOrTrue("wikireader_skip_link_dialog")
+                    end,
+                    help_text = _(
+                        "Whenever you tap a Wikipedia link inside an article, show a short preview of that article instead of the intermediate dialog box, with a button to open it fully."),
+                },
+                {
+                    text = _("Exclude from KOReader statistics and history"),
+                    keep_menu_open = true,
+                    checked_func = function()
+                        return not G_reader_settings:isTrue("wikireader_count_in_stats")
+                    end,
+                    callback = function()
+                        G_reader_settings:flipNilOrFalse("wikireader_count_in_stats")
+                    end,
+                    help_text = _(
+                        "Wikipedia reading don't pollute your normal book reading stats or history. Untick to count WikiReader articles like any other book."),
+                },
+                {
+                    text = _("Show infoboxes"),
+                    keep_menu_open = true,
+                    checked_func = function()
+                        return G_reader_settings:isTrue("wikireader_show_infoboxes")
+                    end,
+                    callback = function()
+                        G_reader_settings:flipNilOrFalse("wikireader_show_infoboxes")
+                    end,
+                    help_text = _(
+                        "Keep the summary tables (infoboxes) that appear at the top of many articles."),
+                },
+                {
+                    text = _("Disable hyperlinks"),
+                    keep_menu_open = true,
+                    separator = true,
+                    checked_func = function()
+                        return G_reader_settings:isTrue("wikireader_disable_hyperlinks")
+                    end,
+                    callback = function()
+                        G_reader_settings:flipNilOrFalse("wikireader_disable_hyperlinks")
+                    end,
+                    help_text = _(
+                        "Remove links to other Wikipedia articles from downloaded EPUBs, keeping their text. Links to references, footnotes and external sites are kept."),
+                },
+                {
+                    text = _("Clear history"),
+                    enabled_func = function()
+                        return #history.getList() > 0
+                    end,
+                    callback = function()
+                        UIManager:show(ConfirmBox:new {
+                            text = _("Forget all articles in the WikiReader history?"),
+                            ok_text = _("Clear"),
+                            ok_callback = function()
+                                history.clear()
+                                UIManager:show(InfoMessage:new {
+                                    text = T("History cleared."),
+                                })
+                            end,
+                        })
+                    end,
+                    help_text = _(
+                        "Forget the list of the last 10 articles shown in the History menu. Cached EPUB files are not deleted."),
+                },
+                {
+                    text = _("Clear bookmarks"),
+                    enabled_func = function()
+                        return #bookmarks.getList() > 0
+                    end,
+                    callback = function()
+                        UIManager:show(ConfirmBox:new {
+                            text = _("Remove all WikiReader bookmarks?"),
+                            ok_text = _("Clear"),
+                            ok_callback = function()
+                                bookmarks.clear()
+                                UIManager:show(InfoMessage:new {
+                                    text = T("Bookmarks cleared."),
+                                })
+                            end,
+                        })
+                    end,
+                    help_text = _("Remove all articles from the Bookmarks menu. Cached EPUB files are not deleted."),
+                },
+                {
+                    text = _("Clear cache"),
+                    separator = true,
+                    enabled_func = function()
+                        return not cache.isEmpty()
+                    end,
+                    callback = function()
+                        UIManager:show(ConfirmBox:new {
+                            text = _("Delete all cached WikiReader articles?\nIf an article is currently open, it will be closed."),
+                            ok_text = _("Delete"),
+                            ok_callback = function()
+                                self:clearCache()
+                            end,
+                        })
+                    end,
+                    help_text = _(
+                        "Remove all cached WikiReader EPUB files and their reading progress. Closes the current article if one is open."),
+                },
+                {
+                    text = _("Gestures"),
+                    keep_menu_open = true,
+                    callback = function()
+                        UIManager:show(InfoMessage:new {
+                            text = _("You can bind gestures to WikiReader actions through the Gesture manager:\n\n• Back to previous article\n  \"General > WikiReader: back to previous article\"\n\n• Open WikiReader menu\n  \"General > WikiReader: open WikiReader menu\""),
+                        })
+                    end,
+                },
+                {
+                    text = _("About"),
+                    keep_menu_open = true,
+                    callback = function()
+                        self:showAbout()
+                    end,
+                },
+            },
+            separator = true,
+        },
+        {
+            text = _("History"),
+            enabled_func = function()
+                return #history.getList() > 0
+            end,
+            help_text = _("Articles you opened recently. Tap to open; long-press to remove one."),
+            sub_item_table_func = function()
+                -- Built when the menu is opened, so it reflects opens
+                -- that happened after the main menu was registered.
+                return self:buildHistoryMenu()
+            end,
+        },
+        {
+            text = _("Bookmarks"),
+            enabled_func = function()
+                -- Also enabled on an empty list: the quick-add for the
+                -- current article lives inside this submenu.
+                return #bookmarks.getList() > 0 or canBookmarkCurrentArticle()
+            end,
+            help_text = _("Articles you bookmarked for reading later. Tap to open; long-press to remove one."),
+            sub_item_table_func = function()
+                return self:buildBookmarksMenu()
+            end,
+        },
+        {
+            text = _("Save current article"),
+            keep_menu_open = true,
+            enabled_func = function()
+                return nav_reader_alive and nav_current ~= nil and nav_current.path ~= nil and not nav_current
+                    .helper
+            end,
+            callback = function()
+                self:saveCurrentArticle()
+            end,
+            help_text = _(
+                "Copy the EPUB of the article you are reading, with its image handling as currently built, to the built-in Wikipedia save folder."),
+        },
+        {
+            text = _("Share current article link"),
+            keep_menu_open = true,
+            enabled_func = function()
+                return nav_reader_alive and nav_current ~= nil and nav_current.title ~= nil and
+                    not nav_current.helper
+            end,
+            callback = function()
+                self:shareCurrentArticleLink()
+            end,
+            help_text = _(
+                "Copies the current article's Wikipedia link to the clipboard and shows a QR code of it that you can scan from another device."),
+        },
+        {
+            text = _("Refetch current article"),
+            enabled_func = function()
+                return nav_reader_alive and nav_current ~= nil and nav_current.title ~= nil and
+                    not nav_current.helper
+            end,
+            callback = function()
+                self:refetchCurrentArticle()
+            end,
+            help_text = _(
+                "Delete the cached copy of the article you are reading and download it again. Your reading position is kept."),
+        },
+        {
+            text_func = function()
+                if #nav_history > 0 then
+                    return T(_("Back to previous article (%1)"), #nav_history)
+                end
+                return _("Back to previous article")
+            end,
+            enabled_func = function()
+                return nav_reader_alive and #nav_history > 0
+            end,
+            callback = function()
+                self:onWikiReaderGoBack()
+            end,
+        },
+    }
+    local function build_items()
+        local items = {}
+        for _, item in ipairs(main_menu_items) do
+            local keep = true
+            if item == mainpage_menu then
+                -- Only the ten tuned wikis have a scraped main page.
+                keep = mainpage.isSupported(self.lang)
+            elseif item == featured_articles_menu then
+                -- FA is an English-feed feature; other wikis show it on the main page.
+                keep = self.lang == "en"
+            end
+            if keep then
+                items[#items + 1] = item
+            end
+        end
+        -- The parent menu re-renders through this when coming back from
+        -- Settings, so a language change shows/hides the entries at once.
+        items.needs_refresh = true
+        items.refresh_func = build_items
+        return items
+    end
+    menu_items.wikireader = {
+        text = _("WikiReader"),
+        sorting_hint = "search",
+        -- Built per open so language-gated entries aren't cached.
+        sub_item_table_func = build_items,
     }
     -- For the gesture fallback when our entry is hidden via a menu
     -- customizer (see onShowWikiReaderMenu).
@@ -1175,11 +1199,10 @@ function WikiReader:openMainPage()
         UIManager:show(info)
 
         UIManager:scheduleIn(0, function()
-            -- The feed serves sections by UTC day; a local-time "today"
-            -- in a positive offset can be a future UTC date the feed
-            -- answers without sections (same convention as the TFA feed).
+            -- The page is scraped live; the date is only the label and cache
+            -- key, so the reader's local day is the right one.
             local lang = self.lang or "en"
-            local date_str = os.date("!%Y-%m-%d")
+            local date_str = os.date("%Y-%m-%d")
             local show_images = G_reader_settings:nilOrTrue("wikireader_show_images")
             local lazy_images, image_captions
             if show_images then
@@ -1193,11 +1216,15 @@ function WikiReader:openMainPage()
             UIManager:close(info)
 
             if not sections then
-                UIManager:show(InfoMessage:new {
-                    text = err == "empty"
-                        and _("This language's wiki has no main-page sections available today.")
-                        or _("Couldn't fetch the Wikipedia main page. Check your connection and try again."),
-                })
+                local message
+                if err == "layout" then
+                    message = _(
+                        "Couldn't find the main-page sections. This wiki's layout may have changed.")
+                else
+                    message = _(
+                        "Couldn't fetch the Wikipedia main page. Check your connection and try again.")
+                end
+                UIManager:show(InfoMessage:new { text = message })
                 return
             end
 
@@ -1870,15 +1897,13 @@ function WikiReader:showFeaturedCategories()
         UIManager:show(info)
 
         UIManager:scheduleIn(0, function()
-            local sections, err = categories.fetchSections(self.lang)
+            local sections, err = categories.fetchSections()
             UIManager:close(info)
 
             if not sections then
                 UIManager:show(InfoMessage:new {
                     text = err == "parse"
                         and _("Couldn't parse featured article categories.")
-                        or err == "unsupported"
-                        and _("This language's wiki has no featured-article category listing.")
                         or _("Couldn't load featured article categories."),
                 })
                 return
@@ -1920,11 +1945,17 @@ function WikiReader:fetchFeaturedCategoryArticles(section_index, section_title)
         UIManager:forceRePaint()
 
         UIManager:scheduleIn(0, function()
-            local function getCachedLinks(sindex)
-                return categories.fetchSectionLinks(self.lang, sindex)
+            -- Parent + children in one parallel batch; the child lists are
+            -- only needed to subtract subcategory articles from this one.
+            local indices = { section_index }
+            if node then
+                for _, child in ipairs(node.children) do
+                    indices[#indices + 1] = child.section_index
+                end
             end
+            local links = categories.fetchSectionLinksBatch(indices)
 
-            local all_links = getCachedLinks(section_index)
+            local all_links = links[section_index]
             if not all_links then
                 UIManager:close(info)
                 UIManager:show(InfoMessage:new {
@@ -1934,10 +1965,10 @@ function WikiReader:fetchFeaturedCategoryArticles(section_index, section_title)
             end
 
             if node and #node.children > 0 then
-                -- Has subcategories: fetch each child's links and compute direct articles
+                -- Has subcategories: subtract each child's links to get direct articles
                 local child_links_set = {}
                 for _, child in ipairs(node.children) do
-                    local child_links = getCachedLinks(child.section_index)
+                    local child_links = links[child.section_index]
                     if child_links then
                         for _, title in ipairs(child_links) do
                             child_links_set[title] = true

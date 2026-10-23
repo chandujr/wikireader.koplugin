@@ -29,10 +29,10 @@ drops them entirely for a text-only read.
 | `wikireader-cache.lua` | EPUB cache (10 entries / 24 h), stale-file removal, sidecar-aware delete, cache dir handling. |
 | `wikireader-history.lua` | Last-10-articles reading history (title/lang references persisted in `G_reader_settings`, no files). |
 | `wikireader-bookmarks.lua` | User-bookmarked articles (max 50, newest first), stored as title/lang references in `G_reader_settings` (`wikireader_bookmarks`); never evicts automatically, only via explicit remove/clear. |
-| `wikireader-httpasync.lua` | Vendored copy of core's `httpasync` (non-blocking downloads for lazyfetch), under its own name: core's `fetch_url` return order differs between versions. |
+| `wikireader-httpasync.lua` | Vendored copy of core's `httpasync` (non-blocking downloads for lazyfetch, and the parallel section-link batch in categories.lua), under its own name: core's `fetch_url` return order differs between versions. |
 | `lazyfetch.lua` | Background completion of lazily-built EPUBs: downloads the pending set in document-order batches that chain themselves after each other (one whole-list batch at a time), triggered on article open (coalesced per EPUB so overlapping checks can't stack). Rewrites the zip in place (`.tmp` + rename), keeps the pending entry until nothing remains, removes failed downloads (their `<img>` + manifest item) so no blank squares remain, and seamlessly reloads the open document after every batch update; fresh builds additionally pre-download the pending list's head before the document opens (`preload`). |
-| `categories.lua` | Featured-articles category tree built from the API's flat section list; the wiki's listing page is resolved generically via the Wikidata sitelink of Q16465 (en hard-wired, no roundtrip), so other languages work without a per-language title table; module-level lookup used by the link handler. |
-| `mainpage.lua` | Powers the "Wikipedia main page" menu entry via the Wikimedia featured-feed API (`api.wikimedia.org/feed/v1/wikipedia/{lang}/featured/{Y}/{M}/{D}`, UTC date): renders whichever of In the news / Most read / On this day / Commons Picture of the day / Did you know the feed serves for the configured wiki language into cleaned section HTML (feed images route through the lazy pipeline when "Show images" is on); unavailable sections are omitted (per-wiki feed coverage varies). `epub.buildMainPageEpub` stitches them in; `lazyfetch` completes the lazy ones. |
+| `categories.lua` | English-only featured-articles category tree built from the `Wikipedia:Featured articles` listing page's flat section list; fetches per-section article links (ns 0) in one parallel `httpasync` batch per category open (sequential `wutil` fallback), caches them for the session, and provides the module-level lookup used by the link handler to navigate the tree. Category browsing lives in the English-only "Featured Articles" submenu, so no per-language page resolution is needed. |
+| `mainpage.lua` | Powers the "Wikipedia main page" menu entry for the ten most-read Wikipedias (en/es/de/ja/fr/ru/it/pl/zh/pt; `isSupported` gates the menu entry). Fetches the wiki's rendered main page via `api.php/action=parse` and cuts out its boxes by per-language anchors (box ids, heading-id/text + container, or pt's block-heading pattern): the article of the day (non-English only) plus In the news / Did you know / On this day, and each wiki's extra quality boxes (es/ru/it/pl/zh good article, de recent deaths, ja new/enhanced articles). Sections keep the wiki's own localized heading and config order. Links are absolutized, project-space links unwrapped, icons and trailing section footers ("Archive", "More…", "Zum Artikel", "RSS-Feed") stripped, and content images route through the lazy pipeline when "Show images" is on. `epub.buildMainPageEpub` stitches the sections in; `lazyfetch` completes the lazy ones. |
 | `_meta.lua` | Plugin name/version metadata shown in the About dialog. |
 
 ## Data flow (one pass each, order matters)
@@ -55,15 +55,15 @@ drops them entirely for a text-only read.
    "Show images" is off (zip swap + seamless reload per batch update).
 
 The "Wikipedia main page" flow skips steps 2–4: `mainpage.fetchSections`
-pulls today's sections from the Wikimedia featured-feed API for the
-language set in the settings (UTC date — a local-time "today" can be a
-future UTC date the feed answers without sections), and
-`epub.buildMainPageEpub` stitches the served sections into the EPUB via
-the shared `writeSinglePageEpub` writer (also used by the
-search/category builders). Its cache key embeds the UTC date and
-language (`__mainpage__<date>`), so a copy never outlives the day's
-news; a language whose feed serves nothing shows a friendly "no
-sections" message.
+scrapes the configured wiki's rendered main page (top-ten languages only)
+and `epub.buildMainPageEpub` stitches its sections into the EPUB (in the
+config's per-language order) via the shared `writeSinglePageEpub` writer
+(also used by the search/category builders). Its cache key embeds the date
+and language (`__mainpage__<date>`), so a copy never outlives the day's
+news. English shows ITN/DYK/OTD; every other supported language puts its
+own article of the day first and also carries its wiki's extra quality
+boxes, and its "Featured Articles" menu entry is hidden (that feature is
+an English-feed one). Languages outside the ten have no entry to call.
 
 ## Commenting strategy
 

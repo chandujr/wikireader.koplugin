@@ -1176,16 +1176,25 @@ function M.buildMainPageEpub(date_str, lang, sections, lazy_images, image_captio
     table.insert(html_parts, '<hr class="koreaderwikifrontpage"/>\n')
 
     local section_headings = {
+        tfa = _("Featured article"),
+        ga = _("Good article"),
         itn = _("In the news"),
-        mostread = _("Most read articles"),
+        deaths = _("Recent deaths"),
         dyk = _("Did you know"),
+        new = _("New articles"),
+        enhanced = _("Expanded articles"),
         otd = _("On this day"),
-        potd = _("Picture of the day"),
     }
     local chapters = {}
     local section_count = 0
-    for _, key in ipairs({ "itn", "mostread", "otd", "potd", "dyk" }) do
-        if sections[key] then
+    -- fetchSections records the wiki's own section order; the fixed list is
+    -- only a fallback for a plain keyed table.
+    local order = sections.order or { "tfa", "itn", "dyk", "otd" }
+    for _, key in ipairs(order) do
+        local section = sections[key]
+        if section then
+            local label = section.heading
+            if not label or label == "" then label = section_headings[key] end
             section_count = section_count + 1
             -- A page break between sections keeps each chapter's heading
             -- off the previous section's tail (same-page headings collapse
@@ -1194,11 +1203,11 @@ function M.buildMainPageEpub(date_str, lang, sections, lazy_images, image_captio
                 table.insert(html_parts, '<div style="page-break-before: always"></div>\n')
             end
             table.insert(html_parts, string.format('<h2 class="wikireader-mainpage-section" id="%s">', key))
-            table.insert(html_parts, section_headings[key])
+            table.insert(html_parts, (label:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;")))
             table.insert(html_parts, '</h2>\n')
-            table.insert(html_parts, sections[key])
+            table.insert(html_parts, section.html)
             table.insert(html_parts, '\n')
-            table.insert(chapters, { label = section_headings[key], anchor = key })
+            table.insert(chapters, { label = label, anchor = key })
         end
     end
 
@@ -1254,22 +1263,32 @@ h2.wikireader-mainpage-section {
     if extras then
         css = css .. [[
 
-/* Single-page EPUBs get no KOReader base stylesheet, so style the feed
-   figures here like the article pipeline does: full width, no float,
-   dashed border box, the inline placeholder (and later the real img)
-   centered via text-align -- the placeholders qrimage emits are only
-   auto-margined in infoboxes. */
-figure[typeof~='mw:File/Thumb'] {
+/* Main-page image boxes (legacy div.thumb and Parsoid figures): full
+   width, no float, centered, dashed border. Inline styles are stripped
+   in mainpage.lua; this page gets no KOReader base stylesheet. */
+figure[typeof~='mw:File'],
+figure[typeof~='mw:File/Thumb'],
+div.thumb,
+div.thumbinner,
+div.itn-img,
+div.dyk-img,
+div.otd-img,
+#mp-otd-img {
   float: none;
-  border: 1px dashed rgba(0,0,0,0.33);
   width: 100%;
   max-width: 100%;
   margin: 0.5em 0;
-  padding-top: 0.5em;
   text-align: center;
   page-break-inside: avoid;
 }
-figure figcaption {
+figure[typeof~='mw:File'],
+figure[typeof~='mw:File/Thumb'],
+div.thumbinner {
+  border: 1px dashed rgba(0,0,0,0.33);
+  padding: 4px;
+}
+figure figcaption,
+div.thumbcaption {
   text-align: center;
 }
 ]]
