@@ -37,7 +37,7 @@ local LANGUAGES = {
         page = "Wikipedia:Portada",
         sections = {
             { key = "tfa", id = "main-tfa" },
-            { key = "ga", id = "main-tga" },
+            { key = "ga",  id = "main-tga" },
             { key = "itn", id = "main-cur" },
             { key = "otd", id = "main-itd" },
         },
@@ -45,36 +45,36 @@ local LANGUAGES = {
     de = {
         page = "Wikipedia:Hauptseite",
         sections = {
-            { key = "tfa", id = "artikel" },
-            { key = "itn", id = "nachrichten" },
+            { key = "tfa",    id = "artikel" },
+            { key = "itn",    id = "nachrichten" },
             { key = "deaths", id = "verstorbene" },
-            { key = "dyk", id = "wissenswertes" },
-            { key = "otd", id = "ereignisse" },
+            { key = "dyk",    id = "wissenswertes" },
+            { key = "otd",    id = "ereignisse" },
         },
     },
     ja = {
         page = "メインページ",
         sections = {
-            { key = "tfa", id = "fa_and_ga" },
-            { key = "new", id = "new_articles" },
+            { key = "tfa",      id = "fa_and_ga" },
+            { key = "new",      id = "new_articles" },
             { key = "enhanced", id = "enhanced_articles" },
-            { key = "otd", id = "on_this_day" },
+            { key = "otd",      id = "on_this_day" },
         },
     },
     fr = {
         page = "Wikipédia:Accueil principal",
         sections = {
             { key = "tfa", heading = "Article labellisé du jour", container = "accueil_2017_cadre" },
-            { key = "itn", heading = "Actualités", container = "accueil_2017_cadre" },
-            { key = "dyk", heading = "Le saviez-vous", container = "accueil_2017_cadre" },
-            { key = "otd", heading = "Éphéméride", container = "accueil_2017_cadre" },
+            { key = "itn", heading = "Actualités",                container = "accueil_2017_cadre" },
+            { key = "dyk", heading = "Le saviez-vous",            container = "accueil_2017_cadre" },
+            { key = "otd", heading = "Éphéméride",                container = "accueil_2017_cadre" },
         },
     },
     ru = {
         page = "Заглавная страница",
         sections = {
             { key = "tfa", id = "main-tfa" },
-            { key = "ga", id = "main-tga" },
+            { key = "ga",  id = "main-tga" },
             { key = "itn", id = "main-cur" },
             { key = "dyk", id = "main-dyk" },
             { key = "otd", id = "main-itd" },
@@ -83,17 +83,17 @@ local LANGUAGES = {
     it = {
         page = "Pagina principale",
         sections = {
-            { key = "tfa", heading = "Vetrina", after = "itwiki-template-finestrahome-contenuto" },
-            { key = "ga", heading = "Voci di qualità", after = "itwiki-template-finestrahome-contenuto" },
-            { key = "dyk", heading = "Lo sapevi che", after = "itwiki-template-finestrahome-contenuto" },
-            { key = "otd", heading = "Ricorrenze", after = "itwiki-template-finestrahome-contenuto" },
+            { key = "tfa", heading = "Vetrina",         after = "itwiki-template-finestrahome-contenuto" },
+            { key = "ga",  heading = "Voci di qualità", after = "itwiki-template-finestrahome-contenuto" },
+            { key = "dyk", heading = "Lo sapevi che",   after = "itwiki-template-finestrahome-contenuto" },
+            { key = "otd", heading = "Ricorrenze",      after = "itwiki-template-finestrahome-contenuto" },
         },
     },
     pl = {
         page = "Wikipedia:Strona główna",
         sections = {
             { key = "tfa", id = "main-page-featured-article" },
-            { key = "ga", id = "main-page-good-article" },
+            { key = "ga",  id = "main-page-good-article" },
             { key = "itn", id = "main-page-news" },
             { key = "dyk", id = "main-page-didyouknow" },
             { key = "otd", id = "main-page-anniversaries" },
@@ -103,10 +103,10 @@ local LANGUAGES = {
         page = "Wikipedia:首页",
         sections = {
             { key = "tfa", id = "column-feature", heading_prev = true },
-            { key = "ga", id = "column-good", heading_prev = true },
-            { key = "itn", id = "column-itn", heading_prev = true },
-            { key = "dyk", id = "column-dyk", heading_prev = true },
-            { key = "otd", id = "column-otd", heading_prev = true },
+            { key = "ga",  id = "column-good",    heading_prev = true },
+            { key = "itn", id = "column-itn",     heading_prev = true },
+            { key = "dyk", id = "column-dyk",     heading_prev = true },
+            { key = "otd", id = "column-otd",     heading_prev = true },
         },
     },
     pt = {
@@ -130,8 +130,15 @@ local HEADING_CLASSES = {
 
 local function decodeEntities(s)
     local named = {
-        amp = "&", lt = "<", gt = ">", quot = '"', apos = "'", nbsp = " ",
-        ndash = "–", mdash = "—", hellip = "…",
+        amp = "&",
+        lt = "<",
+        gt = ">",
+        quot = '"',
+        apos = "'",
+        nbsp = " ",
+        ndash = "–",
+        mdash = "—",
+        hellip = "…",
     }
     local function utf8char(n)
         if n < 0x80 then
@@ -167,8 +174,11 @@ local function elementAt(html, start)
     local close_start, close_end = wutil.findMatchingClose(html, tag, open_end)
     if not close_start then return nil end
     return {
-        tag = tag, start = start, open_end = open_end,
-        inner = html:sub(open_end + 1, close_start - 1), close_end = close_end,
+        tag = tag,
+        start = start,
+        open_end = open_end,
+        inner = html:sub(open_end + 1, close_start - 1),
+        close_end = close_end,
     }
 end
 
@@ -383,20 +393,45 @@ local NAV_KEYWORDS = {
 }
 
 local VOID_TAGS = {
-    br = true, img = true, hr = true, input = true, meta = true, link = true,
-    source = true, track = true, wbr = true, area = true, base = true,
-    col = true, embed = true, param = true,
+    br = true,
+    img = true,
+    hr = true,
+    input = true,
+    meta = true,
+    link = true,
+    source = true,
+    track = true,
+    wbr = true,
+    area = true,
+    base = true,
+    col = true,
+    embed = true,
+    param = true,
 }
 
 -- Footers can be a block or a one-line <p>; prose elements are never
 -- descended into, so inline article links aren't mistaken for navigation.
 local NAV_TAGS = {
-    div = true, ul = true, ol = true, dl = true, table = true,
-    section = true, nav = true, p = true,
+    div = true,
+    ul = true,
+    ol = true,
+    dl = true,
+    table = true,
+    section = true,
+    nav = true,
+    p = true,
 }
 local DESCEND_TAGS = {
-    div = true, ul = true, ol = true, dl = true, table = true,
-    section = true, nav = true, li = true, dd = true, dt = true,
+    div = true,
+    ul = true,
+    ol = true,
+    dl = true,
+    table = true,
+    section = true,
+    nav = true,
+    li = true,
+    dd = true,
+    dt = true,
 }
 
 -- Last direct child: start, open-tag end, close-tag start, end. Bounds let
@@ -515,8 +550,8 @@ local function stripTrailingSeparators(s)
         local before = s
         s = s:gsub("%s+$", "")
         for _, sep in ipairs(separators) do
-            if s:sub(-#sep) == sep then
-                s = s:sub(1, -#sep - 1)
+            if s:sub(- #sep) == sep then
+                s = s:sub(1, - #sep - 1)
             end
         end
         if s == before then return s end

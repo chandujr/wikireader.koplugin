@@ -325,7 +325,7 @@ end
 -- matching `class_patterns`; styleFn returns the %% splice escapes.
 function M.forceNestedTableWidth(html, class_patterns, styleFn)
     local function matches(tag)
-        local class_attr = (tag:match([[class%s*=%s*"([^"]*)"]] ) or ""):lower()
+        local class_attr = (tag:match([[class%s*=%s*"([^"]*)"]]) or ""):lower()
         for _, pat in ipairs(class_patterns) do
             if class_attr:find(pat, 1, true) then
                 return true
@@ -1107,7 +1107,7 @@ function M.unwrapColumnLayouts(html)
             pos = close_end + 1
         end
     end
-     return table.concat(out)
+    return table.concat(out)
 end
 
 -- {{Indented plainlist}} and friends hang "margin-left:1em;text-indent:-1em"
