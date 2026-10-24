@@ -328,6 +328,48 @@ function WikiReader:init()
             return original_onHold(hl_self, arg, ges)
         end
     end
+
+    -- "13_" sorts us after the core buttons (01-12), leaving their
+    -- two-column layout untouched.
+    if self.ui and self.ui.highlight then
+        self.ui.highlight:addToHighlightDialog("13_wikireader", function(this, index)
+            return {
+                text = _("WikiReader"),
+                callback = function()
+                    local text
+                    if index then
+                        text = this.ui.annotation.annotations[index].text
+                    elseif this.selected_text then
+                        text = this.selected_text.text
+                    end
+                    this:onClose()
+                    text = text and util.cleanupSelectedText(text)
+                    if text and text ~= "" then
+                        self:searchArticle(text)
+                    end
+                end,
+            }
+        end)
+    end
+
+    -- conditional so the row shows even with a saved dict_button_config;
+    -- non-conditional buttons stay hidden until enabled in "Customize buttons".
+    if self.ui and self.ui.dictionary then
+        self.ui.dictionary:addToDictButtons({
+            id = "wikireader",
+            text = _("WikiReader"),
+            conditional = true,
+            callback = function(dict_popup)
+                local word = dict_popup.word
+                dict_popup:onClose()
+                -- Defer like the built-in Wikipedia button, so the closing
+                -- popup is gone before the network prompt/search appears.
+                UIManager:scheduleIn(0.1, function()
+                    self:searchArticle(word)
+                end)
+            end,
+        })
+    end
 end
 
 -- KOReader can open a cached article EPUB directly (last-document restore,
