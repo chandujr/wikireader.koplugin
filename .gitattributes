@@ -1,5 +1,7 @@
 /README.md      export-ignore
 /AGENTS.md      export-ignore
 /.gitignore     export-ignore
-/assets/   export-ignore
+/assets/        export-ignore
 /.gitattributes export-ignore
+/.github/       export-ignore
+/.luarc.json    export-ignore
