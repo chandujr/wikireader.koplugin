@@ -914,47 +914,57 @@ local function isBorderedTableClass(class_attr)
         or lower:find("wikitable", 1, true) ~= nil
 end
 
--- Borders kept infobox and wikitable tables as grids: outer edge and
--- border-collapse on the <table>, thin dashed separators on every cell,
--- plus the cell padding of Wikipedia's own .wikitable rule (0.2em 0.4em)
--- -- crengine has no default cell padding, so text would otherwise sit
--- flush against the borders. All inline, because
--- crengine ignores descendant selectors in the EPUB stylesheet (the same
--- reason centerInfoboxCells works inline): a CSS ".wikitable td" rule
--- never matches, and injected stylesheet rules vanish entirely when the
--- user disables "Embedded Style". Nested-table cells are included:
--- embedded layout/data tables read as part of the grid.
-function M.borderTableCells(html)
+-- All inline, because crengine ignores descendant selectors in the EPUB
+-- stylesheet (the same reason centerInfoboxCells works inline): a CSS
+-- ".wikitable td" rule never matches, and injected stylesheet rules vanish
+-- entirely when the user disables "Embedded Style". CELL_BORDER includes
+-- padding because crengine has no default cell padding, so text would
+-- otherwise sit flush against the borders. Cells are dashed one nesting
+-- level deep: first-level nested tables read as part of the grid (the
+-- succession before/after column split, settlement flag columns), while
+-- deeper nesting is per-entry scaffolding (flag + link pairs) whose dashes
+-- stack one rectangle per level.
+local TABLE_BORDER = "border:1px solid rgba(0,0,0,0.33);border-collapse:collapse"
+local CELL_BORDER = "border:1px dashed rgba(0,0,0,0.33);padding:0.2em 0.4em"
+
+local function dashCells(segment)
+    return (segment:gsub('(<t[dh][^>]*>)', function(tag)
+        return M.addInlineStyle(tag, CELL_BORDER)
+    end))
+end
+
+local function borderTables(html, dash_levels)
     local out = {}
     local pos = 1
     while true do
         local t_start, t_open_end = html:find("<table[^>]*>", pos)
-        if not t_start then
-            table.insert(out, html:sub(pos))
-            break
-        end
+        local segment = html:sub(pos, t_start and (t_start - 1))
+        table.insert(out, dash_levels > 0 and dashCells(segment) or segment)
+        if not t_start then break end
         local open_tag = html:sub(t_start, t_open_end)
         local class_attr = open_tag:match([[class%s*=%s*"([^"]*)"]]) or ""
-        local close_start, close_end
-        if isBorderedTableClass(class_attr) then
-            close_start, close_end = wutil.findMatchingClose(html, "table", t_open_end)
-        end
+        local close_start, close_end = wutil.findMatchingClose(html, "table", t_open_end)
         if not close_start then
-            table.insert(out, html:sub(pos, t_open_end))
+            table.insert(out, open_tag)
             pos = t_open_end + 1
         else
-            table.insert(out, html:sub(pos, t_start - 1))
-            table.insert(out, M.addInlineStyle(open_tag,
-                "border:1px solid rgba(0,0,0,0.33);border-collapse:collapse"))
-            table.insert(out, (html:sub(t_open_end + 1, close_start - 1):gsub(
-                '(<t[dh][^>]*>)', function(tag)
-                    return M.addInlineStyle(tag, "border:1px dashed rgba(0,0,0,0.33);padding:0.2em 0.4em")
-                end)))
+            local bordered = isBorderedTableClass(class_attr)
+            if bordered then
+                table.insert(out, M.addInlineStyle(open_tag, TABLE_BORDER))
+            else
+                table.insert(out, open_tag)
+            end
+            table.insert(out, borderTables(html:sub(t_open_end + 1, close_start - 1),
+                bordered and 2 or math.max(dash_levels - 1, 0)))
             table.insert(out, html:sub(close_start, close_end))
             pos = close_end + 1
         end
     end
     return table.concat(out)
+end
+
+function M.borderTableCells(html)
+    return borderTables(html, 0)
 end
 
 --[[-------------------------------------------------------------------------
