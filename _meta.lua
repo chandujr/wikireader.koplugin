@@ -3,5 +3,5 @@ return {
     fullname = _("WikiReader"),
     description = _(
         [[Read Wikipedia articles as formatted books, with a cleaner reading experience than KOReader's built-in Wikipedia lookup.]]),
-    version = "2.0.0",
+    version = "2.1.0",
 }
