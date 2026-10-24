@@ -9,11 +9,17 @@ A KOReader plugin for reading Wikipedia articles as formatted books, with a clea
 - Articles are opened as EPUBs directly without explicitly saving them
 - Cleaner formatting than the built-in Wikipedia lookup
 - Search Wikipedia articles
-- Access featured articles
+- Read the Wikipedia main page*
+- Access featured articles†
 - Bookmark articles
 - Save current article as book in your library
 - Gesture support for quick access
 - and more...
+
+<sub>\* Supported languages: English, Spanish, German, Japanese, French, Russian, Italian, Polish, Chinese, Portuguese</sub>
+<br/>
+<sub>† Full featured articles functionality available only for English</sub>
+<br/><br/>
 
 > [!NOTE]
 > When an article is opened, it is saved as a temporary EPUB file in the koreader cache folder. The cache holds at most 10 EPUBs, with newer articles automatically replacing older ones. The cache can grow anywhere from 20 MB to 200 MB, depending on how image-heavy the articles you've read are. You can clear this cache from WikiReader Settings, if needed.
