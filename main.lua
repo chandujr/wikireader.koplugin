@@ -87,6 +87,20 @@ local nav_reader_alive = false
 
 local lfs = require("libs/libkoreader-lfs")
 
+-- Where core's "Open previous document" would go: read history in a reader
+-- (there lastfile is the open book itself), lastfile otherwise.
+local function previousDocumentPath(ui)
+    local path
+    if ui and ui.document then
+        path = ui.menu and ui.menu:getPreviousFile()
+    else
+        path = G_reader_settings:readSetting("lastfile")
+    end
+    if path and lfs.attributes(path, "mode") == "file" then
+        return path
+    end
+end
+
 -- The file the open reader is displaying, if any. Pruning must never
 -- delete it (see wikireader-cache.pruneCache).
 local function currentDocumentPath(self)
@@ -707,10 +721,14 @@ function WikiReader:addToMainMenu(menu_items)
                 if #nav_history > 0 then
                     return T(_("Back to previous article (%1)"), #nav_history)
                 end
+                if nav_reader_alive and previousDocumentPath(self.ui) then
+                    return _("Open previous document")
+                end
                 return _("Back to previous article")
             end,
             enabled_func = function()
-                return nav_reader_alive and #nav_history > 0
+                return nav_reader_alive
+                    and (#nav_history > 0 or previousDocumentPath(self.ui) ~= nil)
             end,
             callback = function()
                 self:onWikiReaderGoBack()
@@ -1595,7 +1613,13 @@ end
 
 function WikiReader:onWikiReaderGoBack()
     if #nav_history == 0 then
-        UIManager:show(InfoMessage:new { text = _("No previous Wikipedia article to go back to.") })
+        -- Fallback only for our own articles; a plain book or the FileManager
+        -- stays inert.
+        if nav_reader_alive and previousDocumentPath(self.ui) then
+            self.ui:onOpenLastDoc()
+            return
+        end
+        UIManager:show(InfoMessage:new { text = _("No previous article to go back to.") })
         return
     end
     local prev = nav_history[#nav_history]
